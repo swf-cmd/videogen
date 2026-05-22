@@ -24,12 +24,12 @@
   <text x="74" y="54" fill="#C2410C" font-family="Inter, PingFang SC, Microsoft YaHei, Arial, sans-serif" font-size="12" font-weight="900">SORA 视频生成器</text>
   <text x="74" y="83" fill="#111827" font-family="Inter, PingFang SC, Microsoft YaHei, Arial, sans-serif" font-size="28" font-weight="800">Sora 2 工作台</text>
 
-  <rect x="964" y="48" width="118" height="36" rx="18" fill="#FFFFFF" stroke="#D8E1E8"/>
-  <text x="1004" y="71" fill="#111827" font-family="Inter, PingFang SC, Microsoft YaHei, Arial, sans-serif" font-size="14" font-weight="800">中文</text>
-  <path d="M1056 64L1062 70L1068 64" stroke="#5B6875" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <rect x="1098" y="48" width="108" height="36" rx="18" fill="#DFF5EF" stroke="#B7E2D8"/>
-  <circle cx="1122" cy="66" r="5" fill="#0F766E"/>
-  <text x="1136" y="71" fill="#0B5F59" font-family="Inter, PingFang SC, Microsoft YaHei, Arial, sans-serif" font-size="13" font-weight="800">API 就绪</text>
+  <rect x="916" y="48" width="118" height="36" rx="18" fill="#FFFFFF" stroke="#D8E1E8"/>
+  <text x="956" y="71" fill="#111827" font-family="Inter, PingFang SC, Microsoft YaHei, Arial, sans-serif" font-size="14" font-weight="800">中文</text>
+  <path d="M1008 64L1014 70L1020 64" stroke="#5B6875" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="1048" y="48" width="176" height="36" rx="18" fill="#DFF5EF" stroke="#B7E2D8"/>
+  <circle cx="1072" cy="66" r="5" fill="#0F766E"/>
+  <text x="1086" y="71" fill="#0B5F59" font-family="Inter, PingFang SC, Microsoft YaHei, Arial, sans-serif" font-size="13" font-weight="800">标准 API 就绪</text>
 
   <rect x="38" y="106" width="732" height="506" fill="#FFFFFF"/>
   <rect x="770" y="106" width="472" height="506" fill="url(#monitorBg)"/>
@@ -38,7 +38,7 @@
   <text x="76" y="139" fill="#C2410C" font-family="Inter, PingFang SC, Microsoft YaHei, Arial, sans-serif" font-size="12" font-weight="900">生成</text>
   <text x="76" y="165" fill="#111827" font-family="Inter, PingFang SC, Microsoft YaHei, Arial, sans-serif" font-size="22" font-weight="800">生成参数</text>
   <rect x="574" y="135" width="154" height="30" rx="15" fill="#ECF8F5" stroke="#B7E2D8"/>
-  <text x="598" y="155" fill="#0B5F59" font-family="Inter, PingFang SC, Microsoft YaHei, Arial, sans-serif" font-size="12" font-weight="800">Key 仅本次使用</text>
+  <text x="588" y="155" fill="#0B5F59" font-family="Inter, PingFang SC, Microsoft YaHei, Arial, sans-serif" font-size="12" font-weight="800">API key 仅用于本次请求</text>
 
   <rect x="76" y="188" width="652" height="56" rx="8" fill="#F3F6F9" stroke="#D8E1E8"/>
   <rect x="82" y="194" width="318" height="44" rx="7" fill="#0F766E"/>
@@ -83,22 +83,22 @@
   <text x="804" y="165" fill="#111827" font-family="Inter, PingFang SC, Microsoft YaHei, Arial, sans-serif" font-size="22" font-weight="800">任务状态</text>
 
   <rect x="804" y="188" width="386" height="80" rx="8" fill="#FFFFFF" stroke="#D8E1E8"/>
-  <text x="824" y="222" fill="#111827" font-family="Inter, PingFang SC, Microsoft YaHei, Arial, sans-serif" font-size="17" font-weight="900">生成中</text>
-  <text x="1136" y="222" fill="#111827" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="900">42%</text>
+  <text x="824" y="222" fill="#111827" font-family="Inter, PingFang SC, Microsoft YaHei, Arial, sans-serif" font-size="17" font-weight="900">已完成</text>
+  <text x="1130" y="222" fill="#111827" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="900">100%</text>
   <rect x="824" y="239" width="346" height="12" rx="6" fill="#E7EFEE"/>
-  <rect x="824" y="239" width="146" height="12" rx="6" fill="#0F766E"/>
+  <rect x="824" y="239" width="346" height="12" rx="6" fill="#0F766E"/>
 
   <rect x="804" y="284" width="386" height="116" rx="8" fill="#FFFFFF" stroke="#D8E1E8"/>
   <path d="M997 284V400" stroke="#D8E1E8"/>
   <path d="M804 342H1190" stroke="#D8E1E8"/>
   <text x="824" y="312" fill="#5B6875" font-family="Inter, PingFang SC, Microsoft YaHei, Arial, sans-serif" font-size="12" font-weight="800">方式</text>
-  <text x="824" y="332" fill="#111827" font-family="Inter, PingFang SC, Microsoft YaHei, Arial, sans-serif" font-size="15" font-weight="900">Batch API</text>
+  <text x="824" y="332" fill="#111827" font-family="Inter, PingFang SC, Microsoft YaHei, Arial, sans-serif" font-size="15" font-weight="900">标准 API</text>
   <text x="1017" y="312" fill="#5B6875" font-family="Inter, PingFang SC, Microsoft YaHei, Arial, sans-serif" font-size="12" font-weight="800">模型</text>
   <text x="1017" y="332" fill="#111827" font-family="Inter, Arial, sans-serif" font-size="15" font-weight="900">Sora 2 Pro</text>
   <text x="824" y="370" fill="#5B6875" font-family="Inter, PingFang SC, Microsoft YaHei, Arial, sans-serif" font-size="12" font-weight="800">预估价格</text>
   <text x="824" y="390" fill="#111827" font-family="Inter, Arial, sans-serif" font-size="15" font-weight="900">US$2.00</text>
-  <text x="1017" y="370" fill="#5B6875" font-family="Inter, PingFang SC, Microsoft YaHei, Arial, sans-serif" font-size="12" font-weight="800">提示词队列</text>
-  <text x="1017" y="390" fill="#111827" font-family="Inter, PingFang SC, Microsoft YaHei, Arial, sans-serif" font-size="15" font-weight="900">12 条</text>
+  <text x="1017" y="370" fill="#5B6875" font-family="Inter, PingFang SC, Microsoft YaHei, Arial, sans-serif" font-size="12" font-weight="800">时长</text>
+  <text x="1017" y="390" fill="#111827" font-family="Inter, PingFang SC, Microsoft YaHei, Arial, sans-serif" font-size="15" font-weight="900">4 秒</text>
 
   <rect x="804" y="416" width="386" height="54" rx="8" fill="#FFFFFF" stroke="#D8E1E8"/>
   <text x="824" y="440" fill="#5B6875" font-family="Inter, PingFang SC, Microsoft YaHei, Arial, sans-serif" font-size="12" font-weight="800">输出文件</text>

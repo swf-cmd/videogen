@@ -27,7 +27,7 @@ https://github.com/swf-cmd/videogen#readme
 Use `docs/social-preview.svg` as the privacy-safe source artwork, then export a 1280 x 640 PNG under 1 MB for GitHub's Social preview setting. It should show:
 
 - The real workbench structure: generation settings on the left, task status on the right.
-- The Standard API / Batch API mode switch.
+- The active Standard API mode with the Batch API option visible.
 - The basic flow: prompt to video, track progress, save MP4.
 - Privacy-safe sample data only.
 
