@@ -2,7 +2,7 @@
 
 Local web UI for generating videos with OpenAI Sora 2 / Sora 2 Pro. It runs on `127.0.0.1`, supports the standard Video API and Batch API, and saves completed MP4 files to a folder you choose.
 
-![Sora2App social preview](./docs/social-preview.svg)
+![Sora2App interface preview showing prompt input, API modes, task status, and MP4 download](./docs/social-preview.svg)
 
 [中文说明](./README.zh-CN.md)
 

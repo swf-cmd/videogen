@@ -2,7 +2,7 @@
 
 Sora2App 是一个本地运行的小网页，用来调用 OpenAI Sora 2 / Sora 2 Pro 生成视频。它只监听 `127.0.0.1`，支持标准 Video API 和 Batch API，并会把完成后的 MP4 保存到你选择的输出目录。
 
-![Sora2App social preview](./docs/social-preview.svg)
+![Sora2App 界面预览：提示词输入、API 模式、任务状态和 MP4 下载](./docs/social-preview.zh-CN.svg)
 
 [English README](./README.md)
 

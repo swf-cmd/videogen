@@ -26,9 +26,10 @@ https://github.com/swf-cmd/videogen#readme
 
 Use `docs/social-preview.svg` as the privacy-safe source artwork, then export a 1280 x 640 PNG under 1 MB for GitHub's Social preview setting. It should show:
 
-- Product name: `Sora2App`.
-- One-line value: `Local Sora 2 video generation UI`.
-- Three small feature points: `Batch API`, `Auto MP4 downloads`, `API key not saved`.
+- The real workbench structure: generation settings on the left, task status on the right.
+- The Standard API / Batch API mode switch.
+- The basic flow: prompt to video, track progress, save MP4.
+- Privacy-safe sample data only.
 
 Avoid screenshots that show:
 
