@@ -101,7 +101,13 @@ const translations = {
     statusIdle: "等待提交",
     statusSubmitting: "提交中",
     statusQueued: "排队中",
+    statusUploading: "上传中",
+    statusUploaded: "已上传",
+    statusValidating: "准备中",
     statusInProgress: "生成中",
+    statusFinalizing: "整理结果中",
+    statusDownloading: "下载中",
+    statusPartial: "部分失败",
     statusCompleted: "已完成",
     statusFailed: "失败",
     statusCancelled: "已取消",
@@ -207,7 +213,13 @@ const translations = {
     statusIdle: "送信待ち",
     statusSubmitting: "送信中",
     statusQueued: "キュー待ち",
+    statusUploading: "アップロード中",
+    statusUploaded: "アップロード済み",
+    statusValidating: "準備中",
     statusInProgress: "生成中",
+    statusFinalizing: "結果を整理中",
+    statusDownloading: "ダウンロード中",
+    statusPartial: "一部失敗",
     statusCompleted: "完了",
     statusFailed: "失敗",
     statusCancelled: "キャンセル済み",
@@ -313,7 +325,13 @@ const translations = {
     statusIdle: "Waiting to submit",
     statusSubmitting: "Submitting",
     statusQueued: "Queued",
+    statusUploading: "Uploading",
+    statusUploaded: "Uploaded",
+    statusValidating: "Preparing",
     statusInProgress: "Generating",
+    statusFinalizing: "Finalizing",
+    statusDownloading: "Downloading",
+    statusPartial: "Partially failed",
     statusCompleted: "Completed",
     statusFailed: "Failed",
     statusCancelled: "Cancelled",
@@ -419,7 +437,13 @@ const translations = {
     statusIdle: "제출 대기",
     statusSubmitting: "제출 중",
     statusQueued: "대기 중",
+    statusUploading: "업로드 중",
+    statusUploaded: "업로드됨",
+    statusValidating: "준비 중",
     statusInProgress: "생성 중",
+    statusFinalizing: "결과 정리 중",
+    statusDownloading: "다운로드 중",
+    statusPartial: "일부 실패",
     statusCompleted: "완료",
     statusFailed: "실패",
     statusCancelled: "취소됨",
@@ -479,6 +503,8 @@ let activeLanguage = "zh";
 let connectionStateKey = isFilePreview ? "connectionPreview" : "connectionStandardReady";
 let currentStatus = "idle";
 let currentProgress = 0;
+let progressTarget = 0;
+let progressAnimationFrame = 0;
 
 function normalizeLanguage(language) {
   const base = String(language || "").toLowerCase().split("-")[0];
@@ -872,9 +898,15 @@ const statusLabels = {
   idle: "statusIdle",
   submitting: "statusSubmitting",
   queued: "statusQueued",
+  uploading: "statusUploading",
+  uploaded: "statusUploaded",
+  validating: "statusValidating",
   in_progress: "statusInProgress",
   processing: "statusInProgress",
   running: "statusInProgress",
+  finalizing: "statusFinalizing",
+  downloading: "statusDownloading",
+  partial: "statusPartial",
   completed: "statusCompleted",
   failed: "statusFailed",
   cancelled: "statusCancelled",
@@ -885,13 +917,71 @@ function formatStatus(status) {
   return statusLabels[status] ? t(statusLabels[status]) : status;
 }
 
-function setProgress(status, progress = 0) {
-  const value = Math.max(0, Math.min(100, Number(progress) || 0));
-  currentStatus = status;
-  currentProgress = value;
-  statusText.textContent = formatStatus(status);
+function shouldResetProgress(status) {
+  return status === "idle" || status === "submitting";
+}
+
+function shouldFreezeProgress(status) {
+  return status === "failed" || status === "cancelled" || status === "expired";
+}
+
+function paintProgress(value) {
   progressText.textContent = `${Math.round(value)}%`;
   progressBar.style.width = `${value}%`;
+}
+
+function stopProgressAnimation() {
+  if (!progressAnimationFrame) return;
+  cancelAnimationFrame(progressAnimationFrame);
+  progressAnimationFrame = 0;
+}
+
+function animateProgress(targetValue) {
+  stopProgressAnimation();
+  progressTarget = targetValue;
+  const startValue = currentProgress;
+  const delta = targetValue - startValue;
+  if (delta <= 0) {
+    currentProgress = targetValue;
+    paintProgress(currentProgress);
+    return;
+  }
+
+  const startTime = performance.now();
+  const duration = Math.min(1800, Math.max(450, delta * 24));
+  const step = (now) => {
+    const elapsed = Math.min(1, (now - startTime) / duration);
+    const eased = 1 - Math.pow(1 - elapsed, 3);
+    currentProgress = startValue + delta * eased;
+    paintProgress(currentProgress);
+    if (elapsed < 1) {
+      progressAnimationFrame = requestAnimationFrame(step);
+      return;
+    }
+    progressAnimationFrame = 0;
+    currentProgress = targetValue;
+    paintProgress(currentProgress);
+  };
+  progressAnimationFrame = requestAnimationFrame(step);
+}
+
+function setProgress(status, progress = 0) {
+  const value = Math.max(0, Math.min(100, Number(progress) || 0));
+  const displayValue = shouldResetProgress(status)
+    ? value
+    : shouldFreezeProgress(status)
+      ? Math.max(value, currentProgress)
+      : Math.max(value, currentProgress, progressTarget);
+  currentStatus = status;
+  statusText.textContent = formatStatus(status);
+  if (shouldResetProgress(status) || shouldFreezeProgress(status) || displayValue <= currentProgress + 1) {
+    stopProgressAnimation();
+    progressTarget = displayValue;
+    currentProgress = displayValue;
+    paintProgress(currentProgress);
+    return;
+  }
+  animateProgress(displayValue);
 }
 
 function appendLog(message, tone = "") {
@@ -1002,7 +1092,7 @@ function applyStreamEvent(event) {
   }
   if (event.batchId) videoId.textContent = event.batchId;
   if (event.id) videoId.textContent = event.id;
-  if (event.status) setProgress(event.status, event.progress || 0);
+  if (event.status) setProgress(event.status, event.progress ?? currentProgress);
   if (event.message) {
     const parts = [event.message];
     if (event.status) parts.push(t("eventStatus", { status: formatStatus(event.status) }));
@@ -1073,7 +1163,7 @@ async function generateVideo(event) {
     validateBatchSelection(payload);
     await streamGenerate(payload);
   } catch (error) {
-    setProgress("failed", 0);
+    setProgress("failed", currentProgress);
     appendLog(error.message, "error");
     setConnectionState("connectionError");
   } finally {

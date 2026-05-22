@@ -27,6 +27,13 @@ const DEFAULT_POLL_INTERVAL_SECONDS = 10;
 const DEFAULT_POLL_INTERVAL_MS = DEFAULT_POLL_INTERVAL_SECONDS * 1000;
 const DEFAULT_BATCH_POLL_INTERVAL_SECONDS = 15;
 const DEFAULT_BATCH_POLL_INTERVAL_MS = DEFAULT_BATCH_POLL_INTERVAL_SECONDS * 1000;
+const STANDARD_VIDEO_RENDER_PROGRESS_MAX = 94;
+const STANDARD_VIDEO_COMPLETED_PROGRESS = 96;
+const STANDARD_VIDEO_DOWNLOAD_PROGRESS = 98;
+const BATCH_JOB_PROGRESS_MAX = 35;
+const BATCH_READING_RESULTS_PROGRESS = 36;
+const BATCH_VIDEO_PROGRESS_START = 36;
+const BATCH_VIDEO_PROGRESS_END = 96;
 const OFFICIAL_BATCH_LIMITS = {
   maxRequests: 50000,
   maxInputFileBytes: 200 * 1024 * 1024,
@@ -628,12 +635,46 @@ async function downloadFileText(apiKey, fileId, language = "zh") {
   return response.text();
 }
 
+function clampProgress(value) {
+  return Math.max(0, Math.min(100, Number(value) || 0));
+}
+
+function standardVideoProgress(video) {
+  if (video?.status === "completed") return STANDARD_VIDEO_COMPLETED_PROGRESS;
+  return Math.min(clampProgress(video?.progress), STANDARD_VIDEO_RENDER_PROGRESS_MAX);
+}
+
 function batchProgress(batch) {
   const counts = batch?.request_counts || {};
+  const statusProgress = {
+    validating: 8,
+    in_progress: 14,
+    finalizing: 30,
+    completed: BATCH_JOB_PROGRESS_MAX,
+  };
+  const baseProgress = statusProgress[batch?.status] || 10;
   if (counts.total > 0) {
-    return Math.round(((counts.completed || 0) + (counts.failed || 0)) / counts.total * 92);
+    const requestProgress = Math.round(((counts.completed || 0) + (counts.failed || 0)) / counts.total * BATCH_JOB_PROGRESS_MAX);
+    return Math.max(baseProgress, requestProgress);
   }
-  return batch?.status === "validating" ? 12 : 5;
+  return baseProgress;
+}
+
+function batchVideoOverallProgress(index, total, videoProgress = 0) {
+  const safeTotal = Math.max(1, Number(total) || 0);
+  const safeIndex = Math.max(0, Math.min(safeTotal - 1, Number(index) || 0));
+  const safeVideoProgress = clampProgress(videoProgress);
+  const renderedShare = (safeIndex + safeVideoProgress / 100) / safeTotal;
+  const progressRange = BATCH_VIDEO_PROGRESS_END - BATCH_VIDEO_PROGRESS_START;
+  return Math.min(BATCH_VIDEO_PROGRESS_END, BATCH_VIDEO_PROGRESS_START + Math.round(renderedShare * progressRange));
+}
+
+function activeBatchVideoStatus(status) {
+  return TERMINAL_STATUSES.has(status) ? "running" : status || "running";
+}
+
+function activeBatchStatus(status) {
+  return status === "completed" ? "finalizing" : status || "running";
 }
 
 function buildBatchInputLines(payload, prompts) {
@@ -727,12 +768,12 @@ async function handleGenerate(req, res) {
 
     push(st(payload.language, "videoSubmitted"));
     let video = await createVideo(payload.apiKey, payload);
-    push(st(payload.language, "videoCreated"), { id: video.id, status: video.status, progress: video.progress ?? 0 });
+    push(st(payload.language, "videoCreated"), { id: video.id, status: video.status, progress: standardVideoProgress(video) });
 
     while (!TERMINAL_STATUSES.has(video.status)) {
       await sleep(DEFAULT_POLL_INTERVAL_MS);
       video = await retrieveVideo(payload.apiKey, video.id, payload.language);
-      push(st(payload.language, "progressUpdated"), { id: video.id, status: video.status, progress: video.progress ?? 0 });
+      push(st(payload.language, "progressUpdated"), { id: video.id, status: video.status, progress: standardVideoProgress(video) });
     }
 
     if (video.status !== "completed") {
@@ -742,7 +783,7 @@ async function handleGenerate(req, res) {
       throw error;
     }
 
-    push(st(payload.language, "videoDownloading"), { id: video.id, status: video.status, progress: 100 });
+    push(st(payload.language, "videoDownloading"), { id: video.id, status: "downloading", progress: STANDARD_VIDEO_DOWNLOAD_PROGRESS });
     await downloadVideo(payload.apiKey, video.id, filePath, payload.language);
     const stats = await fsp.stat(filePath);
 
@@ -777,7 +818,7 @@ async function handleGenerateStream(req, res) {
       message: st(payload.language, "videoCreated"),
       id: video.id,
       status: video.status,
-      progress: video.progress ?? 0,
+      progress: standardVideoProgress(video),
     });
 
     while (!TERMINAL_STATUSES.has(video.status)) {
@@ -788,7 +829,7 @@ async function handleGenerateStream(req, res) {
         message: st(payload.language, "progressUpdated"),
         id: video.id,
         status: video.status,
-        progress: video.progress ?? 0,
+        progress: standardVideoProgress(video),
       });
     }
 
@@ -803,8 +844,8 @@ async function handleGenerateStream(req, res) {
       type: "status",
       message: st(payload.language, "videoDownloading"),
       id: video.id,
-      status: video.status,
-      progress: 100,
+      status: "downloading",
+      progress: STANDARD_VIDEO_DOWNLOAD_PROGRESS,
     });
     await downloadVideo(payload.apiKey, video.id, filePath, payload.language);
     const stats = await fsp.stat(filePath);
@@ -864,7 +905,7 @@ async function handleGenerateBatchStream(req, res) {
       type: "status",
       message: st(payload.language, "batchCreated"),
       batchId: batch.id,
-      status: batch.status,
+      status: activeBatchStatus(batch.status),
       progress: batchProgress(batch),
       requestCounts: batch.request_counts,
     });
@@ -876,7 +917,7 @@ async function handleGenerateBatchStream(req, res) {
         type: "status",
         message: st(payload.language, "batchProgressUpdated"),
         batchId: batch.id,
-        status: batch.status,
+        status: activeBatchStatus(batch.status),
         progress: batchProgress(batch),
         requestCounts: batch.request_counts,
       });
@@ -897,8 +938,8 @@ async function handleGenerateBatchStream(req, res) {
       type: "status",
       message: st(payload.language, "batchReadingResults"),
       batchId: batch.id,
-      status: batch.status,
-      progress: 94,
+      status: "finalizing",
+      progress: BATCH_READING_RESULTS_PROGRESS,
       requestCounts: batch.request_counts,
     });
 
@@ -912,15 +953,20 @@ async function handleGenerateBatchStream(req, res) {
         message: st(payload.language, "batchPartialFailed", { count: failedLines.length }),
         batchId: batch.id,
         status: "partial",
-        progress: 94,
+        progress: BATCH_READING_RESULTS_PROGRESS,
         requestCounts: batch.request_counts,
       });
     }
     const requestIndexByCustomId = new Map(requests.map((request, index) => [request.customId, index]));
+    const sortedLines = [...lines].sort((a, b) => {
+      const indexA = requestIndexByCustomId.get(a.custom_id) ?? Number.MAX_SAFE_INTEGER;
+      const indexB = requestIndexByCustomId.get(b.custom_id) ?? Number.MAX_SAFE_INTEGER;
+      return indexA - indexB;
+    });
     const outputs = [];
     const videos = [];
 
-    for (const line of lines) {
+    for (const line of sortedLines) {
       const index = requestIndexByCustomId.get(line.custom_id) ?? outputs.length;
       try {
         let video = videoFromBatchLine(line, payload.language);
@@ -929,8 +975,8 @@ async function handleGenerateBatchStream(req, res) {
           message: st(payload.language, "batchVideoCreated", { index: index + 1 }),
           batchId: batch.id,
           id: video.id,
-          status: video.status || "queued",
-          progress: video.progress ?? 0,
+          status: activeBatchVideoStatus(video.status),
+          progress: batchVideoOverallProgress(index, requests.length, video.progress ?? 0),
         });
 
         video = await waitForCompletedVideo(payload.apiKey, video, (updatedVideo) => {
@@ -939,19 +985,23 @@ async function handleGenerateBatchStream(req, res) {
             message: st(payload.language, "batchVideoProgress", { index: index + 1 }),
             batchId: batch.id,
             id: updatedVideo.id,
-            status: updatedVideo.status,
-            progress: updatedVideo.progress ?? 0,
+            status: activeBatchVideoStatus(updatedVideo.status),
+            progress: batchVideoOverallProgress(index, requests.length, updatedVideo.progress ?? 0),
           });
         }, payload.language);
 
         const { filePath } = resolveBatchOutputPath(payload.outputDir, payload.filename, index, requests.length, line.custom_id || video.id);
+        const downloadProgress = Math.min(
+          BATCH_VIDEO_PROGRESS_END + 1,
+          batchVideoOverallProgress(index, requests.length, 100) + 1,
+        );
         writeNdjson(res, {
           type: "status",
           message: st(payload.language, "batchDownloadingMp4", { index: index + 1 }),
           batchId: batch.id,
           id: video.id,
           status: "downloading",
-          progress: 95 + Math.round((outputs.length / Math.max(lines.length, 1)) * 4),
+          progress: downloadProgress,
         });
         await downloadVideo(payload.apiKey, video.id, filePath, payload.language);
         const stats = await fsp.stat(filePath);
@@ -972,8 +1022,8 @@ async function handleGenerateBatchStream(req, res) {
           type: "status",
           message: st(payload.language, "batchVideoFailed", { index: index + 1, message: safe.message }),
           batchId: batch.id,
-          status: "failed",
-          progress: 95,
+          status: "partial",
+          progress: batchVideoOverallProgress(index, requests.length, 100),
         });
       }
     }
