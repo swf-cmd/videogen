@@ -1,23 +1,50 @@
 # Sora2App
 
-Sora2App 是一个本地运行的小网页，用来调用 OpenAI Video API 生成 `sora-2` 或 `sora-2-pro` 视频，并把完成后的 MP4 保存到你指定的输出目录。
+Local web UI for generating videos with OpenAI Sora 2 / Sora 2 Pro. It runs on `127.0.0.1`, supports the standard Video API and Batch API, and saves completed MP4 files to a folder you choose.
 
-## 功能
+![Sora2App social preview](./docs/social-preview.svg)
 
-- 支持标准 Video API 和 Batch API 两种调用方式。
-- 支持 `sora-2` 与 `sora-2-pro` 的时长、分辨率组合校验。
-- Batch 模式可把提示词按空行拆成任务队列，并自动下载完成的视频。
-- API key 只在本机浏览器和本机服务之间传递，不会写入磁盘。
-- 界面内置中文、日文、英文、韩文。
+[中文说明](./README.zh-CN.md)
 
-## 运行要求
+## Why Use It
 
-- Node.js 18 或更新版本
-- 一个可用的 OpenAI API key
+- Generate Sora 2 / Sora 2 Pro videos from a small local web app.
+- Submit one prompt with the standard Video API, or split many prompts into a Batch API queue.
+- Automatically poll jobs and download completed MP4 files.
+- Choose model, duration, resolution, output folder, and filename from the UI.
+- Keep the API key out of disk storage, browser localStorage, and logs.
+- Use the built-in UI in Chinese, Japanese, English, or Korean.
 
-源码仓库不包含 macOS Node.js 运行时二进制。原本本地包里的 `runtime/` 目录体积超过 200 MB，不适合放入 git 历史；如果需要免安装 Node 的分发包，请将运行时放到 Release 附件或单独打包。
+## Privacy First
 
-## 快速开始
+Sora2App is designed for local use:
+
+- The server listens only on `127.0.0.1`.
+- Your OpenAI API key is used only for the current request.
+- The API key is not saved to files, browser localStorage, or application logs.
+- The output folder is not persisted in browser localStorage.
+- The UI shortens home-directory paths to `~/...` to reduce accidental path leaks in screenshots.
+- Prompts, selected parameters, and generated videos are still sent to OpenAI when you submit a job.
+
+When opening issues or sharing screenshots, remove API keys, video IDs, full local paths, private prompts, and generated files that you do not want to publish.
+
+See [PRIVACY.md](./PRIVACY.md), [SECURITY.md](./SECURITY.md), and [CONTRIBUTING.md](./CONTRIBUTING.md) for public reporting guidelines.
+
+## Quick Start
+
+### Use the bundled macOS app folder
+
+Double-click:
+
+```text
+Start Sora2App.command
+```
+
+Keep the whole `sora2app` folder together when moving it to another Mac. The bundled macOS runtime lives in `runtime/`.
+
+### Run from source
+
+Install Node.js 18 or newer, then run:
 
 ```bash
 git clone https://github.com/swf-cmd/videogen.git
@@ -25,56 +52,60 @@ cd videogen
 npm start
 ```
 
-打开终端显示的地址，默认是：
+Open the local URL printed in the terminal:
 
 ```text
 http://127.0.0.1:5177
 ```
 
-macOS 用户也可以双击：
+## How It Works
+
+1. Enter your OpenAI API key.
+2. Choose standard API or Batch API.
+3. Enter one prompt, or multiple prompts separated by blank lines for Batch mode.
+4. Select `sora-2` or `sora-2-pro`.
+5. Choose duration, resolution, output folder, and optional filename.
+6. Submit the job and wait for the app to download the MP4 file.
+
+Supported durations are `4`, `8`, `12`, `16`, and `20` seconds. The UI validates the model and resolution combinations before submitting requests.
+
+## Batch Mode
+
+Batch mode splits prompts by blank lines and submits them as a queue. If you enter one prompt, you can repeat it multiple times by setting the request count. If you enter multiple prompts, Sora2App submits the first N prompts from the queue.
+
+The app includes a Batch price estimate based on its current built-in pricing table. Always check the current OpenAI pricing page before running large batches.
+
+## Release Packaging
+
+The source repository should not include the bundled `runtime/` folder because it is large. Keep `runtime/` out of git history and attach bundled app archives to GitHub Releases instead.
+
+Suggested release assets:
+
+- `sora2app-macos-universal.zip`: app folder with both arm64 and x64 Node runtimes.
+- `source.zip`: source-only package without `runtime/`.
+- Release notes with features, install steps, and known limitations.
+
+## Recommended GitHub Metadata
+
+Description:
 
 ```text
-Start Sora2App.command
+Local web UI for OpenAI Sora 2 / Sora 2 Pro video generation with Batch API and automatic MP4 downloads.
 ```
 
-这个启动器会自动寻找 Node.js 18+，并在默认端口被占用时尝试后续可用端口。
+Topics:
 
-页面里填入：
+```text
+sora, sora-2, openai, openai-api, video-generation, ai-video, batch-api, nodejs, macos, local-first
+```
 
-- OpenAI API key
-- 调用方式：`标准 API` 或 `Batch API`
-- 提示词
-- 模型：`sora-2` 或 `sora-2-pro`
-- 时长：`4`、`8`、`12`、`16`、`20` 秒
-- 分辨率：
-  - `sora-2`：`720x1280`、`1280x720`
-  - `sora-2-pro`：`720x1280`、`1280x720`、`1024x1792`、`1792x1024`、`1080x1920`、`1920x1080`
-- 输出目录和文件名
+For release steps and launch copy, see [docs/GITHUB_LAUNCH_CHECKLIST.md](./docs/GITHUB_LAUNCH_CHECKLIST.md) and [docs/PROMOTION_KIT.md](./docs/PROMOTION_KIT.md).
 
-Batch API 模式会把提示词按空行拆成多条任务，并可在界面里选择本次提交条数。未手动修改条数时，提交条数会跟随提示词队列数量；单条提示词可以选择重复提交多条任务，多条提示词则会提交队列前 N 条。根据 OpenAI Batch API 官方限制，单个 batch 最多 50,000 条请求、输入文件最多 200 MB。Batch 任务最多 24 小时完成，官方价格相对同步接口有 50% 折扣；视频资源会在 batch 完成后自动下载到输出目录。
+## Security Notes
 
-## 安全说明
+Sora2App does not proxy requests through a third-party service. The local server calls OpenAI directly with the API key you enter in the browser.
 
-- 本应用只监听 `127.0.0.1`，不对局域网开放。
-- API key 不会保存到本地文件、localStorage 或日志中。
-- 输出目录不会持久化到 localStorage；选择后仅在当前页面会话中使用。
-- 输出目录由用户选择，生成的视频文件会保存到该目录。
-
-## 官方接口依据
-
-当前实现按 OpenAI 官方 Video API 文档：
-
-生成参数参考 OpenAI 官方 Video generation guide、Pricing 和 Sora 2 Pro model 页：`sora-2` 开放 720p 横竖屏；`sora-2-pro` 开放 720p、1024p、1080p 横竖屏；时长开放 `4`、`8`、`12`、`16`、`20` 秒。当前 Create video API Reference 与 guide/pricing 对 `16/20` 秒和 1080p 的列举不完全一致；如果接口返回参数错误，请改用 `4/8/12` 秒或非 1080p 后重试。
-
-- 创建任务：`POST /v1/videos`
-- 查询任务：`GET /v1/videos/{video_id}`
-- 下载内容：`GET /v1/videos/{video_id}/content`
-- Batch 文件上传：`POST /v1/files`
-- Batch 创建与查询：`POST /v1/batches`、`GET /v1/batches/{batch_id}`
-- Batch 结果读取：`GET /v1/files/{file_id}/content`
-
-视频生成是异步任务，本应用会以默认 10 秒间隔轮询任务状态，完成后自动下载 MP4。
-Batch 模式会以默认 15 秒间隔轮询 batch 状态，完成后读取输出文件中的 video id 并下载 MP4。
+Do not expose the local server to a public network. If you modify the server host, reverse proxy it, or deploy it remotely, you are responsible for securing access and protecting API keys.
 
 ## License
 

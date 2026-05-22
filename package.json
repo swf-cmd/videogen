@@ -1,7 +1,8 @@
 {
   "name": "sora2app",
   "version": "1.0.0",
-  "description": "Local Sora 2 / Sora 2 Pro video generation helper.",
+  "private": true,
+  "description": "Local web UI for OpenAI Sora 2 / Sora 2 Pro video generation with Batch API and automatic MP4 downloads.",
   "license": "MIT",
   "type": "commonjs",
   "repository": {
@@ -12,6 +13,14 @@
   "bugs": {
     "url": "https://github.com/swf-cmd/videogen/issues"
   },
+  "keywords": [
+    "sora",
+    "sora-2",
+    "openai",
+    "video-generation",
+    "batch-api",
+    "local-first"
+  ],
   "scripts": {
     "start": "node server.js"
   },

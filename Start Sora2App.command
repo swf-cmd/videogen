@@ -3,13 +3,14 @@
 set -u
 
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
+APP_NAME="$(basename "$APP_DIR")"
 PORT="${PORT:-5177}"
 OPEN_BROWSER="${OPEN_BROWSER:-1}"
 
 cd "$APP_DIR" || exit 1
 
 echo "Sora2App launcher"
-echo "Project: $APP_DIR"
+echo "App folder: $APP_NAME"
 echo
 
 if [[ ! -f "$APP_DIR/server.js" ]]; then
@@ -100,14 +101,14 @@ done
 
 if [[ -z "$NODE_BIN" ]]; then
   echo "A compatible Node.js runtime was not found."
-  echo "Install Node.js 18 or newer from https://nodejs.org/ and run this file again."
-  echo "Bundled releases may include a runtime folder, but source checkouts expect system Node.js."
+  echo "Make sure the whole sora2app folder was copied, including the runtime folder."
+  echo "If the runtime folder is missing, install Node.js 18 or newer from https://nodejs.org/ and run this file again."
   echo
   read -r "?Press Return to close this window."
   exit 1
 fi
 
-echo "Node: $NODE_BIN"
+echo "Node runtime: $(basename "$NODE_BIN")"
 echo
 
 "$NODE_BIN" <<'NODE'

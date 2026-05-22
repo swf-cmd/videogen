@@ -23,7 +23,6 @@ const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, "public");
 const HOME_DIR = os.homedir();
 const DEFAULT_OUTPUT_DIR = path.join(HOME_DIR, "Downloads", "SoraVideos");
-const DEFAULT_OUTPUT_DIR_DISPLAY = "~/Downloads/SoraVideos";
 const DEFAULT_POLL_INTERVAL_SECONDS = 10;
 const DEFAULT_POLL_INTERVAL_MS = DEFAULT_POLL_INTERVAL_SECONDS * 1000;
 const DEFAULT_BATCH_POLL_INTERVAL_SECONDS = 15;
@@ -303,19 +302,18 @@ function sendJson(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
-function redactLocalPaths(value) {
+function redactLocalPaths(value, depth = 0) {
   if (typeof value === "string") {
-    return value.split(HOME_DIR).join("~");
+    const home = normalizeDirectoryPath(HOME_DIR);
+    return value
+      .replaceAll(home, "~")
+      .replaceAll(HOME_DIR, "~");
   }
-  if (Array.isArray(value)) {
-    return value.map((item) => redactLocalPaths(item));
-  }
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, redactLocalPaths(item)]),
-    );
-  }
-  return value;
+  if (!value || typeof value !== "object" || depth > 4) return value;
+  if (Array.isArray(value)) return value.map((item) => redactLocalPaths(item, depth + 1));
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, redactLocalPaths(item, depth + 1)]),
+  );
 }
 
 function safeError(error) {
@@ -371,14 +369,6 @@ function resolveOutputPath(outputDir, filename) {
   return {
     dir,
     filePath: path.join(dir, sanitizeFilename(filename)),
-  };
-}
-
-function fileOutput(filePath, bytes, extra = {}) {
-  return {
-    ...extra,
-    path: redactLocalPaths(filePath),
-    bytes,
   };
 }
 
@@ -480,6 +470,26 @@ function normalizeDirectoryPath(inputPath) {
   return resolved === root ? resolved : resolved.replace(/[\\/]+$/, "");
 }
 
+function displayPathForUser(inputPath) {
+  const resolved = normalizeDirectoryPath(path.resolve(expandHome(String(inputPath || ""))));
+  const home = normalizeDirectoryPath(HOME_DIR);
+  if (resolved === home) return "~";
+
+  const relativeToHome = path.relative(home, resolved);
+  if (relativeToHome && !relativeToHome.startsWith("..") && !path.isAbsolute(relativeToHome)) {
+    return path.join("~", relativeToHome).replace(/\\/g, "/");
+  }
+
+  return resolved;
+}
+
+function outputInfoForUser(filePath, stats) {
+  return {
+    path: displayPathForUser(filePath),
+    bytes: stats.size,
+  };
+}
+
 async function handleSelectOutputDir(req, res) {
   const language = languageFromRequest(req);
   if (process.platform !== "darwin") {
@@ -496,7 +506,13 @@ async function handleSelectOutputDir(req, res) {
     if (!selectedPath) {
       throw new Error(st(language, "noDirSelected"));
     }
-    sendJson(res, 200, { ok: true, path: normalizeDirectoryPath(selectedPath) });
+    const normalizedPath = normalizeDirectoryPath(selectedPath);
+    const displayPath = displayPathForUser(normalizedPath);
+    sendJson(res, 200, {
+      ok: true,
+      path: displayPath,
+      displayPath,
+    });
   } catch (error) {
     if (isAppleScriptCancel(error)) {
       sendJson(res, 200, { ok: true, canceled: true });
@@ -733,7 +749,7 @@ async function handleGenerate(req, res) {
     sendJson(res, 200, {
       ok: true,
       video,
-      output: fileOutput(filePath, stats.size),
+      output: outputInfoForUser(filePath, stats),
       events,
     });
   } catch (error) {
@@ -797,7 +813,7 @@ async function handleGenerateStream(req, res) {
       type: "done",
       message: st(payload.language, "savedMp4"),
       video,
-      output: fileOutput(filePath, stats.size),
+      output: outputInfoForUser(filePath, stats),
     });
   } catch (error) {
     writeNdjson(res, { type: "error", error: safeError(error) });
@@ -941,19 +957,20 @@ async function handleGenerateBatchStream(req, res) {
         const stats = await fsp.stat(filePath);
         videos.push(video);
         outputs.push({
-          ...fileOutput(filePath, stats.size, {
-            customId: line.custom_id,
-            videoId: video.id,
-          }),
+          customId: line.custom_id,
+          videoId: video.id,
+          path: displayPathForUser(filePath),
+          bytes: stats.size,
         });
       } catch (error) {
+        const safe = safeError(error);
         failedLines.push({
           custom_id: line.custom_id,
-          error: safeError(error),
+          error: safe,
         });
         writeNdjson(res, {
           type: "status",
-          message: st(payload.language, "batchVideoFailed", { index: index + 1, message: error.message }),
+          message: st(payload.language, "batchVideoFailed", { index: index + 1, message: safe.message }),
           batchId: batch.id,
           status: "failed",
           progress: 95,
@@ -1018,7 +1035,10 @@ async function handleDownload(req, res) {
     await fsp.mkdir(path.dirname(filePath), { recursive: true });
     await downloadVideo(apiKey, videoId, filePath, language);
     const stats = await fsp.stat(filePath);
-    sendJson(res, 200, { ok: true, output: fileOutput(filePath, stats.size) });
+    sendJson(res, 200, {
+      ok: true,
+      output: outputInfoForUser(filePath, stats),
+    });
   } catch (error) {
     sendJson(res, 400, { ok: false, error: safeError(error) });
   }
@@ -1074,5 +1094,5 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`Sora2App running at http://127.0.0.1:${PORT}`);
-  console.log(`Default output folder: ${DEFAULT_OUTPUT_DIR_DISPLAY}`);
+  console.log(`Default output folder: ${displayPathForUser(DEFAULT_OUTPUT_DIR)}`);
 });

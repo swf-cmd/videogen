@@ -45,6 +45,7 @@ const storageKeys = {
   size: "sora2app.size",
   batchCount: "sora2app.batchCount",
 };
+const privateStorageKeys = ["sora2app.outputDir"];
 
 const supportedLanguages = ["zh", "ja", "en", "ko"];
 const translations = {
@@ -150,7 +151,7 @@ const translations = {
     previewSelectDirError: "预览模式不能选择本机目录，请先启动本地服务。",
     selectDirFailed: "选择目录失败：HTTP {status}",
     selectDirFallbackError: "选择目录失败。",
-    selectedOutputDir: "已选择输出目录。",
+    selectedOutputDir: "已选择输出目录：{path}",
     previewReadyLog: "预览模式已就绪，界面会正常显示。生成视频请双击 Start Sora2App.command 启动本地服务。",
     readyLog: "本地小程序已就绪。API key 不会保存到本地。",
   },
@@ -256,7 +257,7 @@ const translations = {
     previewSelectDirError: "プレビューモードではローカルフォルダを選択できません。先にローカルサービスを起動してください。",
     selectDirFailed: "フォルダ選択に失敗しました：HTTP {status}",
     selectDirFallbackError: "フォルダ選択に失敗しました。",
-    selectedOutputDir: "出力フォルダを選択しました。",
+    selectedOutputDir: "出力フォルダを選択しました：{path}",
     previewReadyLog: "プレビューモードの準備ができました。画面は通常どおり表示されます。生成するには Start Sora2App.command をダブルクリックしてください。",
     readyLog: "ローカルアプリの準備ができました。API key はローカルに保存されません。",
   },
@@ -362,7 +363,7 @@ const translations = {
     previewSelectDirError: "Preview mode cannot choose a local folder. Start the local service first.",
     selectDirFailed: "Folder selection failed: HTTP {status}",
     selectDirFallbackError: "Folder selection failed.",
-    selectedOutputDir: "Selected output folder.",
+    selectedOutputDir: "Selected output folder: {path}",
     previewReadyLog: "Preview mode is ready and the UI will display normally. To generate video, double-click Start Sora2App.command.",
     readyLog: "Local app is ready. The API key is not saved locally.",
   },
@@ -468,7 +469,7 @@ const translations = {
     previewSelectDirError: "미리보기 모드에서는 로컬 폴더를 선택할 수 없습니다. 먼저 로컬 서비스를 시작하세요.",
     selectDirFailed: "폴더 선택 실패: HTTP {status}",
     selectDirFallbackError: "폴더 선택에 실패했습니다.",
-    selectedOutputDir: "출력 폴더를 선택했습니다.",
+    selectedOutputDir: "출력 폴더 선택됨: {path}",
     previewReadyLog: "미리보기 모드가 준비되었습니다. 화면은 정상적으로 표시됩니다. 생성하려면 Start Sora2App.command 를 더블 클릭하세요.",
     readyLog: "로컬 앱이 준비되었습니다. API key 는 로컬에 저장되지 않습니다.",
   },
@@ -902,6 +903,10 @@ function appendLog(message, tone = "") {
   updateLogCount();
 }
 
+function outputDisplayPath(output) {
+  return output?.displayPaths?.join("\n") || output?.displayPath || output?.paths?.join("\n") || output?.path || "-";
+}
+
 function readForm() {
   return {
     language: activeLanguage,
@@ -938,6 +943,12 @@ function persistSettings() {
   for (const key of Object.keys(storageKeys)) {
     if (key === "batchCount" && payload.mode !== "batch") continue;
     localStorage.setItem(storageKeys[key], payload[key] || "");
+  }
+}
+
+function forgetPrivateSettings() {
+  for (const key of privateStorageKeys) {
+    localStorage.removeItem(key);
   }
 }
 
@@ -1001,12 +1012,12 @@ function applyStreamEvent(event) {
   if (event.type === "done") {
     const doneId = event.batch?.id || event.video?.id || event.videos?.[0]?.id || "-";
     videoId.textContent = doneId;
-    outputPath.textContent = event.output?.paths?.join("\n") || event.output?.path || "-";
+    outputPath.textContent = outputDisplayPath(event.output);
     setProgress("completed", 100);
     const failedSuffix = event.output?.failedCount ? t("failedSuffix", { count: formatInteger(event.output.failedCount) }) : "";
     appendLog(event.output?.paths
       ? t("savedMany", { count: formatInteger(event.output.paths.length), failedSuffix })
-      : t("savedOne", { path: event.output.path }), "ok");
+      : t("savedOne", { path: outputDisplayPath(event.output) }), "ok");
     setConnectionState("connectionCompleted");
   }
 }
@@ -1108,9 +1119,9 @@ async function selectOutputDirectory() {
       throw new Error(data.error?.message || data.message || t("selectDirFailed", { status: response.status }));
     }
     if (!data.path) return;
-    outputDirInput.value = data.path;
+    outputDirInput.value = data.displayPath || data.path;
     persistSettings();
-    appendLog(t("selectedOutputDir"), "ok");
+    appendLog(t("selectedOutputDir", { path: data.displayPath || data.path }), "ok");
   } catch (error) {
     appendLog(error.message || t("selectDirFallbackError"), "error");
   } finally {
@@ -1120,6 +1131,7 @@ async function selectOutputDirectory() {
 }
 
 async function init() {
+  forgetPrivateSettings();
   const restored = restoreSettings();
   setLanguage(restored.language || navigator.language || "zh", false);
   await loadOfficialOptions();

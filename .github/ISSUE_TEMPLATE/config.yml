@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Privacy and security note
+    url: https://github.com/swf-cmd/videogen/blob/main/SECURITY.md
+    about: Do not post API keys, full local paths, private prompts, video IDs, Batch IDs, or generated private files in public issues.
