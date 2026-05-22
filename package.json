@@ -1,6 +1,6 @@
 {
   "name": "sora2app",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Local web UI for OpenAI Sora 2 / Sora 2 Pro video generation with Batch API and automatic MP4 downloads.",
   "license": "MIT",
