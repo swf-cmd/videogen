@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sora 2 工作台</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="workbench" aria-label="Sora video generator">
+        <header class="topbar">
+          <div class="brand-block">
+            <div class="brand-copy">
+              <p class="eyebrow">Sora 视频生成器</p>
+              <h1>Sora 2 工作台</h1>
+            </div>
+          </div>
+          <div class="topbar-actions">
+            <label class="language-field" for="languageSelect">
+              <span class="sr-only" data-i18n="languageLabel">语言</span>
+              <select id="languageSelect" name="language" aria-label="语言">
+                <option value="zh">中文</option>
+                <option value="ja">日本語</option>
+                <option value="en">English</option>
+                <option value="ko">한국어</option>
+              </select>
+            </label>
+            <div class="status-pill" id="connectionState">标准 API 就绪</div>
+          </div>
+        </header>
+
+        <form id="generateForm" class="layout">
+          <section class="panel controls-panel" aria-label="生成选项">
+            <div class="section-head span-full">
+              <div>
+                <p class="section-kicker">生成</p>
+                <h2>生成参数</h2>
+              </div>
+              <span class="trust-note">API key 仅用于本次请求</span>
+            </div>
+
+            <div class="mode-switch span-full" role="group" aria-label="调用方式">
+              <button id="standardModeButton" class="mode-option is-active" type="button" data-mode="standard" aria-pressed="true">
+                标准 API
+              </button>
+              <button id="batchModeButton" class="mode-option" type="button" data-mode="batch" aria-pressed="false">
+                Batch API
+                <span class="discount-badge"><span class="money-icon" aria-hidden="true">$</span>-50%</span>
+              </button>
+            </div>
+
+            <label class="field span-full secret-field">
+              <span>API key</span>
+              <div class="input-row">
+                <input id="apiKey" name="apiKey" type="password" autocomplete="off" placeholder="sk-..." required />
+                <button id="toggleApiKey" type="button" class="icon-button" aria-label="显示 API key">显示</button>
+              </div>
+            </label>
+
+            <label class="field span-full prompt-field">
+              <span id="promptLabel">提示词</span>
+              <textarea id="prompt" name="prompt" rows="8" placeholder="描述画面、镜头、主体、动作、光线和风格..." required></textarea>
+              <small id="promptMetaText" class="field-meta">0 字符</small>
+            </label>
+
+            <label id="batchCountField" class="field batch-only" hidden>
+              <span>提交条数</span>
+              <input id="batchCount" name="batchCount" type="number" min="1" max="50000" step="1" value="1" inputmode="numeric" />
+              <small id="batchCountMeta" class="field-meta">最多 50,000 条</small>
+            </label>
+
+            <div class="field">
+              <span>模型</span>
+              <select id="model" name="model">
+                <option value="sora-2">sora-2</option>
+                <option value="sora-2-pro">sora-2-pro</option>
+              </select>
+            </div>
+
+            <div class="field">
+              <span>时长</span>
+              <select id="seconds" name="seconds">
+                <option value="4">4 秒</option>
+                <option value="8">8 秒</option>
+                <option value="12">12 秒</option>
+                <option value="16">16 秒</option>
+                <option value="20">20 秒</option>
+              </select>
+            </div>
+
+            <div class="field span-full">
+              <span>分辨率</span>
+              <select id="size" name="size">
+                <option value="720x1280">720 x 1280 竖屏</option>
+                <option value="1280x720">1280 x 720 横屏</option>
+              </select>
+            </div>
+
+            <label class="field span-full">
+              <span>输出目录</span>
+              <div class="input-row output-dir-row">
+                <input id="outputDir" name="outputDir" type="text" placeholder="~/Downloads/SoraVideos" />
+                <button id="selectOutputDir" type="button" class="icon-button output-dir-button" aria-label="选择输出目录">选择</button>
+              </div>
+            </label>
+
+            <label class="field span-full">
+              <span>文件名</span>
+              <input id="filename" name="filename" type="text" placeholder="留空会自动生成 mp4 文件名" />
+            </label>
+
+            <div class="actions span-full">
+              <button id="generateButton" type="submit" class="primary-action">开始生成</button>
+              <button id="clearButton" type="button" class="secondary">清空状态</button>
+            </div>
+          </section>
+
+          <aside class="panel monitor-panel" aria-label="任务状态">
+            <div class="section-head compact">
+              <div>
+                <p class="section-kicker">状态</p>
+                <h2>任务状态</h2>
+              </div>
+            </div>
+
+            <div class="progress-wrap">
+              <div class="progress-meta">
+                <span id="statusText">等待提交</span>
+                <span id="progressText">0%</span>
+              </div>
+              <div class="progress-track" aria-hidden="true">
+                <div id="progressBar" class="progress-bar"></div>
+              </div>
+            </div>
+
+            <div class="summary-grid" aria-label="当前参数">
+              <div class="summary-item">
+                <span>方式</span>
+                <strong id="summaryMode">标准 API</strong>
+              </div>
+              <div class="summary-item">
+                <span>模型</span>
+                <strong id="summaryModel">Sora 2</strong>
+              </div>
+              <div class="summary-item">
+                <span>时长</span>
+                <strong id="summarySeconds">4 秒</strong>
+              </div>
+              <div class="summary-item">
+                <span id="priceLabel">预估价格</span>
+                <strong id="summaryPrice">$0.40</strong>
+              </div>
+              <div id="summaryBatchCountItem" class="summary-item" hidden>
+                <span>提交条数</span>
+                <strong id="summaryBatchCount">1 条</strong>
+              </div>
+              <div class="summary-item span-summary">
+                <span>分辨率</span>
+                <strong id="summarySize">720 x 1280 竖屏</strong>
+              </div>
+            </div>
+
+            <div class="job-card">
+              <span id="resultIdLabel">视频 ID</span>
+              <strong id="videoId">-</strong>
+            </div>
+
+            <div class="job-card">
+              <span>输出文件</span>
+              <strong id="outputPath">-</strong>
+            </div>
+
+            <div class="log-panel">
+              <div class="log-head">
+                <span>运行日志</span>
+                <span id="logCount">0 条</span>
+              </div>
+              <div class="log-box" id="logBox" aria-live="polite"></div>
+            </div>
+          </aside>
+        </form>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

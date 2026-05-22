@@ -1,0 +1,8 @@
+node_modules/
+outputs/
+runtime/
+.env
+.env.*
+.DS_Store
+*.log
+*.mp4

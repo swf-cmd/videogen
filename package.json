@@ -1,0 +1,21 @@
+{
+  "name": "sora2app",
+  "version": "1.0.0",
+  "description": "Local Sora 2 / Sora 2 Pro video generation helper.",
+  "license": "MIT",
+  "type": "commonjs",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/swf-cmd/videogen.git"
+  },
+  "homepage": "https://github.com/swf-cmd/videogen#readme",
+  "bugs": {
+    "url": "https://github.com/swf-cmd/videogen/issues"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
