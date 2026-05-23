@@ -405,6 +405,49 @@ select:focus {
   font-weight: 700;
 }
 
+.field-meta.is-error {
+  color: var(--danger);
+}
+
+.reference-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.reference-input-row input[type="file"] {
+  padding: 9px 12px;
+}
+
+.reference-preview {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 74px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 8px;
+}
+
+.reference-preview img {
+  width: 72px;
+  height: 56px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: #ffffff;
+}
+
+.reference-preview strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .actions {
   display: flex;
   gap: 10px;
@@ -669,6 +712,10 @@ button.secondary:hover,
   }
 
   .input-row {
+    grid-template-columns: 1fr;
+  }
+
+  .reference-input-row {
     grid-template-columns: 1fr;
   }
 

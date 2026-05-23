@@ -7,6 +7,12 @@ const batchCountMeta = document.querySelector("#batchCountMeta");
 const modelInput = document.querySelector("#model");
 const secondsInput = document.querySelector("#seconds");
 const sizeInput = document.querySelector("#size");
+const inputReferenceInput = document.querySelector("#inputReference");
+const clearInputReferenceButton = document.querySelector("#clearInputReference");
+const inputReferencePreview = document.querySelector("#inputReferencePreview");
+const inputReferenceImage = document.querySelector("#inputReferenceImage");
+const inputReferenceName = document.querySelector("#inputReferenceName");
+const inputReferenceMeta = document.querySelector("#inputReferenceMeta");
 const outputDirInput = document.querySelector("#outputDir");
 const filenameInput = document.querySelector("#filename");
 const generateButton = document.querySelector("#generateButton");
@@ -34,6 +40,7 @@ const summarySeconds = document.querySelector("#summarySeconds");
 const summaryPrice = document.querySelector("#summaryPrice");
 const summaryBatchCountItem = document.querySelector("#summaryBatchCountItem");
 const summaryBatchCount = document.querySelector("#summaryBatchCount");
+const summaryReference = document.querySelector("#summaryReference");
 const summarySize = document.querySelector("#summarySize");
 const isFilePreview = window.location.protocol === "file:";
 
@@ -87,6 +94,18 @@ const translations = {
     modelLabel: "模型",
     secondsLabel: "时长",
     sizeLabel: "分辨率",
+    inputReferenceLabel: "首帧图片",
+    inputReferenceMetaEmpty: "可选；JPEG/PNG/WebP，尺寸不一致会自动处理为当前分辨率",
+    inputReferenceReading: "正在读取图片...",
+    inputReferenceMetaSelected: "{name}，{width} x {height}",
+    inputReferenceMetaAdjusted: "{name}，{actual} -> {expected}，提交时自动处理",
+    inputReferenceClear: "移除",
+    inputReferenceInvalidType: "请选择 JPEG、PNG 或 WebP 图片。",
+    inputReferenceTooLarge: "首帧图片不能超过 25 MB。",
+    inputReferenceLoadError: "无法读取图片尺寸。",
+    inputReferenceProcessing: "正在处理首帧图片...",
+    inputReferenceResizeError: "无法自动调整图片尺寸。",
+    inputReferenceSizeMismatch: "图片为 {actual}，需要 {expected}。",
     outputDirLabel: "输出目录",
     outputDirPlaceholder: "~/Downloads/SoraVideos",
     selectOutputDir: "选择",
@@ -119,7 +138,9 @@ const translations = {
     estimatedPrice: "预估价格",
     batchEstimate: "Batch 预估",
     summaryBatchCount: "提交条数",
+    summaryReference: "首帧",
     summarySize: "分辨率",
+    noInputReference: "未设置",
     resultVideoId: "视频 ID",
     resultBatchId: "Batch ID / 视频 ID",
     outputFile: "输出文件",
@@ -154,6 +175,8 @@ const translations = {
     filePreviewGenerateError: "当前是直接打开 HTML 的预览模式。要生成视频，请双击 Start Sora2App.command 启动本地服务。",
     requestFailed: "请求失败：HTTP {status}",
     submittingLog: "正在提交任务...",
+    inputReferenceAttached: "已附加首帧图片：{name}",
+    inputReferenceAdjustedAttached: "已自动处理首帧图片 {name}：{actual} -> {expected}",
     previewSelectDirError: "预览模式不能选择本机目录，请先启动本地服务。",
     selectDirFailed: "选择目录失败：HTTP {status}",
     selectDirFallbackError: "选择目录失败。",
@@ -199,6 +222,18 @@ const translations = {
     modelLabel: "モデル",
     secondsLabel: "長さ",
     sizeLabel: "解像度",
+    inputReferenceLabel: "先頭フレーム画像",
+    inputReferenceMetaEmpty: "任意；JPEG/PNG/WebP、サイズが違う場合は現在の解像度に自動調整します",
+    inputReferenceReading: "画像を読み取っています...",
+    inputReferenceMetaSelected: "{name}、{width} x {height}",
+    inputReferenceMetaAdjusted: "{name}、{actual} -> {expected}、送信時に自動調整",
+    inputReferenceClear: "削除",
+    inputReferenceInvalidType: "JPEG、PNG、WebP 画像を選択してください。",
+    inputReferenceTooLarge: "先頭フレーム画像は 25 MB 以下にしてください。",
+    inputReferenceLoadError: "画像サイズを読み取れません。",
+    inputReferenceProcessing: "先頭フレーム画像を処理しています...",
+    inputReferenceResizeError: "画像サイズを自動調整できません。",
+    inputReferenceSizeMismatch: "画像は {actual} です。必要なサイズは {expected} です。",
     outputDirLabel: "出力フォルダ",
     outputDirPlaceholder: "~/Downloads/SoraVideos",
     selectOutputDir: "選択",
@@ -231,7 +266,9 @@ const translations = {
     estimatedPrice: "概算料金",
     batchEstimate: "Batch 概算",
     summaryBatchCount: "送信件数",
+    summaryReference: "先頭フレーム",
     summarySize: "解像度",
+    noInputReference: "未設定",
     resultVideoId: "動画 ID",
     resultBatchId: "Batch ID / 動画 ID",
     outputFile: "出力ファイル",
@@ -266,6 +303,8 @@ const translations = {
     filePreviewGenerateError: "HTML を直接開いたプレビューモードです。動画を生成するには Start Sora2App.command をダブルクリックしてローカルサービスを起動してください。",
     requestFailed: "リクエスト失敗：HTTP {status}",
     submittingLog: "タスクを送信しています...",
+    inputReferenceAttached: "先頭フレーム画像を添付しました：{name}",
+    inputReferenceAdjustedAttached: "先頭フレーム画像を自動調整しました {name}：{actual} -> {expected}",
     previewSelectDirError: "プレビューモードではローカルフォルダを選択できません。先にローカルサービスを起動してください。",
     selectDirFailed: "フォルダ選択に失敗しました：HTTP {status}",
     selectDirFallbackError: "フォルダ選択に失敗しました。",
@@ -311,6 +350,18 @@ const translations = {
     modelLabel: "Model",
     secondsLabel: "Duration",
     sizeLabel: "Resolution",
+    inputReferenceLabel: "First-frame image",
+    inputReferenceMetaEmpty: "Optional; JPEG/PNG/WebP, auto-fitted to the current resolution when needed",
+    inputReferenceReading: "Reading image...",
+    inputReferenceMetaSelected: "{name}, {width} x {height}",
+    inputReferenceMetaAdjusted: "{name}, {actual} -> {expected}, auto-fitted on submit",
+    inputReferenceClear: "Remove",
+    inputReferenceInvalidType: "Choose a JPEG, PNG, or WebP image.",
+    inputReferenceTooLarge: "First-frame image cannot exceed 25 MB.",
+    inputReferenceLoadError: "Could not read the image size.",
+    inputReferenceProcessing: "Processing first-frame image...",
+    inputReferenceResizeError: "Could not automatically resize the image.",
+    inputReferenceSizeMismatch: "Image is {actual}; needs {expected}.",
     outputDirLabel: "Output folder",
     outputDirPlaceholder: "~/Downloads/SoraVideos",
     selectOutputDir: "Choose",
@@ -343,7 +394,9 @@ const translations = {
     estimatedPrice: "Estimated price",
     batchEstimate: "Batch estimate",
     summaryBatchCount: "Request count",
+    summaryReference: "First frame",
     summarySize: "Resolution",
+    noInputReference: "Not set",
     resultVideoId: "Video ID",
     resultBatchId: "Batch ID / Video ID",
     outputFile: "Output file",
@@ -378,6 +431,8 @@ const translations = {
     filePreviewGenerateError: "This is preview mode from directly opening the HTML file. To generate video, double-click Start Sora2App.command to start the local service.",
     requestFailed: "Request failed: HTTP {status}",
     submittingLog: "Submitting task...",
+    inputReferenceAttached: "Attached first-frame image: {name}",
+    inputReferenceAdjustedAttached: "Auto-fitted first-frame image {name}: {actual} -> {expected}",
     previewSelectDirError: "Preview mode cannot choose a local folder. Start the local service first.",
     selectDirFailed: "Folder selection failed: HTTP {status}",
     selectDirFallbackError: "Folder selection failed.",
@@ -423,6 +478,18 @@ const translations = {
     modelLabel: "모델",
     secondsLabel: "길이",
     sizeLabel: "해상도",
+    inputReferenceLabel: "첫 프레임 이미지",
+    inputReferenceMetaEmpty: "선택 사항; JPEG/PNG/WebP, 필요한 경우 현재 해상도에 맞게 자동 조정",
+    inputReferenceReading: "이미지를 읽는 중...",
+    inputReferenceMetaSelected: "{name}, {width} x {height}",
+    inputReferenceMetaAdjusted: "{name}, {actual} -> {expected}, 제출 시 자동 조정",
+    inputReferenceClear: "제거",
+    inputReferenceInvalidType: "JPEG, PNG, WebP 이미지를 선택하세요.",
+    inputReferenceTooLarge: "첫 프레임 이미지는 25 MB 를 초과할 수 없습니다.",
+    inputReferenceLoadError: "이미지 크기를 읽을 수 없습니다.",
+    inputReferenceProcessing: "첫 프레임 이미지를 처리하는 중...",
+    inputReferenceResizeError: "이미지 크기를 자동 조정할 수 없습니다.",
+    inputReferenceSizeMismatch: "이미지는 {actual} 입니다. 필요한 크기는 {expected} 입니다.",
     outputDirLabel: "출력 폴더",
     outputDirPlaceholder: "~/Downloads/SoraVideos",
     selectOutputDir: "선택",
@@ -455,7 +522,9 @@ const translations = {
     estimatedPrice: "예상 가격",
     batchEstimate: "Batch 예상",
     summaryBatchCount: "제출 수",
+    summaryReference: "첫 프레임",
     summarySize: "해상도",
+    noInputReference: "설정 안 됨",
     resultVideoId: "동영상 ID",
     resultBatchId: "Batch ID / 동영상 ID",
     outputFile: "출력 파일",
@@ -490,6 +559,8 @@ const translations = {
     filePreviewGenerateError: "HTML 파일을 직접 연 미리보기 모드입니다. 동영상을 생성하려면 Start Sora2App.command 를 더블 클릭해 로컬 서비스를 시작하세요.",
     requestFailed: "요청 실패: HTTP {status}",
     submittingLog: "작업을 제출하는 중...",
+    inputReferenceAttached: "첫 프레임 이미지 첨부됨: {name}",
+    inputReferenceAdjustedAttached: "첫 프레임 이미지 자동 조정됨 {name}: {actual} -> {expected}",
     previewSelectDirError: "미리보기 모드에서는 로컬 폴더를 선택할 수 없습니다. 먼저 로컬 서비스를 시작하세요.",
     selectDirFailed: "폴더 선택 실패: HTTP {status}",
     selectDirFallbackError: "폴더 선택에 실패했습니다.",
@@ -505,6 +576,13 @@ let currentStatus = "idle";
 let currentProgress = 0;
 let progressTarget = 0;
 let progressAnimationFrame = 0;
+let inputReferenceInfo = null;
+let inputReferenceInfoKey = "";
+let inputReferenceError = "";
+let inputReferencePreviewUrl = "";
+const inputReferenceFitCache = new Map();
+const maxInputReferenceBytes = 25 * 1024 * 1024;
+const supportedInputReferenceTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 function normalizeLanguage(language) {
   const base = String(language || "").toLowerCase().split("-")[0];
@@ -576,6 +654,9 @@ function applyTranslations() {
   setFieldTextForInput(modelInput, "modelLabel");
   setFieldTextForInput(secondsInput, "secondsLabel");
   setFieldTextForInput(sizeInput, "sizeLabel");
+  setFieldText(".reference-field", "inputReferenceLabel");
+  inputReferenceInput.setAttribute("aria-label", t("inputReferenceLabel"));
+  clearInputReferenceButton.textContent = t("inputReferenceClear");
   setFieldTextForInput(outputDirInput, "outputDirLabel");
   setFieldTextForInput(filenameInput, "filenameLabel");
   outputDirInput.placeholder = t("outputDirPlaceholder");
@@ -589,7 +670,8 @@ function applyTranslations() {
   setText(".summary-item:nth-child(2) span", "summaryModel");
   setText(".summary-item:nth-child(3) span", "summarySeconds");
   setText("#summaryBatchCountItem span", "summaryBatchCount");
-  setText(".span-summary span", "summarySize");
+  setText("#summaryReferenceItem span", "summaryReference");
+  setText("#summarySizeItem span", "summarySize");
   resultIdLabel.textContent = t(activeMode === "batch" ? "resultBatchId" : "resultVideoId");
   const outputFileLabel = outputPath.closest(".job-card")?.querySelector("span");
   if (outputFileLabel) outputFileLabel.textContent = t("outputFile");
@@ -602,6 +684,7 @@ function applyTranslations() {
   setProgress(currentStatus, currentProgress);
   syncBatchCountBounds(false);
   updatePromptMeta();
+  updateInputReferenceMeta();
   updateSummary();
 }
 
@@ -796,6 +879,324 @@ function formatUsd(amount) {
   }).format(amount);
 }
 
+function selectedInputReferenceFile() {
+  return inputReferenceInput.files?.[0] || null;
+}
+
+function inputReferenceMimeType(file) {
+  const type = String(file?.type || "").toLowerCase();
+  if (supportedInputReferenceTypes.has(type)) return type;
+  const extension = String(file?.name || "").toLowerCase().split(".").pop();
+  return {
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png",
+    webp: "image/webp",
+  }[extension] || "";
+}
+
+function inputReferenceFileKey(file) {
+  if (!file) return "";
+  return `${file.name}:${file.size}:${file.lastModified}`;
+}
+
+function parseSizeValue(value) {
+  const match = /^(\d+)x(\d+)$/.exec(String(value || ""));
+  if (!match) return null;
+  return {
+    width: Number(match[1]),
+    height: Number(match[2]),
+  };
+}
+
+function loadImageFile(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      resolve({ image, url });
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error(t("inputReferenceLoadError")));
+    };
+    image.src = url;
+  });
+}
+
+async function readImageFileDimensions(file) {
+  const { image, url } = await loadImageFile(file);
+  const dimensions = {
+    width: image.naturalWidth,
+    height: image.naturalHeight,
+  };
+  URL.revokeObjectURL(url);
+  return dimensions;
+}
+
+async function ensureInputReferenceInfo(file) {
+  const key = inputReferenceFileKey(file);
+  if (inputReferenceInfo && inputReferenceInfoKey === key) return inputReferenceInfo;
+  const dimensions = await readImageFileDimensions(file);
+  inputReferenceInfo = {
+    ...dimensions,
+    key,
+    name: file.name,
+    size: file.size,
+    type: inputReferenceMimeType(file),
+  };
+  inputReferenceInfoKey = key;
+  return inputReferenceInfo;
+}
+
+function inputReferenceAdjustment(info, file = selectedInputReferenceFile(), sizeValue = sizeInput.value) {
+  const expected = parseSizeValue(sizeValue);
+  if (!info || !expected) return null;
+  const needsResize = info.width !== expected.width || info.height !== expected.height;
+  const needsCompression = Boolean(file && file.size > maxInputReferenceBytes);
+  if (!needsResize && !needsCompression) return null;
+  return {
+    actual: `${info.width} x ${info.height}`,
+    expected: `${expected.width} x ${expected.height}`,
+    width: expected.width,
+    height: expected.height,
+  };
+}
+
+function canvasToBlob(canvas, type, quality) {
+  return new Promise((resolve) => {
+    canvas.toBlob(resolve, type, quality);
+  });
+}
+
+function fittedInputReferenceName(sizeValue) {
+  const suffix = String(sizeValue || "").replace(/[^0-9x]/g, "") || "sora";
+  return `input-reference-${suffix}.jpg`;
+}
+
+async function fitInputReferenceFile(file, sizeValue) {
+  const expected = parseSizeValue(sizeValue);
+  if (!expected) return file;
+
+  const { image, url } = await loadImageFile(file);
+  try {
+    const sourceWidth = image.naturalWidth;
+    const sourceHeight = image.naturalHeight;
+    if (!sourceWidth || !sourceHeight) {
+      throw new Error(t("inputReferenceLoadError"));
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = expected.width;
+    canvas.height = expected.height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error(t("inputReferenceResizeError"));
+    }
+
+    const sourceAspect = sourceWidth / sourceHeight;
+    const targetAspect = expected.width / expected.height;
+    let sourceX = 0;
+    let sourceY = 0;
+    let cropWidth = sourceWidth;
+    let cropHeight = sourceHeight;
+
+    if (sourceAspect > targetAspect) {
+      cropWidth = sourceHeight * targetAspect;
+      sourceX = (sourceWidth - cropWidth) / 2;
+    } else if (sourceAspect < targetAspect) {
+      cropHeight = sourceWidth / targetAspect;
+      sourceY = (sourceHeight - cropHeight) / 2;
+    }
+
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, expected.width, expected.height);
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(
+      image,
+      sourceX,
+      sourceY,
+      cropWidth,
+      cropHeight,
+      0,
+      0,
+      expected.width,
+      expected.height,
+    );
+
+    for (const quality of [0.92, 0.86, 0.8, 0.72]) {
+      const blob = await canvasToBlob(canvas, "image/jpeg", quality);
+      if (blob && blob.size <= maxInputReferenceBytes) {
+        return new File([blob], fittedInputReferenceName(sizeValue), {
+          type: "image/jpeg",
+          lastModified: Date.now(),
+        });
+      }
+    }
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+
+  throw new Error(t("inputReferenceTooLarge"));
+}
+
+function revokeInputReferencePreview() {
+  if (!inputReferencePreviewUrl) return;
+  URL.revokeObjectURL(inputReferencePreviewUrl);
+  inputReferencePreviewUrl = "";
+}
+
+function renderInputReferencePreview(file) {
+  revokeInputReferencePreview();
+  if (!file) {
+    inputReferencePreview.hidden = true;
+    inputReferenceImage.removeAttribute("src");
+    inputReferenceName.textContent = "-";
+    return;
+  }
+  inputReferencePreviewUrl = URL.createObjectURL(file);
+  inputReferenceImage.src = inputReferencePreviewUrl;
+  inputReferenceName.textContent = file.name;
+  inputReferencePreview.hidden = false;
+}
+
+function updateInputReferenceSummary() {
+  const file = selectedInputReferenceFile();
+  if (!file) {
+    summaryReference.textContent = t("noInputReference");
+    return;
+  }
+  if (inputReferenceInfo) {
+    const adjustment = inputReferenceAdjustment(inputReferenceInfo, file);
+    summaryReference.textContent = adjustment ? `${adjustment.actual} -> ${adjustment.expected}` : `${inputReferenceInfo.width} x ${inputReferenceInfo.height}`;
+    return;
+  }
+  summaryReference.textContent = file.name;
+}
+
+function updateInputReferenceMeta() {
+  const file = selectedInputReferenceFile();
+  clearInputReferenceButton.disabled = !file;
+
+  if (!file) {
+    inputReferenceMeta.textContent = t("inputReferenceMetaEmpty");
+    inputReferenceMeta.classList.remove("is-error");
+    updateInputReferenceSummary();
+    return;
+  }
+
+  const isInvalidType = !supportedInputReferenceTypes.has(inputReferenceMimeType(file));
+  const adjustment = inputReferenceAdjustment(inputReferenceInfo, file);
+  const hasError = Boolean(inputReferenceError || isInvalidType);
+  inputReferenceMeta.classList.toggle("is-error", hasError);
+
+  if (inputReferenceError) {
+    inputReferenceMeta.textContent = inputReferenceError;
+  } else if (isInvalidType) {
+    inputReferenceMeta.textContent = t("inputReferenceInvalidType");
+  } else if (adjustment) {
+    inputReferenceMeta.textContent = t("inputReferenceMetaAdjusted", {
+      name: file.name,
+      actual: adjustment.actual,
+      expected: adjustment.expected,
+    });
+  } else if (inputReferenceInfo) {
+    inputReferenceMeta.textContent = t("inputReferenceMetaSelected", {
+      name: file.name,
+      width: inputReferenceInfo.width,
+      height: inputReferenceInfo.height,
+    });
+  } else {
+    inputReferenceMeta.textContent = t("inputReferenceReading");
+  }
+
+  updateInputReferenceSummary();
+}
+
+async function handleInputReferenceChange() {
+  inputReferenceError = "";
+  inputReferenceInfo = null;
+  inputReferenceInfoKey = "";
+  inputReferenceFitCache.clear();
+  const file = selectedInputReferenceFile();
+  renderInputReferencePreview(file);
+  updateInputReferenceMeta();
+  updateSummary();
+
+  if (!file || !supportedInputReferenceTypes.has(inputReferenceMimeType(file))) return;
+  const key = inputReferenceFileKey(file);
+  try {
+    await ensureInputReferenceInfo(file);
+  } catch {
+    inputReferenceError = t("inputReferenceLoadError");
+  }
+  if (inputReferenceFileKey(selectedInputReferenceFile()) !== key) return;
+  updateInputReferenceMeta();
+  updateSummary();
+}
+
+async function validateInputReferenceSelection(payload) {
+  const file = selectedInputReferenceFile();
+  if (!file) return null;
+  if (!supportedInputReferenceTypes.has(inputReferenceMimeType(file))) {
+    throw new Error(t("inputReferenceInvalidType"));
+  }
+  let info;
+  try {
+    info = await ensureInputReferenceInfo(file);
+  } catch {
+    throw new Error(t("inputReferenceLoadError"));
+  }
+  const adjustment = inputReferenceAdjustment(info, file, payload.size);
+  if (!adjustment) {
+    return {
+      file,
+      name: file.name,
+      adjusted: false,
+      actual: `${info.width} x ${info.height}`,
+      expected: `${info.width} x ${info.height}`,
+    };
+  }
+
+  inputReferenceMeta.textContent = t("inputReferenceProcessing");
+  let fittedFile;
+  const cacheKey = `${inputReferenceFileKey(file)}:${payload.size}`;
+  try {
+    fittedFile = inputReferenceFitCache.get(cacheKey);
+    if (!fittedFile) {
+      fittedFile = await fitInputReferenceFile(file, payload.size);
+      inputReferenceFitCache.set(cacheKey, fittedFile);
+    }
+  } catch (error) {
+    inputReferenceError = error.message || t("inputReferenceResizeError");
+    updateInputReferenceMeta();
+    throw error;
+  }
+  if (fittedFile.size > maxInputReferenceBytes) {
+    throw new Error(t("inputReferenceTooLarge"));
+  }
+  updateInputReferenceMeta();
+  return {
+    file: fittedFile,
+    name: file.name,
+    adjusted: true,
+    actual: adjustment.actual,
+    expected: adjustment.expected,
+  };
+}
+
+function clearInputReference() {
+  inputReferenceInput.value = "";
+  inputReferenceInfo = null;
+  inputReferenceInfoKey = "";
+  inputReferenceError = "";
+  inputReferenceFitCache.clear();
+  renderInputReferencePreview(null);
+  updateInputReferenceMeta();
+  updateSummary();
+}
+
 function updateSummary() {
   const model = selectedModelConfig();
   const price = selectedPrice();
@@ -814,6 +1215,7 @@ function updateSummary() {
   priceLabel.textContent = activeMode === "batch" ? t("batchEstimate") : t("estimatedPrice");
   summaryBatchCountItem.hidden = activeMode !== "batch";
   summaryBatchCount.textContent = `${formatInteger(requestCountForEstimate())} ${t("requestUnit")}`;
+  updateInputReferenceSummary();
   summarySize.textContent = selectedSizeLabel();
 }
 
@@ -1112,15 +1514,36 @@ function applyStreamEvent(event) {
   }
 }
 
-async function streamGenerate(payload) {
+function generateRequestBody(payload, inputReferenceFile) {
+  if (!inputReferenceFile) {
+    return {
+      headers: { "content-type": "application/json", "x-sora-language": activeLanguage },
+      body: JSON.stringify(payload),
+    };
+  }
+
+  const formData = new FormData();
+  for (const [key, value] of Object.entries(payload)) {
+    if (value === undefined || value === null) continue;
+    formData.append(key, String(value));
+  }
+  formData.append("input_reference", inputReferenceFile, inputReferenceFile.name);
+  return {
+    headers: { "x-sora-language": activeLanguage },
+    body: formData,
+  };
+}
+
+async function streamGenerate(payload, inputReferenceFile = null) {
   if (isFilePreview) {
     throw new Error(t("filePreviewGenerateError"));
   }
 
+  const requestBody = generateRequestBody(payload, inputReferenceFile);
   const response = await fetch(apiModes[payload.mode || activeMode].endpoint, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-sora-language": activeLanguage },
-    body: JSON.stringify(payload),
+    headers: requestBody.headers,
+    body: requestBody.body,
   });
   if (!response.ok || !response.body) {
     throw new Error(t("requestFailed", { status: response.status }));
@@ -1161,7 +1584,17 @@ async function generateVideo(event) {
 
   try {
     validateBatchSelection(payload);
-    await streamGenerate(payload);
+    const inputReference = await validateInputReferenceSelection(payload);
+    if (inputReference?.adjusted) {
+      appendLog(t("inputReferenceAdjustedAttached", {
+        name: inputReference.name,
+        actual: inputReference.actual,
+        expected: inputReference.expected,
+      }));
+    } else if (inputReference) {
+      appendLog(t("inputReferenceAttached", { name: inputReference.name }));
+    }
+    await streamGenerate(payload, inputReference?.file || null);
   } catch (error) {
     setProgress("failed", currentProgress);
     appendLog(error.message, "error");
@@ -1244,6 +1677,8 @@ form.addEventListener("submit", generateVideo);
 clearButton.addEventListener("click", clearStatus);
 toggleApiKeyButton.addEventListener("click", toggleApiKeyVisibility);
 selectOutputDirButton.addEventListener("click", selectOutputDirectory);
+inputReferenceInput.addEventListener("change", handleInputReferenceChange);
+clearInputReferenceButton.addEventListener("click", clearInputReference);
 languageInput.addEventListener("change", () => setLanguage(languageInput.value));
 promptInput.addEventListener("input", () => {
   syncBatchCountWithPromptQueue();
@@ -1267,10 +1702,12 @@ standardModeButton.addEventListener("click", () => setApiMode("standard"));
 batchModeButton.addEventListener("click", () => setApiMode("batch"));
 modelInput.addEventListener("change", () => {
   syncOptionControls();
+  updateInputReferenceMeta();
   persistSettings();
 });
 for (const input of [secondsInput, sizeInput, outputDirInput]) {
   input.addEventListener("change", () => {
+    updateInputReferenceMeta();
     updateSummary();
     persistSettings();
   });

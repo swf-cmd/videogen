@@ -95,6 +95,11 @@ const ALLOWED_SECONDS = new Set(OFFICIAL_SECONDS);
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "expired"]);
 const BATCH_TERMINAL_STATUSES = new Set(["completed", "failed", "expired", "cancelled"]);
 const MAX_JSON_BYTES = 1024 * 1024;
+const MAX_IMAGE_REFERENCE_BYTES = 25 * 1024 * 1024;
+const MAX_MULTIPART_OVERHEAD_BYTES = 256 * 1024;
+const MAX_MULTIPART_BYTES = MAX_JSON_BYTES + MAX_IMAGE_REFERENCE_BYTES + MAX_MULTIPART_OVERHEAD_BYTES;
+const IMAGE_REFERENCE_FILE_EXPIRY_SECONDS = 7 * 24 * 60 * 60;
+const SUPPORTED_REFERENCE_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const SUPPORTED_LANGUAGES = new Set(["zh", "ja", "en", "ko"]);
 const SERVER_MESSAGES = {
   zh: {
@@ -105,6 +110,9 @@ const SERVER_MESSAGES = {
     invalidModel: "模型只能选择 sora-2 或 sora-2-pro。",
     invalidSeconds: "时长只能选择 4、8、12、16 或 20 秒。",
     invalidSize: "{model} 支持的分辨率为：{sizes}。",
+    invalidImageReference: "首帧图片只支持 JPEG、PNG 或 WebP。",
+    imageReferenceTooLarge: "首帧图片不能超过 25 MB。",
+    imageReferenceSizeMismatch: "首帧图片尺寸必须等于当前分辨率 {size}，当前图片为 {actual}。",
     invalidBatchCount: "Batch 提交条数必须是大于 0 的整数。",
     batchTooMany: "Batch 模式一次最多提交 {max} 条任务。",
     missingBatchPrompt: "请输入至少一条视频提示词。",
@@ -123,6 +131,9 @@ const SERVER_MESSAGES = {
     videoSubmitted: "已提交视频生成任务。",
     videoCreated: "任务已创建。",
     progressUpdated: "进度已更新。",
+    imageReferenceAttached: "已附加首帧图片。",
+    imageReferenceUploading: "正在上传首帧图片。",
+    imageReferenceUploaded: "首帧图片已上传。",
     videoDownloading: "视频已完成，正在下载 MP4。",
     savedMp4: "已保存 MP4。",
     batchInputTooLarge: "Batch 输入文件不能超过 200 MB，请减少提交条数或缩短提示词。",
@@ -151,6 +162,9 @@ const SERVER_MESSAGES = {
     invalidModel: "モデルは sora-2 または sora-2-pro のみ選択できます。",
     invalidSeconds: "長さは 4、8、12、16、20 秒のみ選択できます。",
     invalidSize: "{model} が対応する解像度は {sizes} です。",
+    invalidImageReference: "先頭フレーム画像は JPEG、PNG、WebP のみ対応しています。",
+    imageReferenceTooLarge: "先頭フレーム画像は 25 MB 以下にしてください。",
+    imageReferenceSizeMismatch: "先頭フレーム画像のサイズは現在の解像度 {size} と一致する必要があります。現在の画像は {actual} です。",
     invalidBatchCount: "Batch 送信件数は 1 以上の整数にしてください。",
     batchTooMany: "Batch モードでは一度に最大 {max} 件まで送信できます。",
     missingBatchPrompt: "少なくとも1件の動画プロンプトを入力してください。",
@@ -169,6 +183,9 @@ const SERVER_MESSAGES = {
     videoSubmitted: "動画生成タスクを送信しました。",
     videoCreated: "タスクを作成しました。",
     progressUpdated: "進捗を更新しました。",
+    imageReferenceAttached: "先頭フレーム画像を添付しました。",
+    imageReferenceUploading: "先頭フレーム画像をアップロードしています。",
+    imageReferenceUploaded: "先頭フレーム画像をアップロードしました。",
     videoDownloading: "動画が完了しました。MP4 をダウンロードしています。",
     savedMp4: "MP4 を保存しました。",
     batchInputTooLarge: "Batch 入力ファイルは 200 MB を超えられません。送信件数を減らすかプロンプトを短くしてください。",
@@ -197,6 +214,9 @@ const SERVER_MESSAGES = {
     invalidModel: "Model must be sora-2 or sora-2-pro.",
     invalidSeconds: "Duration must be 4, 8, 12, 16, or 20 seconds.",
     invalidSize: "{model} supports these resolutions: {sizes}.",
+    invalidImageReference: "First-frame image must be JPEG, PNG, or WebP.",
+    imageReferenceTooLarge: "First-frame image cannot exceed 25 MB.",
+    imageReferenceSizeMismatch: "First-frame image size must match the current resolution {size}; the image is {actual}.",
     invalidBatchCount: "Batch request count must be an integer greater than 0.",
     batchTooMany: "Batch mode can submit up to {max} requests at once.",
     missingBatchPrompt: "Enter at least one video prompt.",
@@ -215,6 +235,9 @@ const SERVER_MESSAGES = {
     videoSubmitted: "Submitted the video generation task.",
     videoCreated: "Task created.",
     progressUpdated: "Progress updated.",
+    imageReferenceAttached: "Attached the first-frame image.",
+    imageReferenceUploading: "Uploading the first-frame image.",
+    imageReferenceUploaded: "First-frame image uploaded.",
     videoDownloading: "Video completed. Downloading MP4.",
     savedMp4: "Saved MP4.",
     batchInputTooLarge: "Batch input file cannot exceed 200 MB. Reduce the request count or shorten prompts.",
@@ -243,6 +266,9 @@ const SERVER_MESSAGES = {
     invalidModel: "모델은 sora-2 또는 sora-2-pro 만 선택할 수 있습니다.",
     invalidSeconds: "길이는 4, 8, 12, 16, 20초만 선택할 수 있습니다.",
     invalidSize: "{model} 이 지원하는 해상도는 {sizes} 입니다.",
+    invalidImageReference: "첫 프레임 이미지는 JPEG, PNG, WebP 만 지원됩니다.",
+    imageReferenceTooLarge: "첫 프레임 이미지는 25 MB 를 초과할 수 없습니다.",
+    imageReferenceSizeMismatch: "첫 프레임 이미지 크기는 현재 해상도 {size} 와 일치해야 합니다. 현재 이미지는 {actual} 입니다.",
     invalidBatchCount: "Batch 제출 수는 0보다 큰 정수여야 합니다.",
     batchTooMany: "Batch 모드는 한 번에 최대 {max}개까지 제출할 수 있습니다.",
     missingBatchPrompt: "동영상 프롬프트를 하나 이상 입력하세요.",
@@ -261,6 +287,9 @@ const SERVER_MESSAGES = {
     videoSubmitted: "동영상 생성 작업을 제출했습니다.",
     videoCreated: "작업이 생성되었습니다.",
     progressUpdated: "진행률이 업데이트되었습니다.",
+    imageReferenceAttached: "첫 프레임 이미지를 첨부했습니다.",
+    imageReferenceUploading: "첫 프레임 이미지를 업로드하는 중입니다.",
+    imageReferenceUploaded: "첫 프레임 이미지가 업로드되었습니다.",
     videoDownloading: "동영상이 완료되었습니다. MP4 를 다운로드하는 중입니다.",
     savedMp4: "MP4 를 저장했습니다.",
     batchInputTooLarge: "Batch 입력 파일은 200 MB 를 초과할 수 없습니다. 제출 수를 줄이거나 프롬프트를 짧게 해 주세요.",
@@ -350,6 +379,254 @@ async function readJson(req, language = "zh") {
   } catch {
     throw new Error(st(language, "invalidJson"));
   }
+}
+
+function isMultipartRequest(req) {
+  return /^multipart\/form-data\b/i.test(String(req.headers["content-type"] || ""));
+}
+
+function requestHeaders(req) {
+  const headers = new Headers();
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (Array.isArray(value)) {
+      for (const item of value) headers.append(key, item);
+    } else if (value !== undefined) {
+      headers.set(key, value);
+    }
+  }
+  return headers;
+}
+
+async function readMultipartForm(req, language = "zh") {
+  const contentLength = Number(req.headers["content-length"] || 0);
+  if (Number.isFinite(contentLength) && contentLength > MAX_MULTIPART_BYTES) {
+    throw new Error(st(language, "requestTooLarge"));
+  }
+
+  const request = new Request("http://127.0.0.1/", {
+    method: req.method,
+    headers: requestHeaders(req),
+    body: req,
+    duplex: "half",
+  });
+  return request.formData();
+}
+
+function formText(form, name) {
+  const value = form.get(name);
+  return typeof value === "string" ? value : "";
+}
+
+function formFile(form, name) {
+  const value = form.get(name);
+  if (!value || typeof value !== "object") return null;
+  if (typeof value.arrayBuffer !== "function" || typeof value.size !== "number") return null;
+  return value.size > 0 ? value : null;
+}
+
+function rawPayloadFromForm(form) {
+  return {
+    language: formText(form, "language"),
+    apiKey: formText(form, "apiKey"),
+    prompt: formText(form, "prompt"),
+    model: formText(form, "model"),
+    seconds: formText(form, "seconds"),
+    size: formText(form, "size"),
+    batchCount: formText(form, "batchCount"),
+    filename: formText(form, "filename"),
+    outputDir: formText(form, "outputDir"),
+  };
+}
+
+function parseResolution(size) {
+  const match = /^(\d+)x(\d+)$/.exec(String(size || ""));
+  if (!match) return null;
+  return {
+    width: Number(match[1]),
+    height: Number(match[2]),
+  };
+}
+
+function imageMimeTypeFromName(filename) {
+  const ext = path.extname(String(filename || "")).toLowerCase();
+  return {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+  }[ext] || "";
+}
+
+function imageMimeType(file) {
+  const type = String(file?.type || "").toLowerCase();
+  return SUPPORTED_REFERENCE_IMAGE_TYPES.has(type) ? type : imageMimeTypeFromName(file?.name);
+}
+
+function referenceImageExtension(mimeType) {
+  return {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+  }[mimeType] || "";
+}
+
+function sanitizeUploadFilename(filename, mimeType) {
+  const fallback = `input-reference${referenceImageExtension(mimeType) || ".png"}`;
+  const base = path.basename(String(filename || fallback)).replace(/[<>:"/\\|?*\x00-\x1f]/g, "-") || fallback;
+  const ext = path.extname(base).toLowerCase();
+  return ext ? base : `${base}${referenceImageExtension(mimeType) || ".png"}`;
+}
+
+function pngDimensions(buffer) {
+  if (
+    buffer.length < 24 ||
+    buffer[0] !== 0x89 ||
+    buffer.toString("ascii", 1, 4) !== "PNG" ||
+    buffer[4] !== 0x0d ||
+    buffer[5] !== 0x0a ||
+    buffer[6] !== 0x1a ||
+    buffer[7] !== 0x0a
+  ) {
+    return null;
+  }
+  return {
+    width: buffer.readUInt32BE(16),
+    height: buffer.readUInt32BE(20),
+  };
+}
+
+function jpegDimensions(buffer) {
+  if (buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) return null;
+  let offset = 2;
+  while (offset + 9 < buffer.length) {
+    if (buffer[offset] !== 0xff) {
+      offset += 1;
+      continue;
+    }
+    while (buffer[offset] === 0xff) offset += 1;
+    const marker = buffer[offset];
+    offset += 1;
+    if (marker === 0xd8 || marker === 0xd9) continue;
+    if (offset + 2 > buffer.length) return null;
+    const length = buffer.readUInt16BE(offset);
+    if (length < 2 || offset + length > buffer.length) return null;
+    const isStartOfFrame = (
+      (marker >= 0xc0 && marker <= 0xc3) ||
+      (marker >= 0xc5 && marker <= 0xc7) ||
+      (marker >= 0xc9 && marker <= 0xcb) ||
+      (marker >= 0xcd && marker <= 0xcf)
+    );
+    if (isStartOfFrame && length >= 7) {
+      return {
+        height: buffer.readUInt16BE(offset + 3),
+        width: buffer.readUInt16BE(offset + 5),
+      };
+    }
+    offset += length;
+  }
+  return null;
+}
+
+function readUInt24LE(buffer, offset) {
+  return buffer[offset] | (buffer[offset + 1] << 8) | (buffer[offset + 2] << 16);
+}
+
+function webpDimensions(buffer) {
+  if (
+    buffer.length < 30 ||
+    buffer.toString("ascii", 0, 4) !== "RIFF" ||
+    buffer.toString("ascii", 8, 12) !== "WEBP"
+  ) {
+    return null;
+  }
+
+  let offset = 12;
+  while (offset + 8 <= buffer.length) {
+    const chunkType = buffer.toString("ascii", offset, offset + 4);
+    const chunkSize = buffer.readUInt32LE(offset + 4);
+    const dataOffset = offset + 8;
+    if (dataOffset + chunkSize > buffer.length) return null;
+
+    if (chunkType === "VP8X" && chunkSize >= 10) {
+      return {
+        width: readUInt24LE(buffer, dataOffset + 4) + 1,
+        height: readUInt24LE(buffer, dataOffset + 7) + 1,
+      };
+    }
+    if (chunkType === "VP8L" && chunkSize >= 5 && buffer[dataOffset] === 0x2f) {
+      const bits = buffer[dataOffset + 1] |
+        (buffer[dataOffset + 2] << 8) |
+        (buffer[dataOffset + 3] << 16) |
+        (buffer[dataOffset + 4] << 24);
+      return {
+        width: (bits & 0x3fff) + 1,
+        height: ((bits >> 14) & 0x3fff) + 1,
+      };
+    }
+    if (chunkType === "VP8 " && chunkSize >= 10 && buffer.toString("hex", dataOffset + 3, dataOffset + 6) === "9d012a") {
+      return {
+        width: buffer.readUInt16LE(dataOffset + 6) & 0x3fff,
+        height: buffer.readUInt16LE(dataOffset + 8) & 0x3fff,
+      };
+    }
+
+    offset = dataOffset + chunkSize + (chunkSize % 2);
+  }
+  return null;
+}
+
+function imageDimensions(buffer, mimeType) {
+  if (mimeType === "image/png") return pngDimensions(buffer);
+  if (mimeType === "image/jpeg") return jpegDimensions(buffer);
+  if (mimeType === "image/webp") return webpDimensions(buffer);
+  return null;
+}
+
+async function normalizeInputReference(file, size, language = "zh") {
+  if (!file) return null;
+  const mimeType = imageMimeType(file);
+  if (!SUPPORTED_REFERENCE_IMAGE_TYPES.has(mimeType)) {
+    throw new Error(st(language, "invalidImageReference"));
+  }
+  if (file.size > MAX_IMAGE_REFERENCE_BYTES) {
+    throw new Error(st(language, "imageReferenceTooLarge"));
+  }
+
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const dimensions = imageDimensions(buffer, mimeType);
+  if (!dimensions?.width || !dimensions?.height) {
+    throw new Error(st(language, "invalidImageReference"));
+  }
+
+  const expected = parseResolution(size);
+  if (expected && (dimensions.width !== expected.width || dimensions.height !== expected.height)) {
+    throw new Error(st(language, "imageReferenceSizeMismatch", {
+      size: `${expected.width} x ${expected.height}`,
+      actual: `${dimensions.width} x ${dimensions.height}`,
+    }));
+  }
+
+  return {
+    buffer,
+    mimeType,
+    filename: sanitizeUploadFilename(file.name, mimeType),
+    width: dimensions.width,
+    height: dimensions.height,
+  };
+}
+
+async function readGenerateRequest(req, fallbackLanguage = "zh") {
+  if (!isMultipartRequest(req)) {
+    return {
+      payload: validateGeneratePayload(await readJson(req, fallbackLanguage), fallbackLanguage),
+      inputReference: null,
+    };
+  }
+
+  const form = await readMultipartForm(req, fallbackLanguage);
+  const payload = validateGeneratePayload(rawPayloadFromForm(form), fallbackLanguage);
+  const inputReference = await normalizeInputReference(formFile(form, "input_reference"), payload.size, payload.language);
+  return { payload, inputReference };
 }
 
 function expandHome(inputPath) {
@@ -530,11 +807,12 @@ async function handleSelectOutputDir(req, res) {
 }
 
 async function openaiRequest(apiKey, url, options = {}, language = "zh") {
+  const isFormDataBody = typeof FormData !== "undefined" && options.body instanceof FormData;
   const response = await fetch(url, {
     ...options,
     headers: {
       authorization: `Bearer ${apiKey}`,
-      ...(options.body ? { "content-type": "application/json" } : {}),
+      ...(options.body && !isFormDataBody ? { "content-type": "application/json" } : {}),
       ...(options.headers || {}),
     },
   });
@@ -556,15 +834,43 @@ async function openaiRequest(apiKey, url, options = {}, language = "zh") {
   return response;
 }
 
-async function createVideo(apiKey, payload) {
+function videoJsonBody(payload) {
+  const body = {
+    model: payload.model,
+    prompt: payload.prompt,
+    seconds: payload.seconds,
+    size: payload.size,
+  };
+  if (payload.inputReference) body.input_reference = payload.inputReference;
+  return body;
+}
+
+function videoFormBody(payload, inputReference) {
+  const form = new FormData();
+  form.append("model", payload.model);
+  form.append("prompt", payload.prompt);
+  form.append("seconds", payload.seconds);
+  form.append("size", payload.size);
+  form.append(
+    "input_reference",
+    new Blob([inputReference.buffer], { type: inputReference.mimeType }),
+    inputReference.filename,
+  );
+  return form;
+}
+
+async function createVideo(apiKey, payload, inputReference = null) {
+  if (inputReference) {
+    const response = await openaiRequest(apiKey, "https://api.openai.com/v1/videos", {
+      method: "POST",
+      body: videoFormBody(payload, inputReference),
+    }, payload.language);
+    return response.json();
+  }
+
   const response = await openaiRequest(apiKey, "https://api.openai.com/v1/videos", {
     method: "POST",
-    body: JSON.stringify({
-      model: payload.model,
-      prompt: payload.prompt,
-      seconds: payload.seconds,
-      size: payload.size,
-    }),
+    body: JSON.stringify(videoJsonBody(payload)),
   }, payload.language);
   return response.json();
 }
@@ -584,6 +890,42 @@ async function uploadBatchInputFile(apiKey, jsonl, language = "zh") {
   const form = new FormData();
   form.append("purpose", "batch");
   form.append("file", new Blob([jsonl], { type: "application/jsonl" }), "sora2-batch-input.jsonl");
+
+  const response = await fetch("https://api.openai.com/v1/files", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${apiKey}`,
+    },
+    body: form,
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    let details = text;
+    try {
+      details = JSON.parse(text);
+    } catch {
+      // Keep plain text details.
+    }
+    const message = details?.error?.message || st(language, "openaiUploadFailed", { status: response.status });
+    const error = new Error(message);
+    error.details = details;
+    throw error;
+  }
+
+  return response.json();
+}
+
+async function uploadInputReferenceFile(apiKey, inputReference, language = "zh") {
+  const form = new FormData();
+  form.append("purpose", "user_data");
+  form.append("expires_after[anchor]", "created_at");
+  form.append("expires_after[seconds]", String(IMAGE_REFERENCE_FILE_EXPIRY_SECONDS));
+  form.append(
+    "file",
+    new Blob([inputReference.buffer], { type: inputReference.mimeType }),
+    inputReference.filename,
+  );
 
   const response = await fetch("https://api.openai.com/v1/files", {
     method: "POST",
@@ -681,6 +1023,10 @@ function buildBatchInputLines(payload, prompts) {
   const runId = crypto.randomUUID ? crypto.randomUUID().slice(0, 8) : String(Date.now());
   return prompts.map((prompt, index) => {
     const customId = `sora2-${runId}-${String(index + 1).padStart(2, "0")}`;
+    const body = videoJsonBody({
+      ...payload,
+      prompt,
+    });
     return {
       customId,
       prompt,
@@ -688,12 +1034,7 @@ function buildBatchInputLines(payload, prompts) {
         custom_id: customId,
         method: "POST",
         url: "/v1/videos",
-        body: {
-          model: payload.model,
-          prompt,
-          seconds: payload.seconds,
-          size: payload.size,
-        },
+        body,
       }),
     };
   });
@@ -757,7 +1098,7 @@ async function waitForCompletedVideo(apiKey, initialVideo, onProgress, language 
 async function handleGenerate(req, res) {
   const requestLanguage = languageFromRequest(req);
   try {
-    const payload = validateGeneratePayload(await readJson(req, requestLanguage), requestLanguage);
+    const { payload, inputReference } = await readGenerateRequest(req, requestLanguage);
     const { dir, filePath } = resolveOutputPath(payload.outputDir, payload.filename);
     await fsp.mkdir(dir, { recursive: true });
 
@@ -767,7 +1108,8 @@ async function handleGenerate(req, res) {
     };
 
     push(st(payload.language, "videoSubmitted"));
-    let video = await createVideo(payload.apiKey, payload);
+    if (inputReference) push(st(payload.language, "imageReferenceAttached"), { status: "uploading", progress: 1 });
+    let video = await createVideo(payload.apiKey, payload, inputReference);
     push(st(payload.language, "videoCreated"), { id: video.id, status: video.status, progress: standardVideoProgress(video) });
 
     while (!TERMINAL_STATUSES.has(video.status)) {
@@ -807,12 +1149,20 @@ async function handleGenerateStream(req, res) {
   });
 
   try {
-    const payload = validateGeneratePayload(await readJson(req, requestLanguage), requestLanguage);
+    const { payload, inputReference } = await readGenerateRequest(req, requestLanguage);
     const { dir, filePath } = resolveOutputPath(payload.outputDir, payload.filename);
     await fsp.mkdir(dir, { recursive: true });
 
     writeNdjson(res, { type: "status", message: st(payload.language, "videoSubmitted"), status: "queued", progress: 0 });
-    let video = await createVideo(payload.apiKey, payload);
+    if (inputReference) {
+      writeNdjson(res, {
+        type: "status",
+        message: st(payload.language, "imageReferenceAttached"),
+        status: "uploading",
+        progress: 1,
+      });
+    }
+    let video = await createVideo(payload.apiKey, payload, inputReference);
     writeNdjson(res, {
       type: "status",
       message: st(payload.language, "videoCreated"),
@@ -872,8 +1222,27 @@ async function handleGenerateBatchStream(req, res) {
   });
 
   try {
-    const payload = validateGeneratePayload(await readJson(req, requestLanguage), requestLanguage);
+    const { payload, inputReference } = await readGenerateRequest(req, requestLanguage);
     const prompts = parseBatchPrompts(payload.prompt, payload.batchCount, payload.language);
+
+    if (inputReference) {
+      writeNdjson(res, {
+        type: "status",
+        message: st(payload.language, "imageReferenceUploading"),
+        status: "uploading",
+        progress: 2,
+      });
+      const uploadedReference = await uploadInputReferenceFile(payload.apiKey, inputReference, payload.language);
+      payload.inputReference = { file_id: uploadedReference.id };
+      writeNdjson(res, {
+        type: "status",
+        message: st(payload.language, "imageReferenceUploaded"),
+        inputFileId: uploadedReference.id,
+        status: "uploaded",
+        progress: 3,
+      });
+    }
+
     const requests = buildBatchInputLines(payload, prompts);
     const jsonl = `${requests.map((request) => request.line).join("\n")}\n`;
     const jsonlBytes = Buffer.byteLength(jsonl, "utf8");

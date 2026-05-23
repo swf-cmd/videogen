@@ -97,6 +97,19 @@
               </select>
             </div>
 
+            <div class="field span-full reference-field">
+              <span>首帧图片</span>
+              <div class="reference-input-row">
+                <input id="inputReference" name="input_reference" type="file" accept="image/jpeg,image/png,image/webp" />
+                <button id="clearInputReference" type="button" class="icon-button reference-clear" disabled>移除</button>
+              </div>
+              <div id="inputReferencePreview" class="reference-preview" hidden>
+                <img id="inputReferenceImage" alt="" />
+                <strong id="inputReferenceName">-</strong>
+              </div>
+              <small id="inputReferenceMeta" class="field-meta">可选；JPEG/PNG/WebP，尺寸不一致会自动处理为当前分辨率</small>
+            </div>
+
             <label class="field span-full">
               <span>输出目录</span>
               <div class="input-row output-dir-row">
@@ -155,7 +168,11 @@
                 <span>提交条数</span>
                 <strong id="summaryBatchCount">1 条</strong>
               </div>
-              <div class="summary-item span-summary">
+              <div id="summaryReferenceItem" class="summary-item span-summary">
+                <span>首帧</span>
+                <strong id="summaryReference">未设置</strong>
+              </div>
+              <div id="summarySizeItem" class="summary-item span-summary">
                 <span>分辨率</span>
                 <strong id="summarySize">720 x 1280 竖屏</strong>
               </div>
