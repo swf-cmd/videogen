@@ -53,6 +53,8 @@ const storageKeys = {
   batchCount: "sora2app.batchCount",
 };
 const privateStorageKeys = ["sora2app.outputDir"];
+const MAX_LOG_LINES = 500;
+const MAX_DISPLAYED_OUTPUT_PATHS = 20;
 
 const supportedLanguages = ["zh", "ja", "en", "ko"];
 const translations = {
@@ -576,6 +578,7 @@ let currentStatus = "idle";
 let currentProgress = 0;
 let progressTarget = 0;
 let progressAnimationFrame = 0;
+let logScrollAnimationFrame = 0;
 let inputReferenceInfo = null;
 let inputReferenceInfoKey = "";
 let inputReferenceError = "";
@@ -587,6 +590,30 @@ const supportedInputReferenceTypes = new Set(["image/jpeg", "image/png", "image/
 function normalizeLanguage(language) {
   const base = String(language || "").toLowerCase().split("-")[0];
   return supportedLanguages.includes(base) ? base : "zh";
+}
+
+function storageGet(key) {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function storageSet(key, value) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Settings persistence is best-effort and must not block generation.
+  }
+}
+
+function storageRemove(key) {
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // Private settings are never required for the app to function.
+  }
 }
 
 function t(key, replacements = {}) {
@@ -693,7 +720,7 @@ function setLanguage(language, shouldPersist = true) {
   applyTranslations();
   syncOptionControls();
   if (shouldPersist) {
-    localStorage.setItem(storageKeys.language, activeLanguage);
+    storageSet(storageKeys.language, activeLanguage);
   }
 }
 
@@ -1391,12 +1418,32 @@ function appendLog(message, tone = "") {
   line.className = tone ? `log-line-${tone}` : "";
   line.textContent = `[${new Date().toLocaleTimeString(currentLocale())}] ${message}`;
   logBox.appendChild(line);
-  logBox.scrollTop = logBox.scrollHeight;
+  while (logBox.children.length > MAX_LOG_LINES) {
+    logBox.firstElementChild?.remove();
+  }
+  if (!logScrollAnimationFrame) {
+    logScrollAnimationFrame = requestAnimationFrame(() => {
+      logScrollAnimationFrame = 0;
+      logBox.scrollTop = logBox.scrollHeight;
+    });
+  }
   updateLogCount();
 }
 
 function outputDisplayPath(output) {
-  return output?.displayPaths?.join("\n") || output?.displayPath || output?.paths?.join("\n") || output?.path || "-";
+  const paths = Array.isArray(output?.displayPaths) && output.displayPaths.length > 0
+    ? output.displayPaths
+    : output?.paths;
+  if (Array.isArray(paths) && paths.length > 0) {
+    const displayedPaths = paths.slice(0, MAX_DISPLAYED_OUTPUT_PATHS);
+    const totalCount = Number.isInteger(Number(output?.count))
+      ? Math.max(paths.length, Number(output.count))
+      : paths.length;
+    const remaining = totalCount - displayedPaths.length;
+    const suffix = remaining > 0 ? `\n… (+${formatInteger(remaining)})` : "";
+    return `${displayedPaths.join("\n")}${suffix}`;
+  }
+  return output?.displayPath || output?.path || "-";
 }
 
 function readForm() {
@@ -1434,20 +1481,20 @@ function persistSettings() {
   const payload = readForm();
   for (const key of Object.keys(storageKeys)) {
     if (key === "batchCount" && payload.mode !== "batch") continue;
-    localStorage.setItem(storageKeys[key], payload[key] || "");
+    storageSet(storageKeys[key], payload[key] || "");
   }
 }
 
 function forgetPrivateSettings() {
   for (const key of privateStorageKeys) {
-    localStorage.removeItem(key);
+    storageRemove(key);
   }
 }
 
 function restoreSettings() {
   const restored = {};
   for (const [key, storageKey] of Object.entries(storageKeys)) {
-    const value = localStorage.getItem(storageKey);
+    const value = storageGet(storageKey);
     if (!value) continue;
     restored[key] = value;
     if (key === "language") continue;
@@ -1484,7 +1531,7 @@ function setApiMode(mode, shouldPersist = true) {
   updateSummary();
 
   if (shouldPersist) {
-    localStorage.setItem(storageKeys.mode, activeMode);
+    storageSet(storageKeys.mode, activeMode);
   }
 }
 
@@ -1507,8 +1554,11 @@ function applyStreamEvent(event) {
     outputPath.textContent = outputDisplayPath(event.output);
     setProgress("completed", 100);
     const failedSuffix = event.output?.failedCount ? t("failedSuffix", { count: formatInteger(event.output.failedCount) }) : "";
-    appendLog(event.output?.paths
-      ? t("savedMany", { count: formatInteger(event.output.paths.length), failedSuffix })
+    const outputCount = Number.isInteger(Number(event.output?.count))
+      ? Number(event.output.count)
+      : event.output?.paths?.length;
+    appendLog(outputCount !== undefined
+      ? t("savedMany", { count: formatInteger(outputCount), failedSuffix })
       : t("savedOne", { path: outputDisplayPath(event.output) }), "ok");
     setConnectionState("connectionCompleted");
   }
@@ -1552,6 +1602,12 @@ async function streamGenerate(payload, inputReferenceFile = null) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let receivedDone = false;
+  const processLine = (line) => {
+    const event = JSON.parse(line);
+    applyStreamEvent(event);
+    if (event.type === "done") receivedDone = true;
+  };
 
   while (true) {
     const { value, done } = await reader.read();
@@ -1561,13 +1617,15 @@ async function streamGenerate(payload, inputReferenceFile = null) {
     buffer = lines.pop() || "";
     for (const line of lines) {
       if (!line.trim()) continue;
-      applyStreamEvent(JSON.parse(line));
+      processLine(line);
     }
   }
 
+  buffer += decoder.decode();
   if (buffer.trim()) {
-    applyStreamEvent(JSON.parse(buffer));
+    processLine(buffer);
   }
+  if (!receivedDone) throw new Error(t("streamError"));
 }
 
 async function generateVideo(event) {

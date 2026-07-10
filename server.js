@@ -27,6 +27,10 @@ const DEFAULT_POLL_INTERVAL_SECONDS = 10;
 const DEFAULT_POLL_INTERVAL_MS = DEFAULT_POLL_INTERVAL_SECONDS * 1000;
 const DEFAULT_BATCH_POLL_INTERVAL_SECONDS = 15;
 const DEFAULT_BATCH_POLL_INTERVAL_MS = DEFAULT_BATCH_POLL_INTERVAL_SECONDS * 1000;
+const IDEMPOTENT_RETRY_LIMIT = 4;
+const RETRY_BASE_DELAY_MS = 1000;
+const RETRY_MAX_DELAY_MS = 30000;
+const MAX_CONSECUTIVE_RETRY_EXHAUSTIONS = 3;
 const STANDARD_VIDEO_RENDER_PROGRESS_MAX = 94;
 const STANDARD_VIDEO_COMPLETED_PROGRESS = 96;
 const STANDARD_VIDEO_DOWNLOAD_PROGRESS = 98;
@@ -40,6 +44,7 @@ const OFFICIAL_BATCH_LIMITS = {
 };
 const MAX_BATCH_REQUESTS = OFFICIAL_BATCH_LIMITS.maxRequests;
 const MAX_BATCH_INPUT_FILE_BYTES = OFFICIAL_BATCH_LIMITS.maxInputFileBytes;
+const MAX_BATCH_RESULT_PATHS = 20;
 
 const OFFICIAL_SECONDS = ["4", "8", "12", "16", "20"];
 const OFFICIAL_MODELS = {
@@ -136,6 +141,7 @@ const SERVER_MESSAGES = {
     imageReferenceUploaded: "首帧图片已上传。",
     videoDownloading: "视频已完成，正在下载 MP4。",
     savedMp4: "已保存 MP4。",
+    outputFileExists: "输出文件已存在，请更换文件名：{path}",
     batchInputTooLarge: "Batch 输入文件不能超过 200 MB，请减少提交条数或缩短提示词。",
     batchPrepared: "已准备 {count} 条 Batch 视频任务。",
     batchInputUploaded: "Batch 输入文件已上传。",
@@ -188,6 +194,7 @@ const SERVER_MESSAGES = {
     imageReferenceUploaded: "先頭フレーム画像をアップロードしました。",
     videoDownloading: "動画が完了しました。MP4 をダウンロードしています。",
     savedMp4: "MP4 を保存しました。",
+    outputFileExists: "出力ファイルは既に存在します。別のファイル名を指定してください：{path}",
     batchInputTooLarge: "Batch 入力ファイルは 200 MB を超えられません。送信件数を減らすかプロンプトを短くしてください。",
     batchPrepared: "{count} 件の Batch 動画タスクを準備しました。",
     batchInputUploaded: "Batch 入力ファイルをアップロードしました。",
@@ -240,6 +247,7 @@ const SERVER_MESSAGES = {
     imageReferenceUploaded: "First-frame image uploaded.",
     videoDownloading: "Video completed. Downloading MP4.",
     savedMp4: "Saved MP4.",
+    outputFileExists: "The output file already exists. Choose a different filename: {path}",
     batchInputTooLarge: "Batch input file cannot exceed 200 MB. Reduce the request count or shorten prompts.",
     batchPrepared: "Prepared {count} Batch video tasks.",
     batchInputUploaded: "Batch input file uploaded.",
@@ -292,6 +300,7 @@ const SERVER_MESSAGES = {
     imageReferenceUploaded: "첫 프레임 이미지가 업로드되었습니다.",
     videoDownloading: "동영상이 완료되었습니다. MP4 를 다운로드하는 중입니다.",
     savedMp4: "MP4 를 저장했습니다.",
+    outputFileExists: "출력 파일이 이미 있습니다. 다른 파일명을 선택하세요: {path}",
     batchInputTooLarge: "Batch 입력 파일은 200 MB 를 초과할 수 없습니다. 제출 수를 줄이거나 프롬프트를 짧게 해 주세요.",
     batchPrepared: "Batch 동영상 작업 {count}개를 준비했습니다.",
     batchInputUploaded: "Batch 입력 파일을 업로드했습니다.",
@@ -662,6 +671,30 @@ function resolveBatchOutputPath(outputDir, filename, index, total, fallbackName)
   return resolveOutputPath(outputDir, baseName);
 }
 
+async function assertOutputFileAvailable(filePath, language = "zh") {
+  try {
+    await fsp.lstat(filePath);
+  } catch (error) {
+    if (error?.code === "ENOENT") return;
+    throw error;
+  }
+  throw new Error(st(language, "outputFileExists", { path: displayPathForUser(filePath) }));
+}
+
+async function assertBatchOutputFilesAvailable(payload, total) {
+  if (!payload.filename) return;
+  for (let index = 0; index < total; index += 1) {
+    const { filePath } = resolveBatchOutputPath(
+      payload.outputDir,
+      payload.filename,
+      index,
+      total,
+      "batch-output",
+    );
+    await assertOutputFileAvailable(filePath, payload.language);
+  }
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -698,8 +731,10 @@ function validateGeneratePayload(payload, fallbackLanguage = "zh") {
 }
 
 function parseBatchCount(value, defaultCount = 1, language = "zh") {
-  if (value === undefined || value === null || String(value).trim() === "") return defaultCount;
-  const count = Number(value);
+  const rawCount = value === undefined || value === null || String(value).trim() === ""
+    ? defaultCount
+    : value;
+  const count = Number(rawCount);
   if (!Number.isInteger(count) || count < 1) {
     throw new Error(st(language, "invalidBatchCount"));
   }
@@ -828,10 +863,57 @@ async function openaiRequest(apiKey, url, options = {}, language = "zh") {
     const message = details?.error?.message || st(language, "openaiRequestFailed", { status: response.status });
     const error = new Error(message);
     error.details = details;
+    error.status = response.status;
+    error.retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
     throw error;
   }
 
   return response;
+}
+
+function parseRetryAfterMs(value) {
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const retryAt = Date.parse(value);
+  return Number.isFinite(retryAt) ? Math.max(0, retryAt - Date.now()) : undefined;
+}
+
+function isRetryableIdempotentError(error) {
+  const status = Number(error?.status);
+  if (Number.isInteger(status)) return status === 408 || status === 429 || status >= 500;
+  if (["TypeError", "SyntaxError", "AbortError"].includes(error?.name)) return true;
+  const code = String(error?.code || error?.cause?.code || "");
+  return new Set([
+    "ECONNRESET",
+    "ETIMEDOUT",
+    "EAI_AGAIN",
+    "ENOTFOUND",
+    "ECONNREFUSED",
+    "UND_ERR_SOCKET",
+    "UND_ERR_CONNECT_TIMEOUT",
+    "UND_ERR_HEADERS_TIMEOUT",
+    "UND_ERR_BODY_TIMEOUT",
+  ]).has(code);
+}
+
+async function withIdempotentRetry(operation) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isRetryableIdempotentError(error)) throw error;
+      if (attempt >= IDEMPOTENT_RETRY_LIMIT) {
+        error.retryExhausted = true;
+        throw error;
+      }
+      const retryAfterMs = Number(error?.retryAfterMs);
+      const delayMs = Number.isFinite(retryAfterMs) && retryAfterMs >= 0
+        ? Math.min(retryAfterMs, RETRY_MAX_DELAY_MS)
+        : Math.min(RETRY_BASE_DELAY_MS * (2 ** attempt), RETRY_MAX_DELAY_MS);
+      await sleep(delayMs);
+    }
+  }
 }
 
 function videoJsonBody(payload) {
@@ -876,20 +958,42 @@ async function createVideo(apiKey, payload, inputReference = null) {
 }
 
 async function retrieveVideo(apiKey, videoId, language = "zh") {
-  const response = await openaiRequest(apiKey, `https://api.openai.com/v1/videos/${encodeURIComponent(videoId)}`, {}, language);
-  return response.json();
+  return withIdempotentRetry(async () => {
+    const response = await openaiRequest(apiKey, `https://api.openai.com/v1/videos/${encodeURIComponent(videoId)}`, {}, language);
+    return response.json();
+  });
 }
 
 async function downloadVideo(apiKey, videoId, filePath, language = "zh") {
-  const response = await openaiRequest(apiKey, `https://api.openai.com/v1/videos/${encodeURIComponent(videoId)}/content`, {}, language);
-  const arrayBuffer = await response.arrayBuffer();
-  await fsp.writeFile(filePath, Buffer.from(arrayBuffer));
+  await assertOutputFileAvailable(filePath, language);
+  const arrayBuffer = await withIdempotentRetry(async () => {
+    const response = await openaiRequest(apiKey, `https://api.openai.com/v1/videos/${encodeURIComponent(videoId)}/content`, {}, language);
+    return response.arrayBuffer();
+  });
+  let fileHandle;
+  try {
+    fileHandle = await fsp.open(filePath, "wx");
+  } catch (error) {
+    if (error?.code === "EEXIST") {
+      throw new Error(st(language, "outputFileExists", { path: displayPathForUser(filePath) }));
+    }
+    throw error;
+  }
+
+  try {
+    await fileHandle.writeFile(Buffer.from(arrayBuffer));
+    await fileHandle.close();
+  } catch (error) {
+    await fileHandle.close().catch(() => {});
+    await fsp.unlink(filePath).catch(() => {});
+    throw error;
+  }
 }
 
-async function uploadBatchInputFile(apiKey, jsonl, language = "zh") {
+async function uploadBatchInputFile(apiKey, jsonlParts, language = "zh") {
   const form = new FormData();
   form.append("purpose", "batch");
-  form.append("file", new Blob([jsonl], { type: "application/jsonl" }), "sora2-batch-input.jsonl");
+  form.append("file", new Blob(jsonlParts, { type: "application/jsonl" }), "sora2-batch-input.jsonl");
 
   const response = await fetch("https://api.openai.com/v1/files", {
     method: "POST",
@@ -968,13 +1072,17 @@ async function createBatch(apiKey, inputFileId, language = "zh") {
 }
 
 async function retrieveBatch(apiKey, batchId, language = "zh") {
-  const response = await openaiRequest(apiKey, `https://api.openai.com/v1/batches/${encodeURIComponent(batchId)}`, {}, language);
-  return response.json();
+  return withIdempotentRetry(async () => {
+    const response = await openaiRequest(apiKey, `https://api.openai.com/v1/batches/${encodeURIComponent(batchId)}`, {}, language);
+    return response.json();
+  });
 }
 
-async function downloadFileText(apiKey, fileId, language = "zh") {
-  const response = await openaiRequest(apiKey, `https://api.openai.com/v1/files/${encodeURIComponent(fileId)}/content`, {}, language);
-  return response.text();
+async function downloadJsonlFile(apiKey, fileId, language = "zh") {
+  return withIdempotentRetry(async () => {
+    const response = await openaiRequest(apiKey, `https://api.openai.com/v1/files/${encodeURIComponent(fileId)}/content`, {}, language);
+    return parseJsonl(await response.text());
+  });
 }
 
 function clampProgress(value) {
@@ -1019,25 +1127,34 @@ function activeBatchStatus(status) {
   return status === "completed" ? "finalizing" : status || "running";
 }
 
-function buildBatchInputLines(payload, prompts) {
+function buildBatchInput(payload, prompts) {
   const runId = crypto.randomUUID ? crypto.randomUUID().slice(0, 8) : String(Date.now());
-  return prompts.map((prompt, index) => {
+  const requests = [];
+  const jsonlParts = [];
+  let jsonlBytes = 0;
+
+  for (const [index, prompt] of prompts.entries()) {
     const customId = `sora2-${runId}-${String(index + 1).padStart(2, "0")}`;
     const body = videoJsonBody({
       ...payload,
       prompt,
     });
-    return {
-      customId,
-      prompt,
-      line: JSON.stringify({
-        custom_id: customId,
-        method: "POST",
-        url: "/v1/videos",
-        body,
-      }),
-    };
-  });
+    const line = JSON.stringify({
+      custom_id: customId,
+      method: "POST",
+      url: "/v1/videos",
+      body,
+    });
+    const lineBytes = Buffer.byteLength(line, "utf8") + 1;
+    if (jsonlBytes + lineBytes > MAX_BATCH_INPUT_FILE_BYTES) {
+      throw new Error(st(payload.language, "batchInputTooLarge"));
+    }
+    jsonlBytes += lineBytes;
+    requests.push({ customId });
+    jsonlParts.push(`${line}\n`);
+  }
+
+  return { requests, jsonlParts };
 }
 
 function parseJsonl(text) {
@@ -1101,6 +1218,7 @@ async function handleGenerate(req, res) {
     const { payload, inputReference } = await readGenerateRequest(req, requestLanguage);
     const { dir, filePath } = resolveOutputPath(payload.outputDir, payload.filename);
     await fsp.mkdir(dir, { recursive: true });
+    await assertOutputFileAvailable(filePath, payload.language);
 
     const events = [];
     const push = (message, extra = {}) => {
@@ -1152,6 +1270,7 @@ async function handleGenerateStream(req, res) {
     const { payload, inputReference } = await readGenerateRequest(req, requestLanguage);
     const { dir, filePath } = resolveOutputPath(payload.outputDir, payload.filename);
     await fsp.mkdir(dir, { recursive: true });
+    await assertOutputFileAvailable(filePath, payload.language);
 
     writeNdjson(res, { type: "status", message: st(payload.language, "videoSubmitted"), status: "queued", progress: 0 });
     if (inputReference) {
@@ -1224,6 +1343,9 @@ async function handleGenerateBatchStream(req, res) {
   try {
     const { payload, inputReference } = await readGenerateRequest(req, requestLanguage);
     const prompts = parseBatchPrompts(payload.prompt, payload.batchCount, payload.language);
+    const { dir } = resolveOutputPath(payload.outputDir, payload.filename || "batch-placeholder.mp4");
+    await fsp.mkdir(dir, { recursive: true });
+    await assertBatchOutputFilesAvailable(payload, prompts.length);
 
     if (inputReference) {
       writeNdjson(res, {
@@ -1243,15 +1365,8 @@ async function handleGenerateBatchStream(req, res) {
       });
     }
 
-    const requests = buildBatchInputLines(payload, prompts);
-    const jsonl = `${requests.map((request) => request.line).join("\n")}\n`;
-    const jsonlBytes = Buffer.byteLength(jsonl, "utf8");
-    if (jsonlBytes > MAX_BATCH_INPUT_FILE_BYTES) {
-      throw new Error(st(payload.language, "batchInputTooLarge"));
-    }
-
-    const { dir } = resolveOutputPath(payload.outputDir, payload.filename || "batch-placeholder.mp4");
-    await fsp.mkdir(dir, { recursive: true });
+    const { requests, jsonlParts } = buildBatchInput(payload, prompts);
+    prompts.length = 0;
 
     writeNdjson(res, {
       type: "status",
@@ -1260,7 +1375,12 @@ async function handleGenerateBatchStream(req, res) {
       progress: 4,
     });
 
-    const inputFile = await uploadBatchInputFile(payload.apiKey, jsonl, payload.language);
+    let inputFile;
+    try {
+      inputFile = await uploadBatchInputFile(payload.apiKey, jsonlParts, payload.language);
+    } finally {
+      jsonlParts.length = 0;
+    }
     writeNdjson(res, {
       type: "status",
       message: st(payload.language, "batchInputUploaded"),
@@ -1297,7 +1417,7 @@ async function handleGenerateBatchStream(req, res) {
       error.details = batch;
       throw error;
     }
-    if (!batch.output_file_id) {
+    if (!batch.output_file_id && !batch.error_file_id) {
       const error = new Error(st(payload.language, "batchMissingOutput"));
       error.details = batch;
       throw error;
@@ -1312,31 +1432,51 @@ async function handleGenerateBatchStream(req, res) {
       requestCounts: batch.request_counts,
     });
 
-    const outputText = await downloadFileText(payload.apiKey, batch.output_file_id, payload.language);
-    const lines = parseJsonl(outputText);
-    let failedLines = [];
-    if ((batch.request_counts?.failed || 0) > 0 && batch.error_file_id) {
-      failedLines = parseJsonl(await downloadFileText(payload.apiKey, batch.error_file_id, payload.language));
-      writeNdjson(res, {
-        type: "status",
-        message: st(payload.language, "batchPartialFailed", { count: failedLines.length }),
-        batchId: batch.id,
-        status: "partial",
-        progress: BATCH_READING_RESULTS_PROGRESS,
-        requestCounts: batch.request_counts,
-      });
+    const sortedLines = batch.output_file_id
+      ? await downloadJsonlFile(payload.apiKey, batch.output_file_id, payload.language)
+      : [];
+    let failedCount = Math.max(0, Number(batch.request_counts?.failed) || 0);
+    let failedSamples = [];
+    let firstFailure = null;
+    if (batch.error_file_id) {
+      const batchFailures = await downloadJsonlFile(payload.apiKey, batch.error_file_id, payload.language);
+      failedCount = Math.max(failedCount, batchFailures.length);
+      firstFailure = batchFailures[0] || null;
+      failedSamples = batchFailures.slice(0, MAX_BATCH_RESULT_PATHS);
+      batchFailures.length = 0;
+      if (failedCount > 0) {
+        writeNdjson(res, {
+          type: "status",
+          message: st(payload.language, "batchPartialFailed", { count: failedCount }),
+          batchId: batch.id,
+          status: "partial",
+          progress: BATCH_READING_RESULTS_PROGRESS,
+          requestCounts: batch.request_counts,
+        });
+      }
     }
+    if (sortedLines.length === 0 && failedCount === 0) {
+      const error = new Error(st(payload.language, "batchMissingOutput"));
+      error.details = batch;
+      throw error;
+    }
+    const totalRequests = requests.length;
     const requestIndexByCustomId = new Map(requests.map((request, index) => [request.customId, index]));
-    const sortedLines = [...lines].sort((a, b) => {
+    requests.length = 0;
+    sortedLines.sort((a, b) => {
       const indexA = requestIndexByCustomId.get(a.custom_id) ?? Number.MAX_SAFE_INTEGER;
       const indexB = requestIndexByCustomId.get(b.custom_id) ?? Number.MAX_SAFE_INTEGER;
       return indexA - indexB;
     });
-    const outputs = [];
-    const videos = [];
+    let savedCount = 0;
+    const outputPaths = [];
+    let consecutiveRetryExhaustions = 0;
+    let retryCircuitOpen = false;
 
-    for (const line of sortedLines) {
-      const index = requestIndexByCustomId.get(line.custom_id) ?? outputs.length;
+    for (let position = 0; position < sortedLines.length; position += 1) {
+      const line = sortedLines[position];
+      sortedLines[position] = null;
+      const index = requestIndexByCustomId.get(line.custom_id) ?? position;
       try {
         let video = videoFromBatchLine(line, payload.language);
         writeNdjson(res, {
@@ -1345,7 +1485,7 @@ async function handleGenerateBatchStream(req, res) {
           batchId: batch.id,
           id: video.id,
           status: activeBatchVideoStatus(video.status),
-          progress: batchVideoOverallProgress(index, requests.length, video.progress ?? 0),
+          progress: batchVideoOverallProgress(index, totalRequests, video.progress ?? 0),
         });
 
         video = await waitForCompletedVideo(payload.apiKey, video, (updatedVideo) => {
@@ -1355,14 +1495,14 @@ async function handleGenerateBatchStream(req, res) {
             batchId: batch.id,
             id: updatedVideo.id,
             status: activeBatchVideoStatus(updatedVideo.status),
-            progress: batchVideoOverallProgress(index, requests.length, updatedVideo.progress ?? 0),
+            progress: batchVideoOverallProgress(index, totalRequests, updatedVideo.progress ?? 0),
           });
         }, payload.language);
 
-        const { filePath } = resolveBatchOutputPath(payload.outputDir, payload.filename, index, requests.length, line.custom_id || video.id);
+        const { filePath } = resolveBatchOutputPath(payload.outputDir, payload.filename, index, totalRequests, line.custom_id || video.id);
         const downloadProgress = Math.min(
           BATCH_VIDEO_PROGRESS_END + 1,
-          batchVideoOverallProgress(index, requests.length, 100) + 1,
+          batchVideoOverallProgress(index, totalRequests, 100) + 1,
         );
         writeNdjson(res, {
           type: "status",
@@ -1373,50 +1513,64 @@ async function handleGenerateBatchStream(req, res) {
           progress: downloadProgress,
         });
         await downloadVideo(payload.apiKey, video.id, filePath, payload.language);
-        const stats = await fsp.stat(filePath);
-        videos.push(video);
-        outputs.push({
-          customId: line.custom_id,
-          videoId: video.id,
-          path: displayPathForUser(filePath),
-          bytes: stats.size,
-        });
+        consecutiveRetryExhaustions = 0;
+        savedCount += 1;
+        if (outputPaths.length < MAX_BATCH_RESULT_PATHS) {
+          outputPaths.push(displayPathForUser(filePath));
+        }
       } catch (error) {
+        if (error?.retryExhausted) consecutiveRetryExhaustions += 1;
         const safe = safeError(error);
-        failedLines.push({
+        const failure = {
           custom_id: line.custom_id,
           error: safe,
-        });
+        };
+        failedCount += 1;
+        if (!firstFailure) firstFailure = failure;
+        if (failedSamples.length < MAX_BATCH_RESULT_PATHS) failedSamples.push(failure);
         writeNdjson(res, {
           type: "status",
           message: st(payload.language, "batchVideoFailed", { index: index + 1, message: safe.message }),
           batchId: batch.id,
           status: "partial",
-          progress: batchVideoOverallProgress(index, requests.length, 100),
+          progress: batchVideoOverallProgress(index, totalRequests, 100),
         });
+        if (consecutiveRetryExhaustions >= MAX_CONSECUTIVE_RETRY_EXHAUSTIONS) {
+          retryCircuitOpen = true;
+          break;
+        }
       }
     }
+    sortedLines.length = 0;
+    failedCount = Math.max(0, totalRequests - savedCount);
 
-    if (outputs.length === 0 && failedLines.length > 0) {
-      const firstError = failedLines[0]?.error;
+    if (savedCount === 0 && failedCount > 0) {
+      const firstError = firstFailure?.error;
       const error = new Error(firstError?.message || st(payload.language, "batchAllFailed"));
-      error.details = failedLines;
+      error.details = {
+        count: failedCount,
+        samples: failedSamples,
+        retryExhausted: retryCircuitOpen,
+      };
       throw error;
     }
 
     writeNdjson(res, {
       type: "done",
-      message: failedLines.length
-        ? st(payload.language, "batchDoneWithFailures", { count: outputs.length, failed: failedLines.length })
-        : st(payload.language, "batchDone", { count: outputs.length }),
-      batch,
-      videos,
+      message: failedCount
+        ? st(payload.language, "batchDoneWithFailures", { count: savedCount, failed: failedCount })
+        : st(payload.language, "batchDone", { count: savedCount }),
+      batch: {
+        id: batch.id,
+        status: batch.status,
+        request_counts: batch.request_counts,
+      },
       output: {
-        count: outputs.length,
-        failedCount: failedLines.length,
-        paths: outputs.map((output) => output.path),
-        files: outputs,
-        errors: failedLines,
+        count: savedCount,
+        failedCount,
+        paths: outputPaths,
+        pathsTruncated: savedCount > outputPaths.length,
+        retryExhausted: retryCircuitOpen,
       },
     });
   } catch (error) {
@@ -1452,6 +1606,7 @@ async function handleDownload(req, res) {
 
     const { filePath } = resolveOutputPath(payload.outputDir, payload.filename || `${videoId}.mp4`);
     await fsp.mkdir(path.dirname(filePath), { recursive: true });
+    await assertOutputFileAvailable(filePath, language);
     await downloadVideo(apiKey, videoId, filePath, language);
     const stats = await fsp.stat(filePath);
     sendJson(res, 200, {
@@ -1497,18 +1652,68 @@ async function serveStatic(req, res, pathname) {
   }
 }
 
+const LOCAL_BASE_URL = new URL(`http://127.0.0.1:${PORT}`);
+const LOCALHOST_ORIGIN = new URL(`http://localhost:${PORT}`).origin;
+const ALLOWED_HOST_ORIGINS = new Map([
+  [`127.0.0.1:${PORT}`, LOCAL_BASE_URL.origin],
+  [`localhost:${PORT}`, LOCALHOST_ORIGIN],
+  ...(PORT === 80 ? [
+    ["127.0.0.1", LOCAL_BASE_URL.origin],
+    ["localhost", LOCALHOST_ORIGIN],
+  ] : []),
+]);
+
+function requestHostAllowed(req) {
+  return ALLOWED_HOST_ORIGINS.has(String(req.headers.host || "").toLowerCase());
+}
+
+function requestOriginAllowed(req) {
+  const host = String(req.headers.host || "").toLowerCase();
+  const origin = String(req.headers.origin || "").toLowerCase();
+  return Boolean(origin) && origin === ALLOWED_HOST_ORIGINS.get(host);
+}
+
+function sendText(res, status, message) {
+  res.writeHead(status, {
+    "content-type": "text/plain; charset=utf-8",
+    "cache-control": "no-store",
+  });
+  res.end(message);
+}
+
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-  if (req.method === "POST" && url.pathname === "/api/generate-batch-stream") return handleGenerateBatchStream(req, res);
-  if (req.method === "POST" && url.pathname === "/api/generate-stream") return handleGenerateStream(req, res);
-  if (req.method === "POST" && url.pathname === "/api/generate") return handleGenerate(req, res);
-  if (req.method === "POST" && url.pathname === "/api/status") return handleStatus(req, res);
-  if (req.method === "POST" && url.pathname === "/api/download") return handleDownload(req, res);
-  if (req.method === "POST" && url.pathname === "/api/select-output-dir") return handleSelectOutputDir(req, res);
-  if (req.method === "GET" && url.pathname === "/api/options") return handleOptions(req, res);
-  if (req.method === "GET" || req.method === "HEAD") return serveStatic(req, res, url.pathname);
-  res.writeHead(405, { "content-type": "text/plain; charset=utf-8" });
-  res.end("Method not allowed");
+  try {
+    if (!requestHostAllowed(req)) {
+      sendText(res, 403, "Forbidden");
+      return;
+    }
+
+    const url = new URL(req.url || "/", LOCAL_BASE_URL);
+    if (url.origin !== LOCAL_BASE_URL.origin) {
+      sendText(res, 400, "Bad request");
+      return;
+    }
+    if (req.method === "POST" && url.pathname.startsWith("/api/") && !requestOriginAllowed(req)) {
+      sendText(res, 403, "Forbidden");
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/generate-batch-stream") await handleGenerateBatchStream(req, res);
+    else if (req.method === "POST" && url.pathname === "/api/generate-stream") await handleGenerateStream(req, res);
+    else if (req.method === "POST" && url.pathname === "/api/generate") await handleGenerate(req, res);
+    else if (req.method === "POST" && url.pathname === "/api/status") await handleStatus(req, res);
+    else if (req.method === "POST" && url.pathname === "/api/download") await handleDownload(req, res);
+    else if (req.method === "POST" && url.pathname === "/api/select-output-dir") await handleSelectOutputDir(req, res);
+    else if (req.method === "GET" && url.pathname === "/api/options") handleOptions(req, res);
+    else if (req.method === "GET" || req.method === "HEAD") await serveStatic(req, res, url.pathname);
+    else sendText(res, 405, "Method not allowed");
+  } catch (error) {
+    if (res.headersSent) {
+      res.end();
+      return;
+    }
+    sendJson(res, 400, { ok: false, error: safeError(error) });
+  }
 });
 
 server.listen(PORT, "127.0.0.1", () => {
