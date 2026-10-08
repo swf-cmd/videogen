@@ -92,7 +92,7 @@ test("image dispatch and first-frame validation preserve dimensions and bytes", 
 
 test("filenames remove directory components and unsafe characters without losing MP4 suffixes", () => {
   assert.equal(legacy.sanitizeFilename("  ../clip.mp4  "), "clip.mp4");
-  assert.equal(legacy.sanitizeFilename("a<b>:c\"d\\e|f?g*h\u0000"), "a-b--c-d-e-f-g-h-.mp4");
+  assert.equal(legacy.sanitizeFilename("a<b>:c\"d\\e|f?g*h\u0000"), process.platform === "win32" ? "e-f-g-h-.mp4" : "a-b--c-d-e-f-g-h-.mp4");
   assert.equal(legacy.sanitizeFilename("movie.MP4"), "movie.MP4");
   assert.equal(legacy.sanitizeFilename("movie.mov"), "movie.mov.mp4");
   assert.match(legacy.sanitizeFilename(""), /^videogen-\d{4}-.*\.mp4$/);

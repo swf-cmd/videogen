@@ -56,7 +56,7 @@ A failed job can be retried only when the app has evidence that create was not a
 
 ## Providers and estimates
 
-Catalog/source date: **2026-10-08**. All adapters have offline contract tests. No paid provider smoke calls were made for this release because the live-test key gates were absent; account access and live behavior still need confirmation with your provider.
+Catalog/source date: **2026-10-08**. All adapters have offline contract tests. No paid provider calls were made for this release; account access and live behavior still need confirmation with your provider.
 
 | Provider · region | Included models and limitations |
 | --- | --- |

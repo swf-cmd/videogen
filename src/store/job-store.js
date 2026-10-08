@@ -226,8 +226,22 @@ class JobStore extends EventEmitter {
       this.checkpoint("compact:renamed");
       syncDirectory(this.directory);
       this.checkpoint("compact:directorySynced");
-      fs.ftruncateSync(this.fd, 0);
-      this.checkpoint("compact:truncated");
+      // Windows append handles have FILE_APPEND_DATA rather than the write
+      // access needed by SetEndOfFile. Keep the journal's append handle for all
+      // writes, and truncate through a separate handle to the exact same file.
+      const logPath = path.join(this.directory, "jobs.ndjson");
+      const expected = fs.fstatSync(this.fd);
+      const before = fs.lstatSync(logPath);
+      const sameLog = (stat) => stat.isFile() && stat.dev === expected.dev && stat.ino === expected.ino;
+      if (before.isSymbolicLink() || !sameLog(before)) throw storeError();
+      const truncateFd = fs.openSync(logPath, fs.constants.O_RDWR | (fs.constants.O_NOFOLLOW || 0));
+      try {
+        if (!sameLog(fs.fstatSync(truncateFd))) throw storeError();
+        this.checkpoint("compact:truncateOpened");
+        fs.ftruncateSync(truncateFd, 0);
+        this.checkpoint("compact:truncated");
+        fs.fsyncSync(truncateFd);
+      } finally { fs.closeSync(truncateFd); }
       this.flush();
       this.checkpoint("compact:logSynced");
     } catch (error) { this.failed = true; throw error; }

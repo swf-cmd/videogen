@@ -101,7 +101,7 @@ test("safe errors redact deep known keys, credential headers and proxy userinfo"
   for (const secret of ["test-known-deep-secret-991", "unregistered-auth", "unregistered-google", "unregistered-api", "proxy-user", "proxy-password", "another-secret", "google-secret", "json-secret", os.homedir()]) {
     assert.equal(text.includes(secret), false, `Unredacted credential or path: ${secret}`);
   }
-  assert.equal(safe.details.localPath, "~/private/output.mp4");
+  assert.equal(safe.details.localPath, path.join("~", "private", "output.mp4"));
   assert.equal(safe.details.cycle, "[Circular]");
   assert.deepEqual(redact(new Headers({ authorization: "header-secret" })), { authorization: "[REDACTED]" });
   const shared = { prompt: "shared prompt", key: "test-known-deep-secret-991" };
