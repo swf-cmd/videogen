@@ -104,3 +104,34 @@ proxy behavior and v2.0.0. Stage 2 is outside this implementation.
   file is repaired only from known incoming bytes with its expected hash; reads
   reject symlinks. Collection only removes recognized unreferenced asset names
   and owned partials, leaving unrelated files and directories alone.
+- Every provider redirect is validated before following it. Credential query
+  parameters, decoded known secrets in queries or external URLs, URL userinfo,
+  and HTTPS downgrades are rejected. Redirects and unauthenticated downloads
+  strip credential headers. JSON is parsed before value redaction so schema
+  member names remain intact; a redacted remote ID fails closed as an ambiguous
+  create instead of saving an unusable ID or submitting again.
+- Output publication fsyncs its directory before the succeeded record is
+  acknowledged. The partial hardlink remains until that record is persisted.
+  Startup recovers a matching published inode before contacting the provider,
+  including when its result has expired, and removes a succeeded job's stale
+  marker only when it matches the recorded output inode.
+
+- The scheduler holds lane slots from submitting through the remote terminal
+  response. Unresolved creates retain a conservative slot across restarts;
+  a fully occupied uncertain lane needs human reconciliation before more work
+  can dispatch. Downloads use a separate global pool of three. Pausing a batch
+  or lane stops new creates but continues tracking already paid work.
+- Rate-limit responses cool the whole lane and honor Retry-After. Poll and
+  download failures retry only their own phase with jittered backoff. Repeated
+  transient failures open a circuit requiring explicit resume. Missing keys
+  block authenticated work while unauthenticated result downloads may finish.
+- Budgets reserve estimated cost before dispatch and include uncertain charges.
+  Different currencies are never combined. A batch pauses before its next
+  reservation would exceed the cap; this is an estimate, not a billing limit.
+- Settings retain only lane identity, concurrency and manual pause preferences.
+  Keys are not persisted. SSE retains bounded incremental events by durable seq;
+  reconnects outside that buffer receive a resync instruction and fetch paginated
+  snapshots. Disconnecting or throttling a browser cannot cancel queue work.
+- The expanded prompt text is bounded by the batch request byte budget to avoid
+  unbounded allocation through a huge repeat count. There is no 50,000-job cap.
+  Catalog refresh is an explicit POST; GET endpoints never contact providers.

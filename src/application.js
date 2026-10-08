@@ -1,16 +1,18 @@
 const crypto = require("node:crypto");
-const path = require("node:path");
 const { JobStore } = require("./store/job-store");
 const { AssetStore } = require("./store/asset-store");
+const { readSettings, normalizeSettings, writeJson } = require("./store/settings");
 const { KeyStore, normalizeLane, redact } = require("./queue/keys");
-const { loadCatalog } = require("./catalog/catalog");
+const { Scheduler } = require("./queue/scheduler");
+const { EventStream } = require("./http/handlers/events");
+const { loadCatalog, validateCatalog, normalizeOpenRouterModels } = require("./catalog/catalog");
 const { createContext } = require("./providers/base");
 const { normalizeInputReference } = require("./media/image");
-const { resolveBatchOutputPath, writeOutput, displayPathForUser } = require("./files/output");
+const outputFiles = require("./files/output");
+const { resolveBatchOutputPath, displayPathForUser } = outputFiles;
 const { parseBatchPrompts } = require("./http/handlers/legacy");
-const { withIdempotentRetry, sleep } = require("./providers/retry");
 const { st } = require("./i18n/server-messages");
-const { dataDirectory } = require("./config");
+const { dataDirectory, MAX_BATCH_BYTES } = require("./config");
 
 function adapters() {
   return Object.fromEntries(["openai-compatible", "openrouter", "mock"].map((id) => [id, require(`./providers/${id}`)]));
@@ -18,7 +20,7 @@ function adapters() {
 
 function pixelSize(params) {
   if (/^\d+x\d+$/.test(params.resolution)) return params.resolution;
-  const edge = /^([0-9]+)p$/i.exec(params.resolution)?.[1];
+  const edge = params.resolution === "4k" ? 2160 : /^([0-9]+)p$/i.exec(params.resolution)?.[1];
   const ratio = /^(\d+):(\d+)$/.exec(params.aspectRatio);
   if (!edge || !ratio) return "";
   const [a, b] = ratio.slice(1).map(Number);
@@ -28,34 +30,78 @@ function pixelSize(params) {
 
 class Application {
   constructor({ directory = dataDirectory(), port = 0 } = {}) {
+    this.directory = directory;
     this.catalog = loadCatalog(directory);
     this.adapters = adapters();
     this.keys = new KeyStore();
-    this.store = new JobStore(directory, { port });
-    this.assets = new AssetStore(directory);
-    this.laneStatus = new Map();
-    this.busy = false;
+    this.store = new JobStore(directory, { port, supportsIdempotencyKey: (job) => this.adapters[job.provider]?.supportsIdempotencyKey === true });
+    try {
+      this.assets = new AssetStore(directory);
+      this.settings = readSettings(directory);
+      this.events = new EventStream(this.store);
+      this.scheduler = new Scheduler({ store: this.store, keys: this.keys, adapters: this.adapters, context: (job, phase) => this.context(job, phase), settings: this.settings, onSettings: (settings) => {
+        this.settings = normalizeSettings(settings);
+        writeJson(this.directory, "settings.json", this.settings);
+      } });
+    } catch (error) { this.store.close(); throw error; }
     this.stopping = false;
     this.work = new Set();
-    for (const job of this.store.jobs.values()) {
-      if (job.state === "submitting" && !job.remote?.id) this.store.update(job.id, { state: "needs_review", error: this.error("unknown_outcome", job.language) }, { sync: true });
-    }
   }
 
   error(category, language = "zh", extra = {}) { return { category, code: category, message: st(language, category), ...extra }; }
+
+  async start() {
+    if (this.starting) return this.starting;
+    this.starting = (async () => {
+      for (const job of this.store.jobs.values()) {
+        if (job.state === "succeeded" && outputFiles.cleanupPublishedPartial) {
+          await outputFiles.cleanupPublishedPartial(job.targetPath, { jobId: job.id, output: job.output });
+        } else if (job.state === "downloading" && outputFiles.recoverOutput) {
+          await outputFiles.recoverOutput(job.targetPath, { jobId: job.id, contentType: job.result?.contentType, onPublished: (saved) => {
+            this.store.update(job.id, { state: "succeeded", output: saved, progress: 100, completedAt: new Date().toISOString() }, { sync: true });
+          } });
+        }
+      }
+      if (!this.stopping) this.scheduler.start();
+    })();
+    return this.starting;
+  }
+
+  lane(value) {
+    const lane = normalizeLane(value);
+    const provider = this.catalog.providers.find((item) => item.provider === lane.provider);
+    if (!provider?.regions.some((region) => region.id === lane.region) || !this.adapters[lane.provider]) throw new Error("invalidProvider");
+    return lane;
+  }
+
+  setKey({ lane: value, key }) {
+    const lane = this.lane(value);
+    this.keys.set(lane, key, this.adapters[lane.provider]);
+    this.scheduler.keysChanged(lane);
+    return { lane, present: true };
+  }
+
+  deleteKey(id) {
+    const lane = this.keys.list().find((entry) => entry.lane.id === id)?.lane;
+    this.keys.delete(id);
+    if (lane) this.scheduler.keysChanged(lane);
+    return { removed: Boolean(lane) };
+  }
 
   selection(payload) {
     const provider = this.catalog.providers.find((item) => item.provider === payload.provider);
     const region = provider?.regions.find((item) => item.id === payload.region);
     if (!provider || !region || payload.provider === "mock" && process.env.VIDEOGEN_DEV !== "1") throw new Error("invalidProvider");
-    const lane = normalizeLane({ provider: provider.provider, region: region.id, baseUrl: payload.baseUrl || region.baseUrl });
+    const lane = this.lane({ provider: provider.provider, region: region.id, baseUrl: payload.baseUrl || region.baseUrl });
     let model = provider.models.find((item) => item.id === payload.model && (!item.regions || item.regions.includes(region.id)));
     if (provider.provider === "openai-compatible" && payload.customCapabilities) {
-      model = { id: String(payload.model || ""), label: String(payload.model || ""), verified: false, capabilities: payload.customCapabilities, pricing: null, concurrencyDefault: 1, pollIntervalSec: 10, resultTtlHours: null, typicalRenderSec: 120 };
+      model = { id: String(payload.model || ""), label: String(payload.model || ""), verified: false, sources: [], capabilities: payload.customCapabilities, pricing: null, concurrencyDefault: 1, pollIntervalSec: 10, resultTtlHours: null, typicalRenderSec: 120 };
+      validateCatalog({ ...provider, models: [model] });
     }
     if (!model || !model.id || model.id.length > 300) throw new Error("invalidParams");
+    model = structuredClone(model);
+    if (model.pricingByRegion) model.pricing = model.pricingByRegion[region.id] ?? null;
     const adapter = this.adapters[provider.provider];
-    if (!adapter) throw new Error("invalidProvider");
     const normalized = adapter.normalizeParams(model, payload.params || {});
     if (!normalized.ok) throw new Error("invalidParams");
     const params = normalized.value;
@@ -67,121 +113,134 @@ class Application {
     return { provider, region, lane, model, adapter, params, cost };
   }
 
+  prompts(payload) {
+    // Bound expanded text memory, not the number of jobs. 50,000+ short prompts are supported.
+    const count = Number(payload.batchCount || 1);
+    if (Number.isSafeInteger(count) && count > 0 && String(payload.prompt || "").trim().split(/\n\s*\n+/).length === 1 && count * Math.max(1, Buffer.byteLength(String(payload.prompt || ""))) > MAX_BATCH_BYTES) throw new Error("requestTooLarge");
+    return parseBatchPrompts(payload.prompt, payload.batchCount, payload.language);
+  }
+
   estimate(payload) {
     const selected = this.selection(payload);
-    const prompts = parseBatchPrompts(payload.prompt, payload.batchCount, payload.language);
+    const prompts = this.prompts(payload);
     const amount = selected.cost.amount === null ? null : selected.cost.amount * prompts.length;
-    return { cost: { ...selected.cost, amount }, count: prompts.length, etaSeconds: prompts.length * (selected.model.typicalRenderSec || 120) };
+    const concurrency = this.settings.lanes[selected.lane.id]?.concurrency || selected.model.concurrencyDefault;
+    const typical = this.scheduler.laneList().find((entry) => entry.id === selected.lane.id)?.typicalRenderSec || selected.model.typicalRenderSec;
+    return { cost: { ...selected.cost, amount }, count: prompts.length, etaSeconds: Math.ceil(prompts.length / concurrency) * typical, concurrency };
   }
 
   async prepare(payload, file, recover = false) {
+    if (this.stopping) throw new Error("serviceStopping");
     const selected = this.selection(payload);
     const { lane, adapter, model, params } = selected;
-    if (payload.apiKey !== undefined) { this.keys.set(lane, String(payload.apiKey), adapter); this.laneStatus.delete(lane.id); }
-    const key = this.keys.get(lane) || "";
-    if (adapter.validateKey(key)) throw new Error("needs_key");
     const image = file?.size ? await normalizeInputReference(file, pixelSize(params), payload.language) : null;
     if (image && !model.capabilities.firstFrame) throw new Error("unsupportedFirstFrame");
     const assets = image ? [this.assets.put(image)] : [];
-    const prompts = recover ? [""] : parseBatchPrompts(payload.prompt, payload.batchCount, payload.language);
+    const prompts = recover ? [""] : this.prompts(payload);
     const batchId = crypto.randomUUID();
-    if (recover && (!payload.remoteId || /[\s\x00-\x1f\x7f]/.test(payload.remoteId) || String(payload.remoteId).length > 512)) throw new Error("invalidParams");
+    if (recover && (!payload.remoteId || /[\s\x00-\x1f\x7f]/.test(payload.remoteId) || String(payload.remoteId).length > 512)) throw new Error("invalidRemoteId");
+    let budget = null;
+    if (payload.budget !== undefined && payload.budget !== null && payload.budget !== "") {
+      const amount = Number(typeof payload.budget === "object" ? payload.budget.amount : payload.budget);
+      const currency = payload.budget.currency || selected.cost.currency;
+      if (!Number.isFinite(amount) || amount <= 0 || selected.cost.amount === null || currency !== selected.cost.currency) throw new Error("invalidBudget");
+      budget = { amount, currency };
+    }
     const jobs = prompts.map((prompt, index) => {
       const id = crypto.randomUUID();
       return {
-        id, batchId, index, ...lane, id, laneId: lane.id, provider: lane.provider,
+        id, batchId, index, provider: lane.provider, region: lane.region, baseUrl: lane.baseUrl, laneId: lane.id,
         model: model.id, modelConfig: model, params, prompt, assets,
         state: recover ? "running" : "queued", progress: 0,
         remote: recover ? { id: String(payload.remoteId), lastStatus: "running" } : null,
         attempts: { create: 0, poll: 0, download: 0 }, costEstimate: selected.cost,
         targetPath: resolveBatchOutputPath(payload.outputDir, payload.filename, index, prompts.length, id).filePath,
-        createdAt: new Date().toISOString(), language: payload.language || "zh", requiresKey: Boolean(key),
+        createdAt: new Date().toISOString(), language: payload.language || "zh", requiresKey: Boolean(this.keys.get(lane)) || adapter.validateKey("") !== null,
       };
     });
-    for (const job of jobs) this.store.add(job);
-    return { ...selected, jobs };
+    this.store.updateBatch(batchId, { state: "active", laneId: lane.id, budget, total: jobs.length, createdAt: new Date().toISOString() });
+    this.store.addMany(jobs);
+    this.scheduler.kick();
+    return { ...selected, jobs, id: batchId, count: jobs.length };
   }
 
-  context(job, adapter) {
+  context(job, phase = "create") {
     const lane = normalizeLane(job);
-    return createContext({ lane, key: this.keys.get(lane) || "", catalog: job.modelConfig, redact, assets: job.assets.map((asset) => this.assets.read(asset)) });
+    return createContext({ lane, key: this.keys.get(lane) || "", catalog: job.modelConfig, redact, assets: ["prepare", "create"].includes(phase) ? (job.assets || []).map((asset) => this.assets.read(asset)) : [] });
   }
 
-  async execute(job, emit) {
-    const adapter = this.adapters[job.provider];
-    const ctx = this.context(job, adapter);
-    let phase = job.remote?.id ? "poll" : "prepare";
-    try {
-      if (!job.remote?.id) {
-        if (adapter.prepareAssets) ctx.remoteAssets = await withIdempotentRetry(() => adapter.prepareAssets(ctx, job));
-        if (this.stopping) return;
-        phase = "create";
-        job = this.store.update(job.id, { state: "submitting", attempts: { ...job.attempts, create: job.attempts.create + 1 }, submittingAt: new Date().toISOString() }, { sync: true });
-        const created = await adapter.create(ctx, job, { idempotencyKey: job.id });
-        if (!created.remoteId) throw Object.assign(new Error("unknown_outcome"), { category: "unknown_outcome" });
-        job = this.store.update(job.id, { state: "running", remote: { id: created.remoteId, lastStatus: created.status, ...(created.pollingUrl ? { pollingUrl: created.pollingUrl } : {}) }, startedAt: new Date().toISOString() }, { sync: true });
-        emit({ type: "status", id: job.remote.id, status: "running", message: st(job.language, "videoCreated") });
-      }
-      phase = "poll";
-      let result;
-      for (;;) {
-        const polled = await withIdempotentRetry(() => {
-          job = this.store.update(job.id, { attempts: { ...job.attempts, poll: job.attempts.poll + 1 } });
-          return adapter.poll(ctx, job, {});
-        });
-        job = this.store.update(job.id, { remote: { ...job.remote, lastStatus: polled.status }, progress: polled.progress || 0 });
-        emit({ type: "status", id: job.remote.id, status: polled.status, progress: polled.progress || 0 });
-        if (polled.status === "succeeded") { result = polled.result; break; }
-        if (["failed", "cancelled", "expired"].includes(polled.status)) {
-          const category = polled.status === "expired" ? "result_expired" : polled.error?.category || "invalid_request";
-          throw Object.assign(new Error(category), { category });
-        }
-        await sleep((job.modelConfig.pollIntervalSec || 10) * 1000);
-      }
-      phase = "download";
-      const ttl = job.modelConfig.resultTtlHours;
-      job = this.store.update(job.id, { state: "downloading", resultExpiresAt: result?.expiresAt || (ttl ? new Date(Date.now() + ttl * 3600000).toISOString() : null) });
-      emit({ type: "status", status: "downloading", message: st(job.language, "videoDownloading") });
-      const output = await withIdempotentRetry(async () => {
-        job = this.store.update(job.id, { attempts: { ...job.attempts, download: job.attempts.download + 1 } });
-        const response = await adapter.download(ctx, job, result, {});
-        return writeOutput(response, job.targetPath, { jobId: job.id, onPublished: (saved) => {
-          job = this.store.update(job.id, { state: "succeeded", output: saved, progress: 100, completedAt: new Date().toISOString() }, { sync: true });
-        } });
-      });
-      return output;
-    } catch (error) {
-      const category = phase === "prepare" ? "prepareFailed" : error.category || adapter.classifyError(error, phase);
-      const unknown = phase === "create" && category === "unknown_outcome";
-      const state = unknown ? "needs_review" : category === "result_expired" ? "result_expired" : phase === "create" && ["auth", "quota", "rate_limited", "model_unavailable"].includes(category) ? "queued" : "failed";
-      if (unknown || state === "queued") this.laneStatus.set(job.laneId, category);
-      const definitelyNotAccepted = phase === "prepare" || phase === "create" && (error.accepted === false || ["rate_limited", "auth", "invalid_request", "quota", "model_unavailable"].includes(category));
-      this.store.update(job.id, { state, error: this.error(category, job.language, { phase, definitelyNotAccepted }) }, { sync: true });
-      emit({ type: "status", status: state, message: st(job.language, category), id: job.remote?.id, localId: job.id });
+  batch(id) {
+    const batch = this.store.batches.get(id);
+    if (!batch) throw Object.assign(new Error("batchNotFound"), { status: 404 });
+    const counts = {};
+    let total = 0;
+    for (const job of this.store.jobs.values()) if (job.batchId === id) { counts[job.state] = (counts[job.state] || 0) + 1; total += 1; }
+    return { ...batch, total, counts };
+  }
+
+  batches({ cursor, limit = 50 } = {}) {
+    const count = Math.max(1, Math.min(500, Number(limit) || 50));
+    const entries = [...this.store.batches.values()];
+    const start = cursor ? entries.findIndex((batch) => batch.id === cursor) + 1 : 0;
+    const rows = entries.slice(start, start + count).map((batch) => ({ ...batch, counts: {}, total: 0 }));
+    const lookup = new Map(rows.map((batch) => [batch.id, batch]));
+    for (const job of this.store.jobs.values()) {
+      const batch = lookup.get(job.batchId);
+      if (batch) { batch.counts[job.state] = (batch.counts[job.state] || 0) + 1; batch.total += 1; }
     }
+    return { batches: rows, nextCursor: entries.length > start + count ? rows.at(-1).id : null, seq: this.store.seq };
+  }
+
+  async refreshCatalog(providerId, payload) {
+    const provider = this.catalog.providers.find((entry) => entry.provider === providerId);
+    if (!provider || !this.adapters[providerId]?.listModels) throw new Error("refreshUnsupported");
+    const region = provider.regions.find((entry) => entry.id === payload.region) || provider.regions[0];
+    const lane = this.lane({ provider: providerId, region: region.id, baseUrl: payload.baseUrl || region.baseUrl });
+    const ctx = createContext({ lane, key: this.keys.get(lane) || "", redact });
+    try {
+      const data = await this.adapters[providerId].listModels(ctx);
+      if (providerId !== "openrouter") return { models: data.data || data, refreshed: true };
+      const asOf = new Date().toISOString().slice(0, 10);
+      const refreshed = validateCatalog({ ...provider, asOf, models: normalizeOpenRouterModels(data, asOf) });
+      if (!refreshed.models.length) throw new Error("invalidProviderResponse");
+      writeJson(this.directory, "openrouter-models.cache.json", { fetchedAt: new Date().toISOString(), provider: refreshed });
+      this.catalog.providers = this.catalog.providers.map((entry) => entry.provider === providerId ? refreshed : entry);
+      return { ...this.catalog, refreshed: true };
+    } catch { return { ...this.catalog, refreshed: false, error: { code: "catalogFallback" } }; }
   }
 
   async generate(payload, file, emit, recover = false) {
-    if (this.busy || this.stopping) throw new Error("busy");
-    this.busy = true;
-    try {
-      const { jobs } = await this.prepare(payload, file, recover);
-      const output = [];
-      for (const job of jobs) {
-        if (this.stopping || this.laneStatus.has(job.laneId)) break;
-        const saved = await this.execute(job, emit);
-        if (saved) output.push(displayPathForUser(saved.path));
-      }
-      emit({ type: "done", output: { count: output.length, failedCount: jobs.length - output.length, paths: output }, message: st(payload.language, "batchDone", { count: output.length }) });
-    } finally { this.busy = false; }
+    const selected = this.selection(payload);
+    if (payload.apiKey !== undefined) this.setKey({ lane: selected.lane, key: String(payload.apiKey) });
+    await this.start();
+    const { jobs } = await this.prepare(payload, file, recover);
+    const ids = new Set(jobs.map((job) => job.id));
+    await new Promise((resolve) => {
+      const terminal = new Set(["succeeded", "failed", "cancelled", "needs_review", "result_expired"]);
+      const check = () => {
+        const current = [...ids].map((id) => this.store.get(id));
+        const lanes = this.scheduler.laneList();
+        const halted = lanes.find((entry) => entry.id === selected.lane.id && ["paused", "needs_key"].includes(entry.state));
+        if (this.stopping || halted || current.every((job) => terminal.has(job.state))) { cleanup(); resolve(); }
+      };
+      const listener = (event) => {
+        if (ids.has(event.jobId)) { const job = this.store.get(event.jobId); emit({ type: "status", localId: job.id, id: job.remote?.id, status: job.state, progress: job.progress, message: job.error?.message }); check(); }
+      };
+      const timer = setInterval(check, 100);
+      const cleanup = () => { clearInterval(timer); this.store.off("event", listener); };
+      this.store.on("event", listener);
+      check();
+    });
+    const saved = [...ids].map((id) => this.store.get(id)).filter((job) => job.state === "succeeded");
+    emit({ type: "done", output: { count: saved.length, failedCount: jobs.length - saved.length, paths: saved.map((job) => displayPathForUser(job.output.path)) }, message: st(payload.language, "batchDone", { count: saved.length }) });
   }
 
   clearHistory() { const count = this.store.clearHistory(); this.assets.collect(this.store.jobs.values()); return { count }; }
   async close() {
+    if (this.stopping) return;
     this.stopping = true;
-    let timer;
-    try { await Promise.race([Promise.allSettled([...this.work]), new Promise((resolve) => { timer = setTimeout(resolve, 15000); })]); }
-    finally { clearTimeout(timer); }
+    this.events.close();
+    await this.scheduler.close(15000);
     this.store.close();
   }
 }

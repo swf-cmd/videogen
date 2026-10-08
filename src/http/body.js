@@ -2,22 +2,32 @@ const { MAX_JSON_BYTES } = require("../config");
 const { st } = require("../i18n/server-messages");
 
 async function readBody(req, language = "zh", limit = MAX_JSON_BYTES) {
-  if (Number(req.headers["content-length"]) > limit) throw Object.assign(new Error(st(language, "requestTooLarge")), { status: 413 });
-  let total = 0;
-  const chunks = [];
-  for await (const chunk of req) {
-    total += chunk.length;
-    if (total > limit) throw Object.assign(new Error(st(language, "requestTooLarge")), { status: 413 });
-    chunks.push(chunk);
-  }
-  const body = Buffer.concat(chunks);
+  const oversized = () => Object.assign(new Error(st(language, "requestTooLarge")), { status: 413 });
+  if (Number(req.headers["content-length"]) > limit) { req.resume(); throw oversized(); }
+  const body = await new Promise((resolve, reject) => {
+    let total = 0;
+    const chunks = [];
+    const cleanup = () => { req.off("data", onData); req.off("end", onEnd); req.off("error", onError); req.off("aborted", onAborted); };
+    const onError = (error) => { cleanup(); reject(error); };
+    const onAborted = () => onError(new Error("requestAborted"));
+    const onEnd = () => { cleanup(); resolve(Buffer.concat(chunks)); };
+    const onData = (chunk) => {
+      total += chunk.length;
+      if (total > limit) { cleanup(); req.resume(); reject(oversized()); return; }
+      chunks.push(chunk);
+    };
+    req.on("data", onData); req.once("end", onEnd); req.once("error", onError); req.once("aborted", onAborted);
+  });
   try {
     if (/^multipart\/form-data\b/i.test(req.headers["content-type"] || "")) {
       const form = await new Response(body, { headers: { "content-type": req.headers["content-type"] } }).formData();
       const payload = JSON.parse(String(form.get("payload") || "{}"));
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error("invalidJson");
       return { payload, file: form.get("input_reference") };
     }
-    return { payload: body.length ? JSON.parse(body.toString("utf8")) : {}, file: null };
+    const payload = body.length ? JSON.parse(body.toString("utf8")) : {};
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error("invalidJson");
+    return { payload, file: null };
   } catch { throw new Error(st(language, "invalidJson")); }
 }
 module.exports = { readBody };

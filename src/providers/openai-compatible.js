@@ -27,7 +27,7 @@ const adapter = {
       if (asset) body.set("input_reference", new Blob([asset.buffer], { type: asset.mimeType || asset.mime }), asset.filename || "first-frame.png");
       headers = {};
     }
-    const data = await base.parseJson(ctx, await ctx.fetch("videos", { method: "POST", headers, body, signal, phase: "create" }), "create");
+    const data = await base.parseJson(ctx, await ctx.fetch("videos", { method: "POST", headers, body, signal, phase: "create", ...(process.env.VIDEOGEN_DEV === "1" && Number.isInteger(model?.requestTimeoutMs) ? { timeoutMs: Math.max(10, model.requestTimeoutMs) } : {}) }), "create");
     return { remoteId: base.requireRemoteId(data.id), status: base.normalizeStatus(data.status, { phase: "create" }) };
   },
   async poll(ctx, job, { signal } = {}) {

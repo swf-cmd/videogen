@@ -86,6 +86,50 @@ async function handleRequest(req, res) {
       return sendJson(res, 200, { ...application.catalog, platform: process.platform });
     }
     if (req.method === "GET" && url.pathname === "/api/jobs") return sendJson(res, 200, application.store.list(Object.fromEntries(url.searchParams)));
+    if (req.method === "GET" && url.pathname === "/api/events") return application.events.connect(req, res);
+    if (req.method === "GET" && url.pathname === "/api/keys") return sendJson(res, 200, application.keys.list());
+    if (req.method === "GET" && url.pathname === "/api/lanes") return sendJson(res, 200, { lanes: application.scheduler.laneList() });
+    if (req.method === "GET" && url.pathname === "/api/batches") return sendJson(res, 200, application.batches(Object.fromEntries(url.searchParams)));
+    const resource = /^\/api\/(jobs|batches)\/([^/]+)$/.exec(url.pathname);
+    if (req.method === "GET" && resource) {
+      const value = resource[1] === "jobs" ? application.store.get(resource[2]) : application.batch(resource[2]);
+      if (!value) throw Object.assign(new Error("jobNotFound"), { status: 404 });
+      return sendJson(res, 200, value);
+    }
+    if (req.method === "DELETE" && /^\/api\/keys\/[^/]+$/.test(url.pathname)) {
+      return sendJson(res, 200, application.deleteKey(url.pathname.split("/").at(-1)));
+    }
+    if (req.method === "POST" && url.pathname === "/api/keys") {
+      const { payload } = await readBody(req, languageFromRequest(req));
+      return sendJson(res, 200, application.setKey(payload));
+    }
+    if (req.method === "POST" && url.pathname === "/api/batches") {
+      const { payload, file } = await readBody(req, languageFromRequest(req), MAX_BATCH_BYTES);
+      if (payload.apiKey !== undefined || payload.key !== undefined) throw new Error("useKeysEndpoint");
+      payload.language = languageFromRequest(req);
+      const result = await application.prepare(payload, file);
+      return sendJson(res, 201, { id: result.id, count: result.count });
+    }
+    const action = /^\/api\/(jobs|batches)\/([^/]+)\/(cancel|retry|resolve|pause|resume)$/.exec(url.pathname);
+    if (req.method === "POST" && action) {
+      const { payload } = await readBody(req, languageFromRequest(req));
+      const result = action[1] === "jobs"
+        ? await application.scheduler.jobAction(action[2], action[3], payload)
+        : await application.scheduler.batchAction(action[2], action[3]);
+      return sendJson(res, 200, result);
+    }
+    const laneAction = /^\/api\/lanes\/([^/]+)$/.exec(url.pathname);
+    if (req.method === "POST" && laneAction) {
+      const { payload } = await readBody(req, languageFromRequest(req));
+      const entry = application.scheduler.laneList().find((lane) => lane.id === laneAction[1]);
+      if (!entry) throw new Error("invalidLane");
+      return sendJson(res, 200, application.scheduler.setLane(entry.lane || entry, payload));
+    }
+    const refresh = /^\/api\/catalog\/refresh\/([^/]+)$/.exec(url.pathname);
+    if (req.method === "POST" && refresh) {
+      const { payload } = await readBody(req, languageFromRequest(req));
+      return sendJson(res, 200, await application.refreshCatalog(refresh[1], payload));
+    }
     if (req.method === "POST" && ["/api/generate-batch-stream", "/api/generate-stream", "/api/generate", "/api/recover", "/api/download"].includes(url.pathname)) {
       const language = languageFromRequest(req);
       const { payload, file } = await readBody(req, language, MAX_BATCH_BYTES);

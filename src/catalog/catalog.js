@@ -75,6 +75,14 @@ function mergeCatalog(catalog, overrides) {
 
 function loadCatalog(dataDir, { directory = path.join(__dirname, "../../data/catalog"), includeMock = process.env.VIDEOGEN_DEV === "1" } = {}) {
   const providers = fs.readdirSync(directory).filter((file) => file.endsWith(".json")).sort().map((file) => validateCatalog(JSON.parse(fs.readFileSync(path.join(directory, file), "utf8"))));
+  const cached = dataDir && path.join(dataDir, "openrouter-models.cache.json");
+  if (cached && fs.existsSync(cached)) {
+    try {
+      const saved = validateCatalog(JSON.parse(fs.readFileSync(cached, "utf8")).provider);
+      const index = providers.findIndex((provider) => provider.provider === "openrouter");
+      if (saved.provider === "openrouter" && saved.models.length && index >= 0) providers[index] = saved;
+    } catch { /* A cache failure falls back to the bundled snapshot. */ }
+  }
   const local = dataDir && path.join(dataDir, "catalog.local.json");
   const merged = mergeCatalog({ providers }, local && fs.existsSync(local) ? JSON.parse(fs.readFileSync(local, "utf8")) : null);
   merged.providers = merged.providers.filter((provider) => includeMock || provider.provider !== "mock");

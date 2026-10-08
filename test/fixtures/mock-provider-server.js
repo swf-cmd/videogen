@@ -5,10 +5,19 @@ const { mockBytes } = require("../../src/providers/mock");
 async function startMockServer(initial = {}) {
   const config = { renderDelayMs: 100, createDelayMs: 0, pollDelayMs: 0, downloadDelayMs: 0, resultTtlMs: 86400000, ...initial };
   const jobs = new Map();
-  const stats = { createCounts: {}, requestCounts: {}, maxInFlight: {}, inFlight: {}, accepted: [], faults: [] };
+  const stats = { createCounts: {}, requestCounts: {}, maxInFlight: {}, inFlight: {}, accepted: [], faults: [], createPending: {}, pollsActive: {}, downloadsActive: {}, maxDownloadsActive: 0, requests: [] };
   const sockets = new Set();
   const json = (res, status, value, headers = {}) => { if (!res.destroyed) { res.writeHead(status, { "content-type": "application/json", ...headers }); res.end(JSON.stringify(value)); } };
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const phaseDelay = (phase, prompt) => config.delays?.[prompt]?.[phase] ?? config[`${phase}DelayMs`] ?? 0;
+  const track = (res, collection, job) => {
+    const requestId = randomUUID();
+    stats[collection][requestId] = { id: job.id, prompt: job.prompt, lane: job.lane, at: Date.now() };
+    const done = () => { delete stats[collection][requestId]; };
+    res.once("close", done);
+    res.once("finish", done);
+    return requestId;
+  };
   const bodyOf = async (req) => {
     const chunks = [];
     let length = 0;
@@ -39,6 +48,7 @@ async function startMockServer(initial = {}) {
         const prompt = body.prompt;
         if (!prompt) return json(res, 400, { error: { code: "invalid_request", message: "mockPromptRequired" } });
         stats.requestCounts[prompt] = (stats.requestCounts[prompt] || 0) + 1;
+        stats.requests.push({ phase: "create", prompt, lane, at: Date.now() });
         const attempt = stats.requestCounts[prompt];
         let fault = config.faults?.[prompt];
         if (Array.isArray(fault)) fault = fault[attempt - 1];
@@ -48,15 +58,17 @@ async function startMockServer(initial = {}) {
         const id = randomUUID();
         const createdAt = Date.now();
         const bytes = mockBytes(prompt);
-        const job = { id, prompt, lane, status: "in_progress", createdAt, sha256: createHash("sha256").update(bytes).digest("hex"), fault };
+        const job = { id, prompt, lane, status: "in_progress", createdAt, sha256: createHash("sha256").update(bytes).digest("hex"), bytes: bytes.length, fault };
         jobs.set(id, job);
         stats.createCounts[prompt] = (stats.createCounts[prompt] || 0) + 1;
         stats.inFlight[lane] = (stats.inFlight[lane] || 0) + 1;
         stats.maxInFlight[lane] = Math.max(stats.maxInFlight[lane] || 0, stats.inFlight[lane]);
         stats.accepted.push({ id, prompt, lane, at: createdAt });
-        job.timer = setTimeout(() => { job.status = fault === "moderation" ? "failed" : "completed"; job.completedAt = Date.now(); job.expiresAt = job.completedAt + config.resultTtlMs; stats.inFlight[lane] -= 1; }, config.renderDelayMs);
+        track(res, "createPending", job);
+        job.timer = setTimeout(() => { job.status = fault === "moderation" ? "failed" : "completed"; job.completedAt = Date.now(); job.expiresAt = job.completedAt + config.resultTtlMs; stats.inFlight[lane] -= 1; }, phaseDelay("render", prompt));
         if (["drop_response", "accepted_no_response"].includes(fault)) { stats.faults.push({ prompt, type: "drop_response", at: createdAt }); return; }
-        await delay(config.createDelayMs);
+        await delay(phaseDelay("create", prompt));
+        if (!res.destroyed) job.responseSentAt = Date.now();
         return json(res, 200, { id, status: job.status, created_at: Math.floor(createdAt / 1000) });
       }
       const job = jobs.get(decodeURIComponent(match[3] || ""));
@@ -64,13 +76,18 @@ async function startMockServer(initial = {}) {
       if (match[4] === "content") {
         if (job.status !== "completed") return json(res, 409, { error: { code: "not_ready" } });
         if (Date.now() > job.expiresAt) return json(res, 403, { error: { code: "expired" } });
+        track(res, "downloadsActive", job);
+        stats.maxDownloadsActive = Math.max(stats.maxDownloadsActive, Object.keys(stats.downloadsActive).length);
+        stats.requests.push({ phase: "download", prompt: job.prompt, lane, at: Date.now() });
         res.writeHead(200, { "content-type": "video/mp4", "content-length": mockBytes(job.prompt).length });
         const bytes = mockBytes(job.prompt);
         res.write(bytes.subarray(0, Math.ceil(bytes.length / 2)));
-        await delay(config.downloadDelayMs);
+        await delay(phaseDelay("download", job.prompt));
         return res.end(bytes.subarray(Math.ceil(bytes.length / 2)));
       }
-      await delay(config.pollDelayMs);
+      track(res, "pollsActive", job);
+      stats.requests.push({ phase: "poll", prompt: job.prompt, lane, at: Date.now() });
+      await delay(phaseDelay("poll", job.prompt));
       if (job.fault === "poll_disconnect" && !job.pollDisconnected) { job.pollDisconnected = true; req.socket.destroy(); return; }
       return json(res, 200, { id: job.id, status: job.status, progress: job.status === "in_progress" ? 50 : 100, error: job.status === "failed" ? { code: "moderation", message: "mockModeration" } : undefined });
     } catch { json(res, 400, { error: { code: "invalid_request", message: "mockBadRequest" } }); }

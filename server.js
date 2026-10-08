@@ -8,7 +8,10 @@ try { application = new Application({ port: PORT }); }
 catch (error) { console.error(localizedError(error, "zh").message); process.exit(1); }
 configureApplication(application);
 const server = http.createServer(handleRequest);
-server.listen(PORT, "127.0.0.1", () => console.log(`videogen running at http://127.0.0.1:${PORT}`));
+server.listen(PORT, "127.0.0.1", () => {
+  application.start().then(() => console.log(`videogen running at http://127.0.0.1:${PORT}`))
+    .catch((error) => { console.error(localizedError(error, "zh").message); application.store.close(); process.exit(1); });
+});
 server.on("error", (error) => { console.error(localizedError(error, "zh").message); application.store.close(); process.exit(1); });
 let closing = false;
 async function shutdown() {
