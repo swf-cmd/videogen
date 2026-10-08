@@ -81,17 +81,40 @@ class QueueView {
   async start() {
     this.render();
     if (isFilePreview) return;
+    if (!this.lifecycleBound) {
+      this.lifecycleBound = true;
+      window.addEventListener("pagehide", () => this.suspendLiveUpdates());
+      window.addEventListener("pageshow", (event) => { if (event.persisted) this.run(() => this.resumeLiveUpdates()); });
+    }
+    await this.resumeLiveUpdates();
+  }
+
+  async resumeLiveUpdates() {
+    if (this.events || isFilePreview) return;
+    setConnectionState("connectionReconnecting");
     // Connect before taking snapshots so changes during the requests are replayed.
-    this.events = new EventSource("/api/events");
-    this.events.addEventListener("ready", () => { setConnectionState("ready"); this.scheduleRefresh(true); });
-    this.events.addEventListener("resync", () => this.scheduleRefresh(true));
-    this.events.addEventListener("change", (event) => this.applyEvent(JSON.parse(event.data)));
-    this.events.onopen = () => { setConnectionState("ready"); this.scheduleRefresh(true); };
-    this.events.onerror = () => setConnectionState("connectionReconnecting");
-    await this.refresh();
+    const events = this.events = new EventSource("/api/events");
+    const active = (action) => (event) => { if (this.events === events) action(event); };
+    events.addEventListener("ready", active(() => { setConnectionState("ready"); this.scheduleRefresh(true); }));
+    events.addEventListener("resync", active(() => this.scheduleRefresh(true)));
+    events.addEventListener("change", active((event) => this.applyEvent(JSON.parse(event.data))));
+    events.onopen = active(() => { setConnectionState("ready"); this.scheduleRefresh(true); });
+    events.onerror = active(() => setConnectionState("connectionReconnecting"));
     this.statusTimer = setInterval(() => { this.run(() => this.loadLanes()); this.updateCooldowns(); }, 2000);
     this.countdownTimer = setInterval(() => this.updateCooldowns(), 1000);
-    window.addEventListener("pagehide", () => { this.events.close(); clearInterval(this.statusTimer); clearInterval(this.countdownTimer); clearTimeout(this.refreshTimer); }, { once: true });
+    // Install cleanup and timers before a snapshot can fail.
+    await this.refresh();
+  }
+
+  suspendLiveUpdates() {
+    const events = this.events;
+    this.events = null;
+    events?.close();
+    clearInterval(this.statusTimer); clearInterval(this.countdownTimer); clearTimeout(this.refreshTimer);
+    this.statusTimer = this.countdownTimer = this.refreshTimer = null;
+    this.refreshJobs = false;
+    // Discard snapshots started before the page was suspended.
+    this.jobRevision += 1; this.batchRevision += 1; this.laneRevision += 1;
   }
 
   scheduleRefresh(includeJobs = false) {
