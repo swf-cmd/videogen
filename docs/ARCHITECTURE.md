@@ -78,3 +78,29 @@ proxy behavior and v2.0.0. Stage 2 is outside this implementation.
   the former 30-second cap. Pure relocation was committed before this change.
 - Custom compatible endpoints select JSON or multipart before create; vLLM-Omni
   documents multipart even for text-only requests. No fallback encoding retry.
+- Store records and nested fields are frozen after redaction. Reserved event
+  fields cannot be overridden by patches. Every entering-submitting record must
+  increment the create counter exactly once, and submitting/remote-ID writes
+  force fsync even when the caller requests an unsynced append. Queued batch
+  insertion uses one final flush so 50,000 jobs do not require 50,000 fsyncs.
+- Restart converts an interrupted create without a remote ID to needs_review.
+  Verified idempotent adapters may explicitly recover to queued with the same
+  local UUID. Manual and idempotent retry grants apply to one attempt and are
+  consumed when submitting; an old rate-limit error cannot authorize a later
+  duplicate create. Known remote IDs are immutable.
+- Lock owner metadata is written to a private wx candidate and fsynced before
+  exclusive hard-link publication as lock. This retains exclusive creation
+  while eliminating the empty-lock crash window. Stale-lock takeover claims an
+  immutable generation before deletion. Dead reclaimers have successor claims;
+  contenders never race to unlink a shared claim. Release checks ownership.
+  Malformed or externally altered owner metadata fails closed.
+- Snapshots retain jobs and batch controls in the existing schema. The snapshot
+  is fsynced, atomically renamed, and its directory fsynced before log truncation.
+  Tests kill real processes at each compaction boundary. An incomplete final log
+  line is truncated and fsynced before new appends; complete corrupt records or
+  sequence gaps stop startup instead of silently discarding work.
+- Assets are validated and fsynced in unique private partials before publication.
+  Existing content is checked by digest, MIME and dimensions. A corrupt regular
+  file is repaired only from known incoming bytes with its expected hash; reads
+  reject symlinks. Collection only removes recognized unreferenced asset names
+  and owned partials, leaving unrelated files and directories alone.
