@@ -1,71 +1,33 @@
-# Promotion Kit
+# Promotion kit
 
-Use these short posts after the README, release, and privacy notes are ready.
+Copy for the **1.1.0 phase 0** implementation. Publication is a maintainer action. Do not claim automatic restart recovery or direct Gemini/Alibaba/Ark support before the corresponding release is complete.
 
-## English Short Post
+## English
 
-I built Sora2App: a local web UI for OpenAI Sora 2 / Sora 2 Pro video generation.
+videogen is a local AI video workbench for OpenRouter and OpenAI-compatible video servers. Bring your own key, separate prompts with blank lines, review the estimate, and let the service generate and download each result in order.
 
-It supports the standard Video API, Batch API prompt queues, automatic polling, and MP4 downloads. It runs on `127.0.0.1`, and the API key is not saved to disk, localStorage, or logs.
+It has no package dependencies and supports Chinese, Japanese, English and Korean. Keys stay in service memory. Task records and first-frame images are saved locally, with a history-and-assets cleanup action and recovery by remote task ID.
 
-GitHub: https://github.com/swf-cmd/videogen
+Sora is retired; videogen replaces the old Sora2App integration. Version 1.1.0 uses a sequential queue. Automatic restart recovery is planned for phase 1.
 
-## English Launch Post
+[Source and setup](https://github.com/swf-cmd/videogen)
 
-I made Sora2App, a local-first web UI for generating videos with OpenAI Sora 2 / Sora 2 Pro.
+## 中文
 
-Why I built it:
+videogen 是本机运行的 AI 视频工作台，支持 OpenRouter 和 OpenAI 兼容视频服务器。自带密钥，用空行分隔提示词，确认估算后依次生成并自动下载。
 
-- I wanted a simple local tool for testing video prompts.
-- I wanted Batch API support for prompt queues.
-- I wanted generated MP4 files to download automatically.
-- I did not want the API key written to disk or browser localStorage.
+应用零依赖，提供中文、日文、英文、韩文界面。密钥仅存服务内存；任务记录和首帧图保存在本机，可清除历史和素材，并按远端任务 ID 找回结果。
 
-It runs on `127.0.0.1`, supports Chinese/Japanese/English/Korean, and works with Node.js 18+ or the bundled macOS release package.
+Sora 已停用，videogen 接替旧 Sora2App 集成。1.1.0 使用顺序队列，服务重启后的自动续跑将在阶段 1 提供。
 
-GitHub: https://github.com/swf-cmd/videogen
+[源码与使用说明](https://github.com/swf-cmd/videogen)
 
-## Chinese Short Post
-
-我做了一个本地运行的 Sora 2 / Sora 2 Pro 视频生成小工具：支持标准 Video API、Batch API、自动轮询和自动下载 MP4。它只监听 `127.0.0.1`，API key 不写入磁盘、localStorage 或日志。
-
-GitHub: https://github.com/swf-cmd/videogen
-
-## Chinese Launch Post
-
-我做了一个 Sora2App，本地运行的小网页，用来调用 OpenAI Sora 2 / Sora 2 Pro 生成视频。
-
-主要功能：
-
-- 标准 Video API 和 Batch API 两种模式。
-- 多条提示词按空行拆成 Batch 队列。
-- 自动轮询任务状态，完成后自动下载 MP4。
-- 支持中文、日文、英文、韩文界面。
-- API key 不保存到磁盘、localStorage 或日志。
-- 输出路径展示会尽量缩写成 `~/...`，减少截图时泄露本机用户名。
-
-适合批量测试 prompt、对比不同参数、整理生成结果。
-
-GitHub: https://github.com/swf-cmd/videogen
-
-## Hacker News Title
+## Suggested title
 
 ```text
-Show HN: Sora2App - local web UI for OpenAI Sora 2 video generation
+videogen — local multi-provider AI video queues with automatic downloads
 ```
 
-## Product Hunt Tagline
+## New screenshots
 
-```text
-Local-first Sora 2 video generation UI with Batch API and automatic MP4 downloads.
-```
-
-## Screenshot Checklist
-
-Before posting screenshots:
-
-- Use a fake prompt or a prompt you are happy to publish.
-- Keep the API key field empty or hidden.
-- Use `~/Downloads/SoraVideos`, not a full personal path.
-- Clear logs that contain private paths, video IDs, or Batch IDs.
-- Do not show generated videos that contain private or client material.
+The obsolete Sora artwork has been removed. Capture the current UI with mock or synthetic data. Keep keys empty, use `~/Downloads/videogen`, and remove private prompts, remote IDs, account information and personal paths. Describe mock output as test data; do not present it as a generated video.

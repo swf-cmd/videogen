@@ -59,7 +59,7 @@ function canvasToBlob(canvas, type, quality) {
 }
 
 function fittedInputReferenceName(sizeValue) {
-  const suffix = String(sizeValue || "").replace(/[^0-9x]/g, "") || "sora";
+  const suffix = String(sizeValue || "").replace(/[^0-9x]/g, "") || "videogen";
   return `input-reference-${suffix}.jpg`;
 }
 

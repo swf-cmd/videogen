@@ -15,7 +15,7 @@ function expandHome(inputPath) {
 
 function sanitizeFilename(name) {
   const base = path.basename(String(name || "").trim());
-  const fallback = `sora-${new Date().toISOString().replace(/[:.]/g, "-")}.mp4`;
+  const fallback = `videogen-${new Date().toISOString().replace(/[:.]/g, "-")}.mp4`;
   const cleaned = (base || fallback).replace(/[<>:"/\\|?*\x00-\x1f]/g, "-");
   return cleaned.toLowerCase().endsWith(".mp4") ? cleaned : `${cleaned}.mp4`;
 }

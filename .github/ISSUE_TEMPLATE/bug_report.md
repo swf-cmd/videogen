@@ -15,8 +15,10 @@ Describe the problem briefly.
 - OS:
 - Browser:
 - Node.js version:
-- Sora2App version:
-- Mode: Standard API / Batch API
+- videogen version:
+- Provider and region:
+- Model:
+- Operation: create / poll / download / recovery
 
 ## Steps to Reproduce
 
@@ -34,7 +36,7 @@ What happened instead?
 
 ## Logs or Screenshots
 
-Before posting, remove API keys, full local paths, private prompts, video IDs, Batch IDs, and generated files that should not be public.
+Before posting, remove API keys, full local paths, private prompts, remote task IDs, and generated files that should not be public.
 
 ```text
 Paste redacted logs here.

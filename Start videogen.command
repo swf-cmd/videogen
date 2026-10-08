@@ -9,13 +9,13 @@ OPEN_BROWSER="${OPEN_BROWSER:-1}"
 
 cd "$APP_DIR" || exit 1
 
-echo "Sora2App launcher"
+echo "videogen launcher"
 echo "App folder: $APP_NAME"
 echo
 
 if [[ ! -f "$APP_DIR/server.js" ]]; then
   echo "server.js was not found next to this launcher."
-  echo "Copy the whole sora2app folder, not only this .command file."
+  echo "Copy the whole videogen folder, not only this .command file."
   echo
   read -r "?Press Return to close this window."
   exit 1
@@ -101,7 +101,7 @@ done
 
 if [[ -z "$NODE_BIN" ]]; then
   echo "A compatible Node.js runtime was not found."
-  echo "Make sure the whole sora2app folder was copied, including the runtime folder."
+  echo "Make sure the whole videogen folder was copied, including the runtime folder."
   echo "If the runtime folder is missing, install Node.js 18 or newer from https://nodejs.org/ and run this file again."
   echo
   read -r "?Press Return to close this window."
@@ -220,7 +220,7 @@ async function openWhenReady() {
   console.log("");
 
   console.log("Starting server...");
-  console.log("Keep this Terminal window open while using Sora2App.");
+  console.log("Keep this Terminal window open while using videogen.");
   console.log("");
 
   const server = spawn(process.execPath, [path.join(appDir, "server.js")], {

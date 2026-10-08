@@ -55,6 +55,7 @@ class Application {
     }
     if (!model || !model.id || model.id.length > 300) throw new Error("invalidParams");
     const adapter = this.adapters[provider.provider];
+    if (!adapter) throw new Error("invalidProvider");
     const normalized = adapter.normalizeParams(model, payload.params || {});
     if (!normalized.ok) throw new Error("invalidParams");
     const params = normalized.value;

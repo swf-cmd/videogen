@@ -1,25 +1,20 @@
-# Security Policy
+# Security policy
 
-## Supported Versions
+Security fixes target the latest maintained version of videogen. The former Sora integration is retired.
 
-Security fixes are provided for the latest release.
+## Report privately
 
-## Reporting a Vulnerability
+Do not post a vulnerability publicly when it exposes credentials, local files, task data or generated media. Use a private maintainer contact if one is listed. If none is available, open a minimal issue stating that a security report is available, without exploit details or private data.
 
-Please do not open a public issue for a vulnerability that exposes API keys, local files, generated videos, prompts, or other private data.
+Reports should identify the videogen and Node versions, operating system, provider/region and a synthetic reproduction. Remove keys, bearer tokens, proxy credentials, private prompts, remote IDs and full personal paths. Never attach a real data directory.
 
-Use a private contact channel if one is listed by the maintainer. If no private channel is available yet, open a minimal public issue that says a security report is available, without including secrets, exploit details, local paths, or private screenshots.
+## Security boundaries
 
-## Privacy-Sensitive Data
+- The server binds to `127.0.0.1`, validates Host, and requires a matching Origin for non-GET/HEAD API requests. It does not emit CORS headers.
+- The application is a local tool, not a hosted multi-user service. Other processes under the same operating-system account are outside its isolation boundary.
+- Keys are held in memory and scoped to provider + region + base URL. They are never persisted or forwarded to an unrelated host. Presigned media downloads omit credentials.
+- Task journals and images contain private information and use restricted filesystem permissions where supported. They are not encrypted at rest.
+- Static paths are constrained to `public/`. Outputs are streamed through partial files and published without overwriting existing files.
+- A data-directory lock prevents two local services from dispatching the same recorded work. Ambiguous create outcomes require review; they must not trigger automatic paid resubmission.
 
-Do not include any of the following in public reports:
-
-- OpenAI API keys or bearer tokens.
-- Full local paths that include your username.
-- Private prompts, customer data, or unpublished generated videos.
-- Raw request or response logs that include secrets.
-- Video IDs or batch IDs unless you are sure they can be public.
-
-## Local-Only Assumptions
-
-Sora2App is intended to run on `127.0.0.1`. If you modify it to listen on a public interface, deploy it to a remote server, or put it behind a proxy, you are responsible for authentication, transport security, logging policy, and API key protection.
+Use HTTPS for remote provider endpoints. Do not expose the local service through a public interface or reverse proxy. See [Privacy notes](PRIVACY.md) for stored data and deletion behavior.

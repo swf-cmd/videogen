@@ -95,7 +95,7 @@ test("filenames remove directory components and unsafe characters without losing
   assert.equal(legacy.sanitizeFilename("a<b>:c\"d\\e|f?g*h\u0000"), "a-b--c-d-e-f-g-h-.mp4");
   assert.equal(legacy.sanitizeFilename("movie.MP4"), "movie.MP4");
   assert.equal(legacy.sanitizeFilename("movie.mov"), "movie.mov.mp4");
-  assert.match(legacy.sanitizeFilename(""), /^sora-\d{4}-.*\.mp4$/);
+  assert.match(legacy.sanitizeFilename(""), /^videogen-\d{4}-.*\.mp4$/);
   assert.equal(legacy.appendFilenameIndex("clip.mp4", 0), "clip-01.mp4");
   assert.equal(legacy.appendFilenameIndex("clip.final.mp4", 9), "clip.final-10.mp4");
   assert.equal(legacy.appendFilenameIndex("clip", 100), "clip-101.mp4");

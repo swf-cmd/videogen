@@ -1,17 +1,30 @@
-# Privacy Notes
+# Privacy notes
 
-videogen is a local tool with no telemetry, update checks, or project-controlled cloud service. The HTTP server binds only to 127.0.0.1. Requests go to your configured providers and their returned result locations; no external image hosting is used.
+videogen runs locally and has no telemetry, update checks or project-operated cloud service. Its HTTP server listens only on `127.0.0.1`. Submission sends prompts, model parameters and optional first-frame images to the provider and region you selected. Downloads may use that provider's returned storage/CDN URLs. Provider retention and account terms apply independently.
 
-## Persisted data
+## Data saved on this computer
 
-Prompts, normalized parameters, first-frame image bytes, remote task IDs, provider/region/base URL, estimates, job status, output paths and output hashes now persist. The directory is `~/Library/Application Support/videogen/` on macOS, `${XDG_DATA_HOME:-~/.local/share}/videogen/` on Linux, and `%APPDATA%\videogen\` on Windows. `VIDEOGEN_DATA_DIR` overrides it. Directories use mode 0700 and data files 0600 where supported.
+Starting with 1.1.0, videogen persists:
 
-Use **Clear history and assets** to remove terminal job records and unreferenced images. Jobs needing review and unfinished work remain so paid tasks cannot silently disappear. Generated videos are retained; delete them using your file manager. Clearing history compacts the journal; OS backups and storage-level recovery are outside this app's control.
+- Prompts, normalized parameters and first-frame image bytes.
+- Provider, region, base URL, model, local and remote task IDs.
+- Job states, timestamps, attempts, estimated costs and classified errors.
+- Intended and actual output paths, file sizes, content types and hashes.
 
-## Keys
+The default directory is `~/Library/Application Support/videogen/` on macOS, `${XDG_DATA_HOME:-~/.local/share}/videogen/` on Linux, or `%APPDATA%\videogen\` on Windows. `VIDEOGEN_DATA_DIR` overrides it. Job events use `jobs.ndjson`, compacted records use `jobs.snapshot.json`, and images use `assets/`. Catalog overrides and future nonsecret settings can also live there. Directories use mode 0700 and data files 0600 where supported. These files are not encrypted by videogen.
 
-Keys exist only in the service process and the active browser form. They are never written to disk, browser storage, URLs, logs or responses. Each key is bound to provider + region + base URL. Restarting the service forgets keys. Requests to presigned result URLs omit credentials; explicitly authenticated downloads must start on the lane origin and redirects never inherit credentials. HTTP endpoints outside loopback may expose plaintext keys; the UI warns before submission.
+Downloaded videos default to `~/Downloads/videogen` or the directory you select. The application preserves provider bytes, embedded metadata and generation labels without transcoding or removing marks. Temporary `.part` files may exist during a download or after an interrupted process.
 
-Nonsecret UI preferences may be stored in localStorage. Keys and output directories are excluded. Prompt and image data are sent to the chosen provider only when submitted. Provider retention and terms apply independently.
+## Clearing data
 
-Before sharing screenshots or issue reports, remove keys, private prompts/media, remote IDs and personal paths. Home-directory paths displayed by the app are shortened to `~`.
+**Clear history and assets** deletes finished job records and unreferenced images, then compacts the journal. Unfinished jobs and `needs_review` records are retained to avoid losing track of possibly paid work. Generated videos are retained; delete them separately in your file manager. This operation does not delete provider-side data, operating-system backups or storage-level recoverable copies.
+
+## Keys and browser preferences
+
+Keys exist in the service's memory and transiently in the active browser form/request. A key belongs to one lane: provider + region + base URL. Stopping the service forgets it. Keys are not written to job data, settings, browser storage, URLs, application logs or API responses. Known secrets, sensitive authorization headers and proxy credentials are redacted from reported errors.
+
+Presigned downloads omit credentials. Downloads that require authentication must start on the lane origin, and redirects do not inherit credentials. Use HTTPS for remote endpoints: plain HTTP does not protect data in transit.
+
+The browser stores nonsecret preferences under `videogen.*` and migrates applicable old `sora2app.*` preferences once. Keys and output-directory preferences are excluded. A job's output path is nevertheless persisted as part of its record. Language, model and parameter selections can remain in localStorage until cleared through browser settings.
+
+Displayed home paths are shortened to `~`. Before sharing screenshots or reports, remove keys, private prompts/images/videos, task IDs and personal paths. A shortened path is still potentially sensitive.

@@ -1,7 +1,7 @@
 node_modules/
 runtime/
 outputs/
-SoraVideos/
+videogen/
 dist/
 release/
 
