@@ -1,6 +1,6 @@
 const { HOME_DIR } = require("../config");
 const { normalizeDirectoryPath } = require("../files/output");
-const { redact } = require("../queue/keys");
+const { redactDiagnostics } = require("../queue/keys");
 
 function redactLocalPaths(value, depth = 0) {
   if (typeof value === "string") {
@@ -18,7 +18,7 @@ function redactLocalPaths(value, depth = 0) {
 }
 
 function safeError(error) {
-  return redactLocalPaths(redact({
+  return redactLocalPaths(redactDiagnostics({
     message: error instanceof Error ? error.message : String(error),
     details: error && typeof error === "object" && "details" in error ? error.details : undefined,
   }));

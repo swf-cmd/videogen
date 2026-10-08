@@ -1,6 +1,6 @@
 # Promotion kit
 
-Copy for **videogen 2.1.0**. Publication is a separate maintainer action. Check the [launch checklist](GITHUB_LAUNCH_CHECKLIST.md), release artifacts and [provider contracts](providers/) before making availability or price claims.
+Copy for **videogen 2.1.1**. Publication is a separate maintainer action. Check the [launch checklist](GITHUB_LAUNCH_CHECKLIST.md), release artifacts and [provider contracts](providers/) before making availability or price claims.
 
 ## English
 

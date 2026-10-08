@@ -42,6 +42,7 @@ class QueueView {
     this.batchFilter = "";
     this.stateFilter = "";
     this.refreshTimer = null;
+    this.pagePending = new Set();
     this.bindControls();
   }
 
@@ -56,12 +57,8 @@ class QueueView {
       this.message(t("historyCleared"));
     }));
     for (const [id, kind, offset] of [["#jobsPrevious", "job", -1], ["#jobsNext", "job", 1], ["#batchPrevious", "batch", -1], ["#batchNext", "batch", 1]]) {
-      document.querySelector(id).addEventListener("click", () => this.run(async () => {
-        const pageKey = `${kind}Page`;
-        if (offset > 0) this[`${kind}Cursors`][this[pageKey] + 1] = kind === "job" ? this.nextJobCursor : this.nextBatchCursor;
-        this[pageKey] = Math.max(0, this[pageKey] + offset);
-        await (kind === "job" ? this.loadJobs() : this.loadBatches());
-      }));
+      const button = document.querySelector(id);
+      button.addEventListener("click", () => this.changePage(kind, offset, button));
     }
     document.querySelector("#batchFilter").addEventListener("change", (event) => { this.batchFilter = event.target.value; this.resetJobs(); });
     document.querySelector("#stateFilter").addEventListener("change", (event) => { this.stateFilter = event.target.value; this.resetJobs(); });
@@ -87,7 +84,47 @@ class QueueView {
     if (button) { button._pending = true; button.disabled = true; }
     try { return await action(); }
     catch (error) { this.message(error.message, true); }
-    finally { if (button) { button._pending = false; button.disabled = false; } }
+    finally { if (button) { button._pending = false; button.disabled = Boolean(button._disabledByState); } }
+  }
+
+  async changePage(kind, offset, button) {
+    return this.run(async () => {
+      this.pagePending ||= new Set();
+      if (this.pagePending.has(kind)) return;
+      const pageKey = `${kind}Page`, cursorsKey = `${kind}Cursors`;
+      const cursor = kind === "job" ? this.nextJobCursor : this.nextBatchCursor;
+      if (offset > 0 && !cursor || offset < 0 && this[pageKey] === 0) { this.renderPagination(kind); return; }
+      this.pagePending.add(kind);
+      const before = this[pageKey], batchFilter = this.batchFilter, stateFilter = this.stateFilter;
+      if (offset > 0) this[cursorsKey][before + 1] = cursor;
+      this[pageKey] = Math.max(0, before + offset);
+      this.renderPagination(kind);
+      try { await (kind === "job" ? this.loadJobs() : this.loadBatches()); }
+      catch (error) {
+        if (this[pageKey] === before + offset && (kind !== "job" || batchFilter === this.batchFilter && stateFilter === this.stateFilter)) this[pageKey] = before;
+        throw error;
+      } finally { this.pagePending.delete(kind); this.renderPagination(kind); }
+    }, button);
+  }
+
+  renderPagination(kind) {
+    const prefix = kind === "job" ? "jobs" : "batch", page = this[`${kind}Page`];
+    const nextCursor = kind === "job" ? this.nextJobCursor : this.nextBatchCursor;
+    for (const [suffix, disabled] of [["Previous", page === 0], ["Next", !nextCursor]]) {
+      const button = document.querySelector(`#${prefix}${suffix}`);
+      button._disabledByState = disabled || Boolean(this.pagePending?.has(kind));
+      button.disabled = Boolean(button._pending) || button._disabledByState;
+    }
+    document.querySelector(`#${prefix}Page`).textContent = t("pageNumber", { page: page + 1 });
+  }
+
+  invalidateSnapshots(resetSequence = false) {
+    this.jobRevision += 1; this.batchRevision += 1; this.laneRevision += 1; this.galleryRevision += 1;
+    // The old connection's requests must neither update the view nor block the
+    // first snapshot of the new connection if an old response is slow.
+    this.snapshotPromise = null;
+    this.nextJobCursor = this.nextBatchCursor = null;
+    if (resetSequence) for (const job of this.jobs.values()) delete job._seq;
   }
 
   async start() {
@@ -108,15 +145,14 @@ class QueueView {
     const events = this.events = new EventSource("/api/events");
     const active = (action) => (event) => { if (this.events === events) action(event); };
     events.addEventListener("ready", active(() => { setConnectionState("ready"); this.scheduleRefresh(); }));
-    events.addEventListener("resync", active(() => this.scheduleRefresh()));
+    events.addEventListener("resync", active(() => { this.invalidateSnapshots(); this.scheduleRefresh(); }));
     events.addEventListener("change", active((event) => this.applyEvent(JSON.parse(event.data))));
     events.onopen = active(() => {
       // A restarted service can begin a new event sequence at zero.
-      for (const job of this.jobs.values()) delete job._seq;
-      this.jobRevision += 1;
+      this.invalidateSnapshots(true);
       setConnectionState("ready"); this.scheduleRefresh();
     });
-    events.onerror = active(() => setConnectionState("connectionReconnecting"));
+    events.onerror = active(() => { this.invalidateSnapshots(); setConnectionState("connectionReconnecting"); });
     this.statusTimer = setInterval(() => { this.scheduleRefresh(); this.updateCooldowns(); }, 2000);
     this.countdownTimer = setInterval(() => this.updateCooldowns(), 1000);
     // Install cleanup and timers before a snapshot can fail.
@@ -129,9 +165,8 @@ class QueueView {
     events?.close();
     clearInterval(this.statusTimer); clearInterval(this.countdownTimer); clearTimeout(this.refreshTimer); clearTimeout(this.renderTimer);
     this.statusTimer = this.countdownTimer = this.refreshTimer = this.renderTimer = null;
-    this.snapshotPromise = null;
     // Discard snapshots started before the page was suspended.
-    this.jobRevision += 1; this.batchRevision += 1; this.laneRevision += 1; this.galleryRevision += 1;
+    this.invalidateSnapshots();
   }
 
   scheduleRefresh() {
@@ -169,32 +204,47 @@ class QueueView {
     finally { if (this.snapshotPromise === snapshot) this.snapshotPromise = null; }
   }
 
+  async loadPage(kind, query, apply) {
+    const revisionKey = `${kind}Revision`, requestKey = `${kind}Request`, key = query.toString();
+    const existing = this[requestKey];
+    // A background refresh of the page being opened must share its request,
+    // otherwise it can invalidate navigation before the next cursor arrives.
+    if (existing?.key === key && existing.revision === this[revisionKey]) return existing.promise;
+    const revision = ++this[revisionKey], pending = { key, revision };
+    pending.promise = (async () => {
+      const result = await apiRequest(`/api/${kind === "job" ? "jobs" : "batches"}?${query}`);
+      if (revision !== this[revisionKey]) return false;
+      apply(result);
+      return true;
+    })();
+    this[requestKey] = pending;
+    try { return await pending.promise; }
+    finally { if (this[requestKey] === pending) this[requestKey] = null; }
+  }
+
   async loadJobs() {
-    const revision = ++this.jobRevision;
     const query = new URLSearchParams({ limit: "25" });
     if (this.jobCursors[this.jobPage]) query.set("cursor", this.jobCursors[this.jobPage]);
     if (this.batchFilter) query.set("batch", this.batchFilter);
     if (this.stateFilter) query.set("state", this.stateFilter);
-    const result = await apiRequest(`/api/jobs?${query}`);
-    if (revision !== this.jobRevision) return;
-    const next = new Map(result.jobs.map((job) => {
-      const newer = this.jobs.get(job.id);
-      return [job.id, newer?._seq > result.seq ? newer : { ...job, _seq: result.seq }];
-    }));
-    this.jobs = next;
-    this.nextJobCursor = result.nextCursor;
-    this.renderJobs();
+    return this.loadPage("job", query, (result) => {
+      this.jobs = new Map(result.jobs.map((job) => {
+        const newer = this.jobs.get(job.id);
+        return [job.id, newer?._seq > result.seq ? newer : { ...job, _seq: result.seq }];
+      }));
+      this.nextJobCursor = result.nextCursor;
+      this.renderJobs();
+    });
   }
 
   async loadBatches() {
-    const revision = ++this.batchRevision;
     const query = new URLSearchParams({ limit: "10" });
     if (this.batchCursors[this.batchPage]) query.set("cursor", this.batchCursors[this.batchPage]);
-    const result = await apiRequest(`/api/batches?${query}`);
-    if (revision !== this.batchRevision) return;
-    this.batches = result.batches;
-    this.nextBatchCursor = result.nextCursor;
-    this.renderBatches();
+    return this.loadPage("batch", query, (result) => {
+      this.batches = result.batches;
+      this.nextBatchCursor = result.nextCursor;
+      this.renderBatches();
+    });
   }
 
   async loadLanes() {
@@ -207,7 +257,7 @@ class QueueView {
     updateSelectedKeyStatus();
   }
 
-  resetJobs() { this.jobPage = 0; this.jobCursors = [null]; this.run(() => Promise.all([this.loadJobs(), this.loadGallerySummary()])); }
+  resetJobs() { this.jobPage = 0; this.jobCursors = [null]; this.nextJobCursor = null; this.renderPagination("job"); this.run(() => Promise.all([this.loadJobs(), this.loadGallerySummary()])); }
   showBatch(id) { this.batchFilter = id; this.stateFilter = ""; this.renderFilters(); this.resetJobs(); }
   keyPresent(lane) { return this.keys.some((item) => item.present && sameLane(item.lane, lane)); }
 
@@ -328,9 +378,7 @@ class QueueView {
       card.cancel.disabled = Boolean(card.cancel._pending) || batch.state === "preparing";
       card.toggle.textContent = t(batch.state === "paused" ? "resume" : "pause"); card.cancel.textContent = t("cancelBatch");
     });
-    document.querySelector("#batchPrevious").disabled = this.batchPage === 0;
-    document.querySelector("#batchNext").disabled = !this.nextBatchCursor;
-    document.querySelector("#batchPage").textContent = t("pageNumber", { page: this.batchPage + 1 });
+    this.renderPagination("batch");
     this.renderFilters();
   }
 
@@ -395,9 +443,7 @@ class QueueView {
       card.retry.hidden = !canRetryJob(job); card.retry.textContent = t("retry");
       card.cancel.hidden = !canCancelJob(job); card.cancel.textContent = t(job.state === "queued" ? "cancel" : "requestCancel");
     }
-    document.querySelector("#jobsPrevious").disabled = this.jobPage === 0;
-    document.querySelector("#jobsNext").disabled = !this.nextJobCursor;
-    document.querySelector("#jobsPage").textContent = t("pageNumber", { page: this.jobPage + 1 });
+    this.renderPagination("job");
     document.querySelector("#jobsCount").textContent = t("visibleJobs", { count: this.jobs.size });
     this.renderGallery();
   }

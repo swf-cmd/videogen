@@ -92,7 +92,7 @@ async function handleRequest(req, res) {
     if (req.method === "GET" && url.pathname === "/api/events") return application.events.connect(req, res);
     if (req.method === "GET" && url.pathname === "/api/health") {
       const health = application.scheduler.health();
-      return sendJson(res, health.ok ? 200 : 503, health);
+      return sendJson(res, health.healthy ? 200 : 503, health);
     }
     if (req.method === "GET" && url.pathname === "/api/keys") return sendJson(res, 200, application.keys.list());
     if (req.method === "GET" && url.pathname === "/api/lanes") return sendJson(res, 200, { lanes: application.scheduler.laneList() });

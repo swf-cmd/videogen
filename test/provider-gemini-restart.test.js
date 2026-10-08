@@ -17,6 +17,7 @@ const path = require('node:path');
   app.store.on('event', (event) => {
     const job = app.store.get(event.jobId);
     if (job?.state === 'running' && job.remote?.id) console.log(JSON.stringify({ state: 'saved', id: job.remote.id }));
+    if (job?.state === 'running' && job.remote?.pollingUrl) console.log(JSON.stringify({ state: 'file_saved', pollingUrl: job.remote.pollingUrl }));
     if (job?.state === 'succeeded') console.log(JSON.stringify({ state: 'done', output: job.output, attempts: job.attempts }));
   });
   if (!app.store.jobs.size) {
@@ -28,10 +29,10 @@ const path = require('node:path');
 })().catch(error => { console.error(error); process.exit(1); });
 `;
 
-test("Gemini background interaction survives a process kill after ID fsync with exactly one create", { timeout: 20000 }, async (t) => {
+test("Gemini survives process kills after interaction ID and Files URI fsync with exactly one create", { timeout: 20000 }, async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "videogen-gemini-restart-"));
   const children = new Set(), requests = [], bytes = Buffer.from("offline-video-original-bytes");
-  let ready = false;
+  let ready = false, fileReady = false;
   const server = http.createServer(async (req, res) => {
     requests.push(`${req.method} ${req.url}`);
     const json = (value) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(value)); };
@@ -46,7 +47,7 @@ test("Gemini background interaction survives a process kill after ID fsync with 
       const event = ready ? { event_type: "step.delta", delta: { type: "video", uri: "files/output-1" } } : { event_type: "interaction.created", interaction: { id: "v1_durable", status: "in_progress" } };
       return res.end(`data: ${JSON.stringify(event)}\n\n`);
     }
-    if (req.url === "/v1beta/files/output-1") return json({ name: "files/output-1", state: "ACTIVE" });
+    if (req.url === "/v1beta/files/output-1") return json({ name: "files/output-1", state: fileReady ? "ACTIVE" : "PROCESSING" });
     if (req.url === "/v1beta/files/output-1:download?alt=media") { res.writeHead(200, { "content-type": "video/mp4" }); return res.end(bytes); }
     res.writeHead(404); res.end();
   });
@@ -77,7 +78,13 @@ test("Gemini background interaction survives a process kill after ID fsync with 
   const closed = once(first.child, "close"); first.child.kill("SIGKILL"); await closed;
   assert.match(fs.readFileSync(path.join(directory, "jobs.ndjson"), "utf8"), /"id":"v1_durable"/);
   ready = true;
-  const second = launch(), done = await second.wait("done");
+  const second = launch();
+  assert.match((await second.wait("file_saved")).pollingUrl, /\/files\/output-1$/);
+  const secondClosed = once(second.child, "close"); second.child.kill("SIGKILL"); await secondClosed;
+  const replayRequests = requests.filter(value => value.includes("/interactions/v1_durable?stream=true")).length;
+  fileReady = true;
+  const third = launch(), done = await third.wait("done");
+  assert.equal(requests.filter(value => value.includes("/interactions/v1_durable?stream=true")).length, replayRequests, "restart with a saved Files URI never replays the interaction");
   assert.equal(done.attempts.create, 1);
   assert.deepEqual(fs.readFileSync(done.output.path), bytes);
   assert.equal(requests.filter((value) => value.startsWith("POST ")).length, 1);

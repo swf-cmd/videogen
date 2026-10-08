@@ -1,5 +1,5 @@
 const { EventEmitter } = require("node:events");
-const { normalizeLane, redact } = require("./keys");
+const { normalizeLane, redact, redactDiagnostics } = require("./keys");
 const { TERMINAL_STATES } = require("./state");
 const { writeOutput: defaultWriteOutput } = require("../files/output");
 const { st } = require("../i18n/server-messages");
@@ -15,8 +15,8 @@ const FILESYSTEM_CODES = new Set(["ENOSPC", "EDQUOT", "EACCES", "EPERM", "EROFS"
 function errorCode(error) { return String(error?.code || error?.cause?.code || ""); }
 function diagnostics(error) {
   const details = {};
-  if (errorCode(error)) details.providerCode = redact(errorCode(error)).slice(0, 256);
-  if (typeof error?.message === "string" && error.message) details.providerMessage = redact(error.message).slice(0, 2048);
+  if (errorCode(error)) details.providerCode = redactDiagnostics(errorCode(error)).slice(0, 256);
+  if (typeof error?.message === "string" && error.message) details.providerMessage = redactDiagnostics(error.message).slice(0, 2048);
   if (Number.isInteger(Number(error?.status)) && Number(error.status) > 0) details.status = Number(error.status);
   return redact(details);
 }
@@ -138,7 +138,10 @@ class Scheduler extends EventEmitter {
       if (job.createAuthorization?.kind === "idempotent") lane.idempotent.add(id);
     }
     if (["submitting", "running", "needs_review"].includes(job.state)) lane.inFlight.add(id);
-    if (job.state === "running") lane.running.add(id);
+    if (job.state === "running") {
+      lane.running.add(id);
+      if (Number.isFinite(time(job.nextPollAt))) this.due.set(id, time(job.nextPollAt));
+    }
     if (job.state === "needs_review") lane.review.add(id);
     if (job.state === "downloading") { this.downloads.add(id); lane.downloading.add(id); }
     if (TERMINAL_STATES.has(job.state)) { this.due.delete(id); this.assetCache.delete(id); }
@@ -192,10 +195,14 @@ class Scheduler extends EventEmitter {
 
   keysChanged(value) {
     const lane = this.ensureLane(value);
+    const wasRejected = lane.needsKey || lane.reason === "auth";
     lane.needsKey = false;
     if (lane.reason === "auth") { lane.reason = null; lane.paused = false; }
     lane.errorCount = 0;
-    for (const id of lane.running) this.due.set(id, 0);
+    if (wasRejected) for (const id of lane.running) {
+      this.update(id, { nextPollAt: null });
+      this.due.set(id, 0);
+    }
     this.kick();
   }
 
@@ -384,13 +391,33 @@ class Scheduler extends EventEmitter {
     } catch (error) { this.handleFailure(id, lane, phase, error); }
   }
 
+  nextPollTime(job) {
+    const base = number(job.modelConfig?.pollIntervalSec, 10) * 1000;
+    const elapsed = Math.max(0, this.now() - time(job.startedAt));
+    const multiplier = Math.min(4, 1 + Math.floor(elapsed / 300000));
+    // This is the earliest next dispatch, measured from request start. A slow
+    // response may overrun it, but work.has(id) still prevents overlapping polls.
+    return this.now() + base * multiplier * (0.9 + this.random() * 0.2);
+  }
+
+  recordPollingUrl(id, pollingUrl) {
+    const job = this.store.get(id);
+    if (this.closed || !job || !["running", "downloading"].includes(job.state) || !pollingUrl || pollingUrl === job.remote?.pollingUrl) return;
+    if (typeof pollingUrl !== "string") throw Object.assign(actionError("invalidProviderResponse"), { category: "transient" });
+    this.update(id, { remote: { ...job.remote, pollingUrl } }, { sync: true });
+  }
+
   async poll(id, lane, signal) {
     let job = this.store.get(id);
     const adapter = this.adapters[job.provider];
     try {
       const ctx = this.context(job, "poll");
-      job = this.update(id, { attempts: { ...job.attempts, poll: job.attempts.poll + 1 } });
-      const result = await adapter.poll(ctx, job, { signal });
+      if (signal.aborted || this.stopping) return;
+      const nextPollAt = new Date(this.nextPollTime(job)).toISOString();
+      // Count only dispatches, and keep the cadence recoverable even if this
+      // process dies while awaiting the read-only provider response.
+      job = this.update(id, { attempts: { ...job.attempts, poll: job.attempts.poll + 1 }, nextPollAt });
+      const result = await adapter.poll(ctx, job, { signal, onRemote: (remote) => this.recordPollingUrl(id, remote?.pollingUrl) });
       if (this.closed) return;
       job = this.store.get(id);
       if (job.state !== "running") return;
@@ -401,24 +428,25 @@ class Scheduler extends EventEmitter {
 
   applyPoll(job, lane, polled) {
     if (!["queued", "running", "succeeded", "failed", "cancelled", "expired"].includes(polled?.status)) throw Object.assign(new Error("invalidProviderResponse"), { category: "transient" });
-    const remote = { ...job.remote, lastStatus: polled.status };
+    const remote = { ...job.remote, lastStatus: polled.status, ...(polled.pollingUrl ? { pollingUrl: polled.pollingUrl } : {}) };
     if (polled.status === "succeeded") {
       if (!polled.result?.url) throw Object.assign(new Error("invalidProviderResponse"), { category: "transient" });
       const ttl = job.modelConfig?.resultTtlHours;
       const expiresAt = polled.result.expiresAt || (ttl ? new Date(this.now() + ttl * 3600000).toISOString() : null);
-      this.update(job.id, { state: "downloading", remote, result: polled.result, resultExpiresAt: expiresAt, progress: polled.progress || 100, renderedAt: new Date(this.now()).toISOString() }, { sync: true });
+      this.update(job.id, { state: "downloading", remote, nextPollAt: null, result: polled.result, resultExpiresAt: expiresAt, progress: polled.progress || 100, renderedAt: new Date(this.now()).toISOString() }, { sync: true });
       this.due.set(job.id, 0);
       const elapsed = (this.now() - time(job.startedAt)) / 1000;
       if (Number.isFinite(elapsed) && elapsed > 0) lane.typicalSeconds = Math.round((lane.typicalSeconds * 0.8 + elapsed * 0.2) * 1000) / 1000;
     } else if (["failed", "cancelled", "expired"].includes(polled.status)) {
       const category = polled.status === "expired" ? "result_expired" : polled.error?.category || "invalid_request";
-      this.update(job.id, { state: polled.status === "expired" ? "result_expired" : polled.status, remote, error: this.error(job, category, { ...diagnostics(polled.error), phase: "poll", definitelyNotAccepted: false }), completedAt: new Date(this.now()).toISOString() }, { sync: true });
+      this.update(job.id, { state: polled.status === "expired" ? "result_expired" : polled.status, remote, nextPollAt: null, error: this.error(job, category, { ...diagnostics(polled.error), phase: "poll", definitelyNotAccepted: false }), completedAt: new Date(this.now()).toISOString() }, { sync: true });
     } else {
-      this.update(job.id, { remote, progress: Number.isFinite(polled.progress) ? polled.progress : job.progress || 0, error: null });
-      const base = number(job.modelConfig?.pollIntervalSec, 10) * 1000;
-      const elapsed = Math.max(0, this.now() - time(job.startedAt));
-      const multiplier = Math.min(4, 1 + Math.floor(elapsed / 300000));
-      this.due.set(job.id, this.now() + base * multiplier * (0.9 + this.random() * 0.2));
+      const progress = Number.isFinite(polled.progress) ? polled.progress : job.progress || 0;
+      const remoteChanged = remote.lastStatus !== job.remote.lastStatus || remote.pollingUrl !== job.remote.pollingUrl;
+      if (remoteChanged || progress !== (job.progress || 0) || job.error) {
+        this.update(job.id, { remote, progress, error: null }, { sync: remote.pollingUrl !== job.remote.pollingUrl });
+      }
+      this.due.set(job.id, Number.isFinite(time(job.nextPollAt)) ? time(job.nextPollAt) : this.nextPollTime(job));
     }
   }
 
@@ -429,7 +457,7 @@ class Scheduler extends EventEmitter {
       const ctx = this.context(job, "download");
       if (!job.result?.url) {
         job = this.update(id, { attempts: { ...job.attempts, poll: job.attempts.poll + 1 } });
-        const polled = await adapter.poll(ctx, job, { signal });
+        const polled = await adapter.poll(ctx, job, { signal, onRemote: (remote) => this.recordPollingUrl(id, remote?.pollingUrl) });
         if (this.closed) return;
         if (polled.status === "expired") throw Object.assign(new Error("result_expired"), { category: "result_expired" });
         if (polled.status !== "succeeded" || !polled.result?.url) throw Object.assign(new Error("invalidProviderResponse"), { category: "transient" });
@@ -475,12 +503,12 @@ class Scheduler extends EventEmitter {
       return;
     }
     if (["moderation", "invalid_request", "result_expired"].includes(category)) {
-      this.update(id, { state: category === "result_expired" ? "result_expired" : "failed", error: failure, ...(phase === "create" && definite ? { estimatedCharges: Math.max(0, (job.estimatedCharges || 1) - 1) } : {}), completedAt: new Date(this.now()).toISOString() }, { sync: true });
+      this.update(id, { state: category === "result_expired" ? "result_expired" : "failed", nextPollAt: null, error: failure, ...(phase === "create" && definite ? { estimatedCharges: Math.max(0, (job.estimatedCharges || 1) - 1) } : {}), completedAt: new Date(this.now()).toISOString() }, { sync: true });
       return;
     }
     if (phase === "create") {
       this.update(id, { state: "queued", error: failure, estimatedCharges: Math.max(0, (job.estimatedCharges || 1) - 1) }, { sync: true });
-    } else this.update(id, { error: failure });
+    } else this.update(id, { error: failure, ...(phase === "poll" ? { nextPollAt: new Date(this.now() + delay).toISOString() } : {}) });
     this.due.set(id, this.now() + delay);
     if (category === "auth") { lane.needsKey = true; lane.reason = "auth"; }
     else if (["quota", "model_unavailable"].includes(category)) { lane.paused = true; lane.reason = category; this.saveSettings(lane); }
@@ -588,7 +616,7 @@ class Scheduler extends EventEmitter {
     if (this.fatalError) return;
     const code = ["storeClosed", "invalidStore", "storeWriteFailed"].includes(error?.code) ? error.code : this.store.failed || FILESYSTEM_CODES.has(errorCode(error)) ? "storeWriteFailed" : "schedulerFailed";
     this.fatalError = { code, message: st("zh", code), ...diagnostics(error) };
-    this.log("error", "scheduler_fatal", { ...this.fatalError, name: error?.name, stack: error?.stack });
+    this.log("error", "scheduler_fatal", { ...this.fatalError, name: error?.name, stack: redactDiagnostics(error?.stack) });
     this.stopping = true;
     if (this.timer !== null) { this.clearTimer(this.timer); this.timer = null; }
     this.emit("fatal", this.fatalError);

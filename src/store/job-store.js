@@ -23,6 +23,19 @@ function syncDirectory(directory) {
   try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 }
 
+// Windows scanners may briefly hold the destination. Keep this bounded and
+// synchronous: appends must not run between copying the tail and reopening it.
+function replaceFile(source, destination) {
+  const delays = [10, 20, 40, 80, 160];
+  for (let attempt = 0; ; attempt += 1) {
+    try { return fs.renameSync(source, destination); }
+    catch (error) {
+      if (!["EPERM", "EBUSY"].includes(error.code) || attempt >= delays.length) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delays[attempt]);
+    }
+  }
+}
+
 function freeze(value) {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
     for (const item of Object.values(value)) freeze(item);
@@ -42,7 +55,7 @@ function writeAll(fd, text) {
 }
 
 class JobStore extends EventEmitter {
-  constructor(directory = dataDirectory(), { port = 0, lock = true, onCheckpoint = () => {}, recover = true, supportsIdempotencyKey = () => false, compactBytes = 16 * 1024 * 1024, compactEvents = 20000 } = {}) {
+  constructor(directory = dataDirectory(), { port = 0, lock = true, onCheckpoint = () => {}, recover = true, validatePersisted = () => {}, supportsIdempotencyKey = () => false, compactBytes = 16 * 1024 * 1024, compactEvents = 20000 } = {}) {
     super();
     this.directory = directory;
     this.jobs = new Map();
@@ -62,6 +75,7 @@ class JobStore extends EventEmitter {
     try {
       if (lock) this.acquireLock(port);
       this.replay();
+      validatePersisted(this);
       this.fd = fs.openSync(path.join(directory, "jobs.ndjson"), "a", 0o600);
       fs.fchmodSync(this.fd, 0o600);
       this.logBytes = fs.fstatSync(this.fd).size;
@@ -314,7 +328,7 @@ class JobStore extends EventEmitter {
         fs.fsyncSync(fd);
         this.checkpoint("compact:fsynced");
       } finally { fs.closeSync(fd); }
-      fs.renameSync(temporary, target);
+      replaceFile(temporary, target);
       this.checkpoint("compact:renamed");
       syncDirectory(this.directory);
       this.checkpoint("compact:directorySynced");
@@ -380,7 +394,7 @@ class JobStore extends EventEmitter {
       } finally { await handle.close(); }
       if (this.fd === undefined || this.failed) return;
       // Finish synchronously so no append can race the final journal switch.
-      fs.renameSync(temporary, target);
+      replaceFile(temporary, target);
       this.checkpoint("asyncCompact:snapshotRenamed");
       syncDirectory(this.directory);
       this.checkpoint("asyncCompact:snapshotDirectorySynced");
@@ -409,7 +423,7 @@ class JobStore extends EventEmitter {
       this.fd = undefined;
       fs.closeSync(previousFd);
       this.checkpoint("asyncCompact:journalClosed");
-      fs.renameSync(next, log);
+      replaceFile(next, log);
       this.checkpoint("asyncCompact:journalRenamed");
       syncDirectory(this.directory);
       this.checkpoint("asyncCompact:journalDirectorySynced");

@@ -52,6 +52,7 @@
               <h3 id="importHeading" data-i18n="batchImportTitle">逐条任务与批量导入</h3>
               <p class="field-meta" data-i18n="batchImportNote">每条任务可设置首尾帧。CSV 和图片文件夹导入后，先逐行检查能力和价格，再确认提交。</p>
               <label class="field"><span data-i18n="importTemplate">导入提示词模板（可选）</span><textarea id="importTemplate" rows="2" placeholder="A cinematic shot of {{subject}}"></textarea><small class="field-meta" data-i18n="templateNote">CSV 使用列名变量；文件夹支持 {{filename}}、{{stem}}、{{index}}。</small></label>
+              <label class="check-field"><input id="csvTemplateMode" type="checkbox" /><span data-i18n="csvTemplateMode">解析 CSV 提示词中的模板变量</span></label>
               <div class="row-frame-grid"><label class="field"><span data-i18n="csvImport">导入 CSV</span><input id="csvImport" type="file" accept=".csv,text/csv" /></label><label class="field"><span data-i18n="folderImport">导入图片文件夹</span><input id="folderImport" type="file" accept="image/jpeg,image/png,image/webp" multiple webkitdirectory /></label></div>
               <p class="field-meta" data-i18n="folderImportNote">先导入 CSV，再选择文件夹，可按 firstFrame / lastFrame 文件名匹配；否则每张图片创建一条任务。</p>
               <button id="downloadCsvExample" type="button" class="text-button" data-i18n="downloadCsvExample">下载 CSV 示例</button>

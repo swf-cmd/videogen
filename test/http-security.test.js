@@ -70,6 +70,9 @@ async function startServer(t, port) {
 test("child-process HTTP server preserves localhost security boundaries", { timeout: 15000 }, async (t) => {
   const port = await availablePort();
   await startServer(t, port);
+  const health = await request(port, { path: "/api/health" });
+  assert.equal(health.status, 200);
+  assert.equal(JSON.parse(health.body).healthy, true);
 
   await t.test("only configured loopback Host headers can load the page", async () => {
     for (const host of [`127.0.0.1:${port}`, `localhost:${port}`, `LOCALHOST:${port}`]) {

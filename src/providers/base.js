@@ -29,6 +29,9 @@ const { parseRetryAfterMs } = require("./retry");
  * fetch enforces origin-scoped credentials, timeouts and redaction. Call options
  * contain signal and, for create, the local UUID as idempotencyKey. Once create
  * has an ID it must return without another await, so the scheduler can fsync it.
+ * Poll options may include synchronous onRemote({pollingUrl}); call it before
+ * another await when discovering a durable polling address. A returned
+ * pollingUrl is also merged into the saved remote descriptor.
  * poll statuses are queued/running/succeeded/failed/cancelled/expired. Its result
  * is {url,needsAuth,contentType?,expiresAt?}; polling and downloads never create.
  */

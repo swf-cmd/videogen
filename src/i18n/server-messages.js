@@ -1,6 +1,8 @@
 const SUPPORTED_LANGUAGES = new Set(["zh", "ja", "en", "ko"]);
 const SERVER_MESSAGES = {
   zh: {
+    serviceStarting: "服务正在启动和恢复任务，请稍后重试。",
+    dataRecoveryRequired: "无法读取旧任务数据，可能已被旧版本损坏。数据目录：{directory}。请停止所有实例，先完整备份此目录，再将损坏前的完整备份恢复到单独目录，并用 VIDEOGEN_DATA_DIR 指向该目录启动。没有备份时，请保留原目录，联系项目维护者并在供应商控制台核对远端任务、及时下载结果；不要直接重新提交可能已付费的任务。",
     invalidCursor: "分页游标无效，请刷新列表。",
     batchPreparing: "批次正在保存，请稍后再操作。",
     schedulerFailed: "调度器已停止，请查看服务日志并重启后再提交。",
@@ -102,6 +104,8 @@ const SERVER_MESSAGES = {
     missingApiKeyAndVideoId: "需要 API key 和 video id。",
   },
   ja: {
+    serviceStarting: "サービスを起動してタスクを復元しています。少し待ってから再試行してください。",
+    dataRecoveryRequired: "保存済みタスクのデータが無効です。旧バージョンで破損した可能性があります。データ保存先：{directory}。全インスタンスを停止し、変更前にフォルダー全体をコピーしてください。破損前の完全なバックアップを別フォルダーに復元し、VIDEOGEN_DATA_DIR を指定して起動してください。バックアップがない場合は元データを保管して保守担当者に連絡し、プロバイダーの管理画面でタスクを確認して結果を保存してください。課金済みの可能性があるタスクを再送信しないでください。",
     invalidCursor: "ページ位置が無効です。一覧を更新してください。",
     batchPreparing: "バッチを保存中です。完了するまでお待ちください。",
     schedulerFailed: "スケジューラーが停止しました。ログを確認し、再起動してください。",
@@ -203,6 +207,8 @@ const SERVER_MESSAGES = {
     missingApiKeyAndVideoId: "API key と video id が必要です。",
   },
   en: {
+    serviceStarting: "The service is starting and recovering tasks. Please retry shortly.",
+    dataRecoveryRequired: "Saved task data is invalid and may have been damaged by an older version. Data directory: {directory}. Stop all instances and copy the entire directory before making changes. Restore a complete backup from before the damage to a separate directory and start with VIDEOGEN_DATA_DIR pointing there. Without a backup, preserve the original directory, contact the project maintainers, and check remote tasks and download results in the provider console. Do not resubmit tasks that may already be paid.",
     invalidCursor: "The page cursor is invalid. Refresh the list.",
     batchPreparing: "The batch is being saved. Please wait before changing it.",
     schedulerFailed: "The scheduler stopped. Check the service log and restart before submitting.",
@@ -304,6 +310,8 @@ const SERVER_MESSAGES = {
     missingApiKeyAndVideoId: "API key and video id are required.",
   },
   ko: {
+    serviceStarting: "서비스를 시작하고 작업을 복구하고 있습니다. 잠시 후 다시 시도하세요.",
+    dataRecoveryRequired: "저장된 작업 데이터가 유효하지 않습니다. 이전 버전에서 손상되었을 수 있습니다. 데이터 폴더: {directory}. 모든 인스턴스를 종료하고 변경 전에 폴더 전체를 복사하세요. 손상 전의 전체 백업을 별도 폴더에 복원하고 VIDEOGEN_DATA_DIR로 지정해 시작하세요. 백업이 없다면 원본 폴더를 보존하고 유지 관리자에게 문의하세요. 공급자 콘솔에서 원격 작업을 확인하고 결과를 다운로드하세요. 이미 결제되었을 수 있는 작업을 다시 제출하지 마세요.",
     invalidCursor: "페이지 위치가 잘못되었습니다. 목록을 새로 고치세요.",
     batchPreparing: "배치를 저장 중입니다. 완료될 때까지 기다려 주세요.",
     schedulerFailed: "스케줄러가 중지되었습니다. 서비스 로그를 확인하고 다시 시작하세요.",

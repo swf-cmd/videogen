@@ -141,3 +141,30 @@ test("OpenRouter capability refresh follows reported roles and malformed prices 
   const [unknown] = normalizeOpenRouterModels({ data: [{ ...source, supported_frame_images: null }] });
   assert.equal(unknown.capabilities.firstFrame, false); assert.equal(unknown.capabilities.lastFrame, false);
 });
+
+test("Gemini checkpoints a discovered Files URI before polling metadata and reuses it while processing", async () => {
+  const { ctx, requests } = setup("gemini", [sse([{ event_type: "step.delta", delta: { type: "video", uri: "files/video-1" } }]),
+    json({ name: "files/video-1", state: "PROCESSING" }), json({ name: "files/video-1", state: "ACTIVE" })]);
+  const saved = { ...job, remote: { id: "v1_saved" } };
+  let checkpointRequests;
+  const first = await gemini.poll(ctx, saved, { onRemote(remote) {
+    checkpointRequests = requests.length;
+    saved.remote = { ...saved.remote, ...remote };
+  } });
+  assert.equal(checkpointRequests, 1, "checkpoint occurs before the Files GET starts");
+  assert.equal(first.status, "running");
+  assert.equal(first.pollingUrl, "https://generativelanguage.googleapis.com/v1beta/files/video-1");
+  assert.equal((await gemini.poll(ctx, saved)).status, "succeeded");
+  assert.equal(requests.filter(request => request.url.includes("/interactions/")).length, 1);
+  assert.equal(requests.filter(request => request.url.includes("/files/")).length, 2);
+  assert.ok(requests.every(request => !request.method));
+});
+
+test("Gemini retains discovered Files metadata when the first file request fails", async () => {
+  const { ctx, requests } = setup("gemini", [sse([{ event_type: "step.delta", delta: { type: "video", uri: "files/video-1" } }]),
+    json({ error: { message: "temporary" } }, 503), json({ name: "files/video-1", state: "ACTIVE" })]);
+  const saved = { ...job, remote: { id: "v1_saved" } };
+  await assert.rejects(gemini.poll(ctx, saved, { onRemote(remote) { saved.remote = { ...saved.remote, ...remote }; } }), { status: 503 });
+  assert.equal((await gemini.poll(ctx, saved)).status, "succeeded");
+  assert.equal(requests.filter(request => request.url.includes("/interactions/")).length, 1);
+});

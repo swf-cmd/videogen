@@ -239,16 +239,23 @@ test("100 jobs survive three process crashes without duplicate paid creates or l
   assert.equal(kills.at(-1).interruptedCreates, 0, "poll crash cannot interrupt a new paid create");
   await disconnect(eventClient);
 
-  await mockApi("/control", { pollDelayMs: 5, renderDelayMs: 1000, downloadDelayMs: 800 });
+  await mockApi("/control", { pollDelayMs: 5, renderDelayMs: 1000, downloadDelayMs: 800, holdDownloads: true });
   await startApp();
   await restoreKeys();
   eventClient = await openEvents();
-  await killInPhase("download", (value, current) => Object.keys(value.downloadsActive).length > 0 && Object.keys(value.createPending).length === 0 && !current.some((job) => job.state === "submitting"));
+  await killInPhase("download", (value, current) => {
+    if (Object.keys(value.createPending).length || current.some((job) => job.state === "submitting")) return false;
+    const downloading = current.filter((job) => job.state === "downloading" && Object.values(value.downloadsActive).some((remote) => remote.id === job.remote?.id));
+    // The provider seeing a request does not mean the client has opened its
+    // output yet. Hold the remaining body until SIGKILL, and observe actual
+    // local bytes so this crash always exercises partial-file recovery.
+    return outputs.flatMap(filesUnder).some((filename) => downloading.some((job) => filename.endsWith(`.${job.id}.part`)) && fs.statSync(filename).size > 0);
+  });
   assert.equal(kills.at(-1).interruptedCreates, 0, "download crash cannot interrupt a new paid create");
   assert.ok(outputs.flatMap(filesUnder).some((filename) => filename.endsWith(".part")), "download SIGKILL leaves an actual partial file to recover");
   await disconnect(eventClient);
 
-  await mockApi("/control", { pollDelayMs: 1, renderDelayMs: 25, createDelayMs: 0, downloadDelayMs: 5 });
+  await mockApi("/control", { pollDelayMs: 1, renderDelayMs: 25, createDelayMs: 0, downloadDelayMs: 5, holdDownloads: false });
   await startApp();
   const waiting = await api("/api/lanes");
   assert.ok(waiting.lanes.some((lane) => lane.state === "needs_key"), "unfinished lanes need fresh keys after restart");

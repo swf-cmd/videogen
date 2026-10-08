@@ -28,6 +28,10 @@ test("persistent compatible queue records every create, streams exact bytes and 
   await app.prepare(payload);
   await app.start();
   await waitFor(app, "succeeded");
+  // A succeeded record is durable before its recovery marker is unlinked.
+  // Wait for the actual publication cleanup, not an arbitrary timer or only
+  // the earlier state transition, before asserting there are no .part files.
+  await Promise.all([...app.scheduler.work.values()].filter(entry => entry.phase === "download").map(entry => entry.promise));
   assert.equal(app.store.jobs.size, 3);
   for (const job of app.store.jobs.values()) {
     assert.equal(job.attempts.create, 1);

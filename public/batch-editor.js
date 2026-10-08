@@ -26,7 +26,7 @@ class BatchEditor {
     const file = input.files?.[0]; if (!file) return;
     try {
       if (file.size > 5 * 1024 * 1024) throw new Error(t("csvTooLarge"));
-      const rows = BatchImport.rowsFromCSV(BatchImport.decodeCSV(await file.arrayBuffer()), document.querySelector("#importTemplate").value.trim());
+      const rows = BatchImport.rowsFromCSV(BatchImport.decodeCSV(await file.arrayBuffer()), document.querySelector("#importTemplate").value.trim(), { templatePrompts: document.querySelector("#csvTemplateMode").checked });
       if (!rows.length) throw new Error(t("csvEmpty"));
       if (rows.length > 1000) throw new Error(t("importTooMany"));
       this.rows = rows; this.resolveImages(); this.activate();
@@ -36,15 +36,17 @@ class BatchEditor {
   }
   importFolder(input) {
     try {
-      this.files = [...(input.files || [])].filter((file) => supportedInputReferenceTypes.has(inputReferenceMimeType(file))).sort((a, b) => (a.webkitRelativePath || a.name).localeCompare(b.webkitRelativePath || b.name));
-      if (!this.files.length) throw new Error(t("folderEmpty"));
-      if (this.files.length > 1000) throw new Error(t("importTooMany"));
-      if (this.rows.some((row) => row.firstFrameName || row.lastFrameName)) this.resolveImages();
+      const files = [...(input.files || [])].filter((file) => supportedInputReferenceTypes.has(inputReferenceMimeType(file))).sort(BatchImport.compareImageFiles);
+      if (!files.length) throw new Error(t("folderEmpty"));
+      if (files.length > 1000) throw new Error(t("importTooMany"));
+      this.files = files;
+      if (this.rows.some((row) => row.firstFrameName || row.lastFrameName || row.firstFrame || row.lastFrame)) this.resolveImages();
       else {
-        const template = document.querySelector("#importTemplate").value.trim() || promptInput.value.trim();
+        const template = document.querySelector("#importTemplate").value.trim();
+        const templateMode = Boolean(template);
         this.rows = this.files.map((file, index) => {
-          const prompt = BatchImport.renderTemplate(template, BatchImport.imageVariables(file, index));
-          return { prompt: prompt.text, params: {}, firstFrame: file, firstFrameName: file.webkitRelativePath || file.name, errors: prompt.missing.map((name) => ({ code: "templateMissing", values: { name } })) };
+          const prompt = templateMode ? BatchImport.renderTemplate(template, BatchImport.imageVariables(file, index)) : { text: promptInput.value.trim(), missing: [] };
+          return { prompt: prompt.text, templateMode, params: {}, firstFrame: file, firstFrameSource: "folder", firstFrameName: file.webkitRelativePath || file.name, errors: prompt.missing.map((name) => ({ code: "templateMissing", values: { name } })) };
         });
       }
       this.activate(); formMessage(t("importedRows", { count: this.rows.length }));
@@ -53,12 +55,13 @@ class BatchEditor {
   }
   resolveImages() {
     for (const row of this.rows) for (const kind of ["firstFrame", "lastFrame"]) if (row[`${kind}Name`]) {
+      if (row[kind] && row[`${kind}Source`] !== "folder") continue;
       const match = BatchImport.findImageFile(row[`${kind}Name`], this.files);
-      row[kind] = match.file; row[`${kind}Error`] = match.error;
+      row[kind] = match.file; row[`${kind}Source`] = "folder"; row[`${kind}Error`] = match.error;
     }
   }
   rowErrors(row) {
-    const errors = BatchImport.promptErrors(row.prompt, row.errors || []);
+    const errors = BatchImport.promptErrors(row.prompt, row.errors || [], row.templateMode === true);
     for (const kind of ["firstFrame", "lastFrame"]) {
       if (row[`${kind}Name`] && !row[kind]) errors.push({ code: row[`${kind}Error`] || "imageMissing", values: { name: row[`${kind}Name`] } });
       if (row[kind] && !supportedInputReferenceTypes.has(inputReferenceMimeType(row[kind]))) errors.push({ code: "inputReferenceInvalidType" });
@@ -133,7 +136,7 @@ class BatchEditor {
       for (const kind of ["firstFrame", "lastFrame"]) {
         const label = viewElement("label", "field"); label.append(viewElement("span", "", t(kind === "firstFrame" ? "rowFirstFrame" : "rowLastFrame")));
         const input = document.createElement("input"); input.type = "file"; input.accept = "image/jpeg,image/png,image/webp";
-        input.addEventListener("change", () => { row[kind] = input.files?.[0] || null; row[`${kind}Name`] = row[kind]?.name || ""; delete row[`${kind}Error`]; this.render(); this.changed(); });
+        input.addEventListener("change", () => { row[kind] = input.files?.[0] || null; row[`${kind}Source`] = "manual"; row[`${kind}Name`] = row[kind]?.name || ""; delete row[`${kind}Error`]; this.render(); this.changed(); });
         label.append(input);
         if (row[kind]) {
           const preview = document.createElement("img"); const url = URL.createObjectURL(row[kind]); this.previewUrls.push(url); preview.src = url; preview.alt = row[kind].name; preview.className = "draft-frame-preview"; label.append(preview);
@@ -166,7 +169,8 @@ class BatchEditor {
     this.renderStatuses();
   }
   downloadExample() {
-    const csv = 'prompt,subject,model,durationSeconds,resolution,aspectRatio,firstFrame,lastFrame,filename\r\n"A cinematic shot of {{subject}}",a quiet forest,,,,,,,forest\r\n';
+    const prompt = document.querySelector("#csvTemplateMode").checked ? "A cinematic shot of {{subject}}" : "A cinematic shot of a quiet forest";
+    const csv = `prompt,subject,model,durationSeconds,resolution,aspectRatio,firstFrame,lastFrame,filename\r\n"${prompt}",a quiet forest,,,,,,,forest\r\n`;
     const url = URL.createObjectURL(new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" }));
     const link = document.createElement("a"); link.href = url; link.download = "videogen-import.csv"; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   }

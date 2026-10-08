@@ -243,3 +243,27 @@ test("browser image fitting and backend requests share dimensions including 4K p
   }
   for (const params of [{ resolution: "nonsense", aspectRatio: "16:9" }, { resolution: "4K", aspectRatio: "0:1" }, { resolution: "0x720" }]) { assert.equal(browser.pixelSize(params), ""); assert.throws(() => adapter.pixelSize(params), /invalidParameter/); }
 });
+
+test("rapid pagination clicks cannot reuse a cursor or enable terminal-page buttons while loading", async () => {
+  const source = fs.readFileSync(path.join(publicDir, "queue-view.js"), "utf8");
+  for (const kind of ["job", "batch"]) {
+    const elements = new Map(), requests = [];
+    const element = (id) => { if (!elements.has(id)) elements.set(id, { disabled: false, events: {}, addEventListener(type, callback) { this.events[type] = callback; } }); return elements.get(id); };
+    const QueueView = vm.runInNewContext(`${source}\nQueueView`, { document: { querySelector: element }, URLSearchParams, t: (key) => key, apiRequest: (endpoint) => new Promise((resolve) => requests.push({ endpoint, resolve })) });
+    const view = new QueueView(); view.renderJobs = () => view.renderPagination("job"); view.renderBatches = () => view.renderPagination("batch"); view.message = (message) => assert.fail(message);
+    const prefix = kind === "job" ? "jobs" : "batch", next = element(`#${prefix}Next`), previous = element(`#${prefix}Previous`);
+    view[kind === "job" ? "nextJobCursor" : "nextBatchCursor"] = "cursor-1";
+    const first = next.events.click(); const duplicate = next.events.click(); const reverse = previous.events.click();
+    await duplicate; await reverse;
+    const overlappingRefresh = kind === "job" ? view.loadJobs() : view.loadBatches();
+    assert.equal(requests.length, 1, "a concurrent background snapshot shares the page request");
+    assert.equal(requests.length, 1); assert.equal(view[`${kind}Page`], 1); assert.equal(view[`${kind}Cursors`].length, 2); assert.match(requests[0].endpoint, /cursor=cursor-1/);
+    view.renderPagination(kind); assert.equal(next.disabled, true); assert.equal(previous.disabled, true);
+    requests[0].resolve(kind === "job" ? { jobs: [], seq: 1, nextCursor: "cursor-2" } : { batches: [], nextCursor: "cursor-2" }); await first; await overlappingRefresh;
+    assert.equal(next.disabled, false); assert.equal(previous.disabled, false);
+    const finalPage = next.events.click(); assert.equal(requests.length, 2); assert.match(requests[1].endpoint, /cursor=cursor-2/);
+    requests[1].resolve(kind === "job" ? { jobs: [], seq: 2, nextCursor: null } : { batches: [], nextCursor: null }); await finalPage;
+    assert.equal(next.disabled, true, "run finally must preserve a terminal page's disabled Next button");
+    await next.events.click(); assert.equal(requests.length, 2); assert.equal(view[`${kind}Page`], 2); assert.equal(next.disabled, true);
+  }
+});

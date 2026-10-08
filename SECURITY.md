@@ -1,6 +1,6 @@
 # Security policy
 
-Security fixes target the latest maintained videogen release. Version 2.1.0 is a local persistent queue; the former Sora integration is retired. Use a supported, patched Node release: `^22.21.0 || >=24.5.0`; Node 23 is unsupported. Maintainer release bundles should include Node 24 LTS.
+Security fixes target the latest maintained videogen release. Version 2.1.1 is a local persistent queue; the former Sora integration is retired. Use a supported, patched Node release: `^22.21.0 || >=24.5.0`; Node 23 is unsupported. Maintainer release bundles should include Node 24 LTS.
 
 ## Report privately
 

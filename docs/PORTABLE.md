@@ -1,6 +1,6 @@
 # Portable Windows and macOS bundles
 
-The release artifacts are `videogen-2.1.0-windows-x64.zip` and `videogen-2.1.0-macos-universal.zip`. The macOS archive includes separate native Apple Silicon and Intel executables; the launcher selects the matching one. Both archives include the application, Node **v24.21.0 LTS**, its third-party license notices and a runtime integrity manifest. No Node, Python or npm installation is needed to use a bundle.
+The release artifacts are `videogen-2.1.1-windows-x64.zip` and `videogen-2.1.1-macos-universal.zip`. The macOS archive includes separate native Apple Silicon and Intel executables; the launcher selects the matching one. Both archives include the application, Node **v24.21.0 LTS**, its third-party license notices and a runtime integrity manifest. No Node, Python or npm installation is needed to use a bundle.
 
 1. Extract the **entire ZIP** into a writable folder, such as Documents. Do not start it inside the archive viewer or a read-only disk image.
 2. On Windows, double-click **Start videogen.cmd**. On macOS, double-click **Start videogen.command**. A terminal opens, starts the local service and opens the browser.
@@ -31,7 +31,7 @@ To upgrade, stop the service, back up the entire old folder, extract the new ZIP
 
 This update prevents new key-substring corruption; it cannot infer text already replaced with `[REDACTED]` by older releases. Stop the old service and back up its data before upgrading. If startup rejects an already-damaged record, restore a known-good backup or repair it using verified original values. Check remote provider jobs before resubmitting uncertain work.
 
-`PORT` changes the local port; if unset the launcher searches from 5177 when that port is occupied. `OPEN_BROWSER=0` suppresses browser opening for automated smoke tests. A second service cannot share the same data directory even with another port. The bundled launcher fails if its bundled runtime is missing; it never silently uses a machine-wide Node installation.
+`PORT` changes the local port; if unset the launcher searches from 5177 when that port is occupied. `OPEN_BROWSER=0` suppresses browser opening and Windows error pauses for automated smoke tests. `VIDEOGEN_NO_PAUSE=1` disables only the Windows error pause; by default a failed Node version check keeps the window open so its explanation remains visible. Both paths preserve the failing exit status. A second service cannot share the same data directory even with another port. Locks include a process creation identity so a confirmed reused PID can be distinguished from the original owner; if that check is unavailable or a live legacy record lacks the identity, the directory stays locked conservatively. The bundled launcher fails if its bundled runtime is missing; it never silently uses a machine-wide Node installation.
 
 ## Maintainer builds
 
@@ -39,7 +39,7 @@ From a source checkout, with Python 3.9+:
 
 ```bash
 python3 scripts/package-portable.py --target all --output dist --cache work/runtime-cache
-python3 scripts/smoke-portable.py dist/videogen-2.1.0-macos-universal.zip
+python3 scripts/smoke-portable.py dist/videogen-2.1.1-macos-universal.zip
 ```
 
 On Windows use `python` and smoke-test the Windows archive. The packaging script downloads only three pinned archives from the [official Node distribution](https://nodejs.org/dist/v24.21.0/), validates their SHA-256 values against the checked-in `scripts/node-runtime.json`, and copies only the executable and its complete license notices. To update Node, independently check the [official release index](https://nodejs.org/download/release/index.json) and versioned `SHASUMS256.txt`, review the new pins, then rebuild and rerun platform tests.
