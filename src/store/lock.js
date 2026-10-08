@@ -36,7 +36,9 @@ function processIdentity(pid, { platform = process.platform, read = readSmallFil
       if (!/^\d+$/.test(fields[19] || "")) return null; // field 22: starttime
       start = `${boot}:${fields[19]}`;
     } else if (platform === "darwin" || platform === "win32") {
-      const options = { encoding: "utf8", timeout: 2000, maxBuffer: 2048, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, LC_ALL: "C", LANG: "C", TZ: "UTC" } };
+      // Windows CI recorded a 2-second cold PowerShell timeout followed by a
+      // 414ms warm query. Allow cold host startup without widening other probes.
+      const options = { encoding: "utf8", timeout: platform === "win32" ? 5000 : 2000, maxBuffer: 2048, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, LC_ALL: "C", LANG: "C", TZ: "UTC" } };
       let result;
       if (platform === "darwin") result = run("/bin/ps", ["-p", String(pid), "-o", "lstart="], options);
       else {

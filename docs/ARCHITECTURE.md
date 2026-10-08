@@ -98,7 +98,7 @@ cover the durable queue and release artifacts.
   markers include a kernel-backed process creation identity, cached only for the
   current process. A live PID with a verified different identity is stale; missing,
   failed or incompatible identity checks remain locked. Legacy records can still
-  recover when their PID no longer exists. Native queries have a two-second timeout
+  recover when their PID no longer exists. Native queries have a bounded timeout (two seconds on macOS, five seconds on Windows)
   and bounded output, and neither request nor save command lines. Release checks
   the immutable file generation. Malformed or externally altered metadata fails closed. Data directories
   must support hard links; unsupported filesystems fail with an actionable startup

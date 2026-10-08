@@ -15,7 +15,7 @@ function directory(t) {
 
 // Keep this a real OS lookup rather than a fixture: changes to ps/StartTime/proc
 // behavior should be caught on each platform in the native CI matrix.
-test("native process creation identity is present and stable across independent lookups", { timeout: 8000 }, () => {
+test("native process creation identity is present and stable across independent lookups", { timeout: process.platform === "win32" ? 12000 : 8000 }, () => {
   const { spawnSync } = require("node:child_process");
   const samples = [];
   const run = (executable, args, options) => {
@@ -99,7 +99,7 @@ test("platform identity probes are bounded and omit command-line or executable m
     const identity = processIdentity(1234, { platform, run(executable, args, options) {
       calls += 1;
       assert.ok(path[platform === "win32" ? "win32" : "posix"].isAbsolute(executable));
-      assert.ok(options.timeout > 0 && options.timeout <= 2000);
+      assert.equal(options.timeout, platform === "win32" ? 5000 : 2000);
       assert.ok(options.maxBuffer <= 2048);
       assert.equal(options.windowsHide, true);
       assert.deepEqual(options.stdio, ["ignore", "pipe", "pipe"]);
