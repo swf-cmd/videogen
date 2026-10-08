@@ -6,6 +6,21 @@ const path = require("node:path");
 const http = require("node:http");
 const { once } = require("node:events");
 const { spawn } = require("node:child_process");
+const { redactDiagnostics } = require("../src/queue/keys");
+
+function workerMessage(output, state) {
+  // A pipe chunk is not a record: retain the unfinished final line until the
+  // next chunk arrives, even when it already includes the expected state.
+  const line = output.split("\n").slice(0, -1).find(value => value.includes(`"state":"${state}"`));
+  return line ? JSON.parse(line) : undefined;
+}
+
+test("worker status parsing waits for every fragment of a complete JSON line", () => {
+  const line = JSON.stringify({ state: "done", output: { path: "offline-video.mp4" }, attempts: { create: 1 } }) + "\n";
+  for (let end = 1; end < line.length; end += 1) assert.equal(workerMessage(line.slice(0, end), "done"), undefined);
+  assert.deepEqual(workerMessage(line, "done"), JSON.parse(line));
+  assert.equal(workerMessage('{"state":"saved"}\n' + line.slice(0, -1), "done"), undefined);
+});
 
 const worker = `
 const { Application } = require('./src/application');
@@ -29,7 +44,7 @@ const path = require('node:path');
 })().catch(error => { console.error(error); process.exit(1); });
 `;
 
-test("Gemini survives process kills after interaction ID and Files URI fsync with exactly one create", { timeout: 20000 }, async (t) => {
+test("Gemini survives process kills after interaction ID and Files URI fsync with exactly one create", { timeout: 60000 }, async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "videogen-gemini-restart-"));
   const children = new Set(), requests = [], bytes = Buffer.from("offline-video-original-bytes");
   let ready = false, fileReady = false;
@@ -61,16 +76,24 @@ test("Gemini survives process kills after interaction ID and Files URI fsync wit
     const child = spawn(process.execPath, ["-e", worker], { cwd: path.resolve(__dirname, ".."), env: { ...process.env, TEST_DIRECTORY: directory, TEST_BASE_URL: `http://127.0.0.1:${server.address().port}/v1beta` }, stdio: ["ignore", "pipe", "pipe"] });
     children.add(child); child.once("close", () => children.delete(child));
     let output = "", errors = "";
+    child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => { output += chunk; }); child.stderr.on("data", (chunk) => { errors += chunk; });
+    const diagnostics = () => {
+      let text = redactDiagnostics(JSON.stringify({ exitCode: child.exitCode, signalCode: child.signalCode, stdout: output, stderr: errors, requests }));
+      for (const filename of [directory, path.resolve(__dirname, ".."), os.homedir()].sort((a, b) => b.length - a.length)) {
+        for (const spelling of [filename, filename.replaceAll("\\", "/"), JSON.stringify(filename).slice(1, -1)]) text = text.split(spelling).join("[PATH]");
+      }
+      return text.slice(-12000);
+    };
     return { child, async wait(state) {
-      const end = Date.now() + 10000;
-      while (Date.now() < end) {
-        const line = output.split("\n").find((value) => value.includes(`"state":"${state}"`));
-        if (line) return JSON.parse(line);
-        if (child.exitCode !== null || child.signalCode !== null) throw new Error(`Worker exited before ${state}: ${errors}`);
+      const end = performance.now() + 15000;
+      while (performance.now() < end) {
+        const message = workerMessage(output, state);
+        if (message) return message;
+        if (child.exitCode !== null || child.signalCode !== null) throw new Error(`Worker exited before ${state}: ${diagnostics()}`);
         await new Promise((resolve) => setTimeout(resolve, 15));
       }
-      throw new Error(`Timed out waiting for ${state}: ${errors}`);
+      throw new Error(`Timed out waiting for ${state}: ${diagnostics()}`);
     } };
   }
   const first = launch();

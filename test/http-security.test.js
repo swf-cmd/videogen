@@ -43,15 +43,26 @@ async function startServer(t, port) {
   let output = "";
   child.stdout.on("data", (data) => { output += data; });
   child.stderr.on("data", (data) => { output += data; });
+  let didClose = false;
+  const closed = new Promise(resolve => child.once("close", () => { didClose = true; resolve(); }));
+  const waitForClose = async timeoutMs => {
+    let timer;
+    try { await Promise.race([closed, new Promise(resolve => { timer = setTimeout(resolve, timeoutMs); })]); }
+    finally { clearTimeout(timer); }
+    return didClose;
+  };
   t.after(async () => {
-    if (child.exitCode !== null || child.signalCode !== null) return;
-    const exited = once(child, "exit");
-    child.kill("SIGTERM");
-    await exited;
-    fs.rmSync(directory, { recursive: true, force: true });
+    try {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+      if (!await waitForClose(5000)) { child.kill("SIGKILL"); await waitForClose(3000); }
+    } finally {
+      child.stdout.destroy(); child.stderr.destroy();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
   await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Server startup timed out: ${output}`)), 5000);
+    const diagnostics = () => JSON.stringify({ exitCode: child.exitCode, signalCode: child.signalCode, output: output.slice(-8000) });
+    const timer = setTimeout(() => { cleanup(); reject(new Error(`Server startup timed out: ${diagnostics()}`)); }, 15000);
     const cleanup = () => {
       clearTimeout(timer);
       child.stdout.off("data", ready);
@@ -59,15 +70,16 @@ async function startServer(t, port) {
       child.off("error", failed);
     };
     const ready = () => { if (output.includes(`http://127.0.0.1:${port}`)) { cleanup(); resolve(); } };
-    const exited = () => { cleanup(); reject(new Error(`Server exited before listening: ${output}`)); };
+    const exited = () => { cleanup(); reject(new Error(`Server exited before listening: ${diagnostics()}`)); };
     const failed = (error) => { cleanup(); reject(error); };
     child.stdout.on("data", ready);
     child.once("exit", exited);
     child.once("error", failed);
+    ready();
   });
 }
 
-test("child-process HTTP server preserves localhost security boundaries", { timeout: 15000 }, async (t) => {
+test("child-process HTTP server preserves localhost security boundaries", { timeout: 35000 }, async (t) => {
   const port = await availablePort();
   await startServer(t, port);
   const health = await request(port, { path: "/api/health" });

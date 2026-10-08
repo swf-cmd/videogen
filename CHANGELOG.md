@@ -1,6 +1,12 @@
 # Changelog
 
-## 2.1.3 — 2026-10-08
+## 2.1.4 — 2026-10-08
+
+- Include the startup, quarantine recovery, compaction and frontend fixes prepared for v2.1.2, plus the launcher readiness regression from v2.1.3.
+- Replace short real-I/O test waits with explicit readiness/state conditions and bounded deadlines, preserve graceful shutdown budgets, and record sanitized diagnostics. Exercise deliberately slow requests without weakening paid-create, output-integrity or restart assertions.
+- v2.1.2 and v2.1.3 tags are retained unchanged and were not published after CI fixture timing failures; v2.1.4 is the subsequent release.
+
+## 2.1.3 — 2026-10-08 (not published)
 
 - Include all v2.1.2 product fixes and the offline quarantine recovery tool.
 - Wait for actual launcher readiness with a bounded deadline in process tests, including a deliberately delayed startup regression, instead of failing after a fixed two-second polling window on a busy Intel runner. Shutdown, orphan-process and data-lock assertions remain enforced.

@@ -21,7 +21,7 @@ function job(id, patch = {}) {
   return { id, batchId: 'batch', state: 'queued', provider: 'openai-compatible', region: 'custom', baseUrl: 'http://127.0.0.1:9000/v1', prompt: 'A red fox', attempts: { create: 0, poll: 0, download: 0 }, ...patch };
 }
 
-test('health HTTP status agrees with scheduler health in both states', async t => {
+test('health HTTP status agrees with scheduler health in both states', { timeout: 25000 }, async t => {
   let healthy = true;
   configureApplication({ scheduler: { health: () => ({ healthy }) } });
   const server = http.createServer(handleRequest);
@@ -31,11 +31,17 @@ test('health HTTP status agrees with scheduler health in both states', async t =
   for (const expected of [true, false]) {
     healthy = expected;
     const response = await new Promise((resolve, reject) => {
-      http.get({ hostname: '127.0.0.1', port: server.address().port, path: '/api/health', headers: { host: `127.0.0.1:${PORT}` } }, res => {
+      const timer = setTimeout(() => req.destroy(new Error(`Health HTTP deadline exceeded (expected healthy=${expected})`)), 10000);
+      const finish = (error, value) => { clearTimeout(timer); error ? reject(error) : resolve(value); };
+      const req = http.get({ hostname: '127.0.0.1', port: server.address().port, path: '/api/health', headers: { host: `127.0.0.1:${PORT}` } }, res => {
         let body = '';
         res.on('data', chunk => { body += chunk; });
-        res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(body) }));
-      }).on('error', reject);
+        res.on('end', () => {
+          try { finish(null, { status: res.statusCode, body: JSON.parse(body) }); } catch (error) { finish(error); }
+        });
+        res.on('error', finish);
+        res.on('aborted', () => finish(new Error('Health HTTP response aborted')));
+      }).on('error', finish);
     });
     assert.equal(response.status, expected ? 200 : 503);
     assert.deepEqual(response.body, { healthy: expected });
@@ -153,7 +159,8 @@ test('persistent busy replacement defers maintenance; storage failures stay fata
   }
 });
 
-test('busy snapshots and journals retry in the background without losing paid IDs', async t => {
+test('busy snapshots and journals retry in the background without losing paid IDs', { timeout: 20000 }, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   for (const name of ['jobs.snapshot.ndjson', 'jobs.ndjson']) {
     const dir = directory(t), store = new JobStore(dir);
     store.add(job('paid'));
@@ -183,9 +190,11 @@ test('busy snapshots and journals retry in the background without losing paid ID
       assert.ok(restored.get('during'));
       restored.close();
       held = false;
-      const deadline = Date.now() + 5000;
-      while (store.compactionRetryAt && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 30));
-      if (store.compacting) await store.compacting;
+      // Advance the already-asserted one-second backoff, then await real disk
+      // completion instead of imposing another wall-clock polling deadline.
+      t.mock.timers.tick(1000);
+      assert.ok(store.compacting, 'the scheduled retry must start');
+      await store.compacting;
       assert.equal(store.compactionRetryAt, 0, 'background maintenance must recover');
       assert.equal(store.failed, undefined);
       assert.ok(calls > 6);
