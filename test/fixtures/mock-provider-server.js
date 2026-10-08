@@ -7,6 +7,7 @@ async function startMockServer(initial = {}) {
   const jobs = new Map();
   const stats = { createCounts: {}, requestCounts: {}, maxInFlight: {}, inFlight: {}, accepted: [], faults: [], createPending: {}, pollsActive: {}, downloadsActive: {}, maxDownloadsActive: 0, requests: [] };
   const sockets = new Set();
+  const heldDownloads = new Set();
   const json = (res, status, value, headers = {}) => { if (!res.destroyed) { res.writeHead(status, { "content-type": "application/json", ...headers }); res.end(JSON.stringify(value)); } };
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const phaseDelay = (phase, prompt) => config.delays?.[prompt]?.[phase] ?? config[`${phase}DelayMs`] ?? 0;
@@ -37,7 +38,11 @@ async function startMockServer(initial = {}) {
     try {
       const url = new URL(req.url, "http://127.0.0.1");
       if (url.pathname === "/stats") return json(res, 200, { ...stats, jobs: [...jobs.values()].map(({ timer, ...job }) => job) });
-      if (url.pathname === "/control" && req.method === "POST") { Object.assign(config, await bodyOf(req)); return json(res, 200, { ok: true }); }
+      if (url.pathname === "/control" && req.method === "POST") {
+        Object.assign(config, await bodyOf(req));
+        if (!config.holdDownloads) for (const release of heldDownloads) release();
+        return json(res, 200, { ok: true });
+      }
       const match = url.pathname.match(/^(.*?)\/v1\/(videos|models)(?:\/([^/]+))?(?:\/(content))?$/);
       if (!match) return json(res, 404, { error: { code: "not_found" } });
       const lane = match[1] || "default";
@@ -82,6 +87,12 @@ async function startMockServer(initial = {}) {
         res.writeHead(200, { "content-type": "video/mp4", "content-length": mockBytes(job.prompt).length });
         const bytes = mockBytes(job.prompt);
         res.write(bytes.subarray(0, Math.ceil(bytes.length / 2)));
+        if (config.holdDownloads && !res.destroyed) await new Promise((resolve) => {
+          const release = () => { heldDownloads.delete(release); res.removeListener("close", release); resolve(); };
+          heldDownloads.add(release);
+          res.once("close", release);
+        });
+        if (res.destroyed) return;
         await delay(phaseDelay("download", job.prompt));
         return res.end(bytes.subarray(Math.ceil(bytes.length / 2)));
       }

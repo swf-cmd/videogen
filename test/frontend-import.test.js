@@ -266,3 +266,18 @@ test("folder imports keep manual first and last frames and naturally order newly
   assert.deepEqual(Array.from(editor.rows, (row) => row.prompt), ["Scene 1: img1", "Scene 2: img2", "Scene 3: img10"]);
   assert.deepEqual(Array.from(editor.rows, (row) => row.firstFrame.name), ["img1.png", "img2.png", "img10.png"]);
 });
+
+test("image-folder import treats ordinary prompt braces literally and expands only an explicit template", () => {
+  const source = fs.readFileSync(path.join(__dirname, "../public/batch-editor.js"), "utf8");
+  const template = { value: "" }, literal = "Write {{x}} and {{filename}} literally";
+  const BatchEditor = vm.runInNewContext(`${source}\nBatchEditor`, { BatchImport: require("../public/import"), supportedInputReferenceTypes: new Set(["image/png"]), inputReferenceMimeType: (file) => file.type, document: { querySelector: () => template }, promptInput: { value: literal }, selectedInputReferenceFile: () => null, selectedImageSize: () => "1280x720", t: (key) => key, formMessage() {} });
+  const editor = Object.create(BatchEditor.prototype); editor.rows = []; editor.activate = () => {};
+  const files = [{ name: "img1.png", type: "image/png", size: 10 }];
+  editor.importFolder({ files, value: "selected" });
+  assert.equal(editor.rows[0].prompt, literal); assert.equal(editor.rows[0].templateMode, false);
+  assert.doesNotThrow(() => editor.validate()); assert.equal(editor.payloadRows()[0].prompt, literal);
+  template.value = "Film {{filename}} with {{missing}}"; editor.rows = [];
+  editor.importFolder({ files, value: "selected" });
+  assert.equal(editor.rows[0].prompt, "Film img1.png with {{missing}}"); assert.equal(editor.rows[0].templateMode, true);
+  assert.equal(editor.rowErrors(editor.rows[0])[0].code, "templateMissing"); assert.throws(() => editor.validate(), /rowInvalid/);
+});

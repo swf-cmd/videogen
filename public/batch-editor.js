@@ -42,10 +42,11 @@ class BatchEditor {
       this.files = files;
       if (this.rows.some((row) => row.firstFrameName || row.lastFrameName || row.firstFrame || row.lastFrame)) this.resolveImages();
       else {
-        const template = document.querySelector("#importTemplate").value.trim() || promptInput.value.trim();
+        const template = document.querySelector("#importTemplate").value.trim();
+        const templateMode = Boolean(template);
         this.rows = this.files.map((file, index) => {
-          const prompt = BatchImport.renderTemplate(template, BatchImport.imageVariables(file, index));
-          return { prompt: prompt.text, templateMode: true, params: {}, firstFrame: file, firstFrameSource: "folder", firstFrameName: file.webkitRelativePath || file.name, errors: prompt.missing.map((name) => ({ code: "templateMissing", values: { name } })) };
+          const prompt = templateMode ? BatchImport.renderTemplate(template, BatchImport.imageVariables(file, index)) : { text: promptInput.value.trim(), missing: [] };
+          return { prompt: prompt.text, templateMode, params: {}, firstFrame: file, firstFrameSource: "folder", firstFrameName: file.webkitRelativePath || file.name, errors: prompt.missing.map((name) => ({ code: "templateMissing", values: { name } })) };
         });
       }
       this.activate(); formMessage(t("importedRows", { count: this.rows.length }));
