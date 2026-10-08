@@ -81,9 +81,14 @@ function estimateCost(model, params = {}) {
   return { amount: Math.round(amount * 1000000) / 1000000, currency: pricing.currency, basis: pricing.unit };
 }
 
-function normalizeStatus(status) {
-  const states = { pending: "queued", queued: "queued", in_progress: "running", running: "running", completed: "succeeded", succeeded: "succeeded", failed: "failed", cancelled: "cancelled", canceled: "cancelled", expired: "expired", unknown: "expired" };
-  return states[String(status || "").toLowerCase()] || "running";
+function normalizeStatus(status, { phase = "poll" } = {}) {
+  const states = { pending: "queued", queued: "queued", in_progress: "running", running: "running", completed: "succeeded", succeeded: "succeeded", failed: "failed", cancelled: "cancelled", canceled: "cancelled", expired: "expired" };
+  const value = typeof status === "string" ? status.toLowerCase() : "";
+  if (Object.hasOwn(states, value)) return states[value];
+  // A returned create ID is sufficient to recover by polling. Poll responses,
+  // however, must not hide a protocol change as perpetual running or expiry.
+  if (phase === "create") return "running";
+  throw new ProviderError("invalidProviderResponse", { code: "unknownProviderStatus", category: "transient" });
 }
 
 function createContext({ lane, key = "", catalog, fetchImpl = globalThis.fetch, redact = (value) => value, assets = [], log = () => {} }) {

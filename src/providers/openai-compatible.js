@@ -28,7 +28,7 @@ const adapter = {
       headers = {};
     }
     const data = await base.parseJson(ctx, await ctx.fetch("videos", { method: "POST", headers, body, signal, phase: "create" }), "create");
-    return { remoteId: base.requireRemoteId(data.id), status: base.normalizeStatus(data.status) };
+    return { remoteId: base.requireRemoteId(data.id), status: base.normalizeStatus(data.status, { phase: "create" }) };
   },
   async poll(ctx, job, { signal } = {}) {
     const id = encodeURIComponent(job.remote.id);

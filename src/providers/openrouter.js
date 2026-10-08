@@ -15,7 +15,7 @@ module.exports = {
     const data = await base.parseJson(ctx, await ctx.fetch("videos", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal, phase: "create" }), "create");
     const remoteId = base.requireRemoteId(data.id);
     const pollingUrl = new URL(`videos/${encodeURIComponent(remoteId)}`, `${ctx.lane.baseUrl.replace(/\/$/, "")}/`).href;
-    return { remoteId, pollingUrl, status: base.normalizeStatus(data.status) };
+    return { remoteId, pollingUrl, status: base.normalizeStatus(data.status, { phase: "create" }) };
   },
   async poll(ctx, job, { signal } = {}) {
     const id = encodeURIComponent(job.remote.id);

@@ -32,6 +32,23 @@ test("OpenRouter refuses local first frames, missing IDs and malformed create JS
   await assert.rejects(openrouter.create(createContext({ lane, fetchImpl: async () => new Response("not json") }), job), { category: "unknown_outcome" });
 });
 
+test("unknown poll statuses are transient protocol errors and never trigger create", async () => {
+  for (const adapter of [compatible, openrouter]) {
+    for (const status of [undefined, null, "", "unrecognized_state", "UNKNOWN", "toString", "__proto__"]) {
+      const requests = [];
+      const ctx = createContext({ lane: { provider: adapter.id, baseUrl: "https://provider.example/v1" }, fetchImpl: async (url, options) => {
+        requests.push({ url: String(url), method: options.method || "GET" });
+        return response({ id: "accepted-id", status });
+      } });
+      await assert.rejects(adapter.poll(ctx, { ...job, remote: { id: "accepted-id" } }), { category: "transient", code: "unknownProviderStatus" });
+      assert.deepEqual(requests, [{ url: "https://provider.example/v1/videos/accepted-id", method: "GET" }]);
+      const created = await adapter.create(ctx, job);
+      assert.equal(created.remoteId, "accepted-id");
+      assert.equal(created.status, "running");
+    }
+  }
+});
+
 test("compatible JSON and multipart contracts preserve selected duration and image", async () => {
   const requests = [];
   const lane = { provider: "openai-compatible", baseUrl: "http://127.0.0.1:30000/v1" };
