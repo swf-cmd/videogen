@@ -64,6 +64,9 @@ test("100 jobs survive three process crashes without duplicate paid creates or l
   const randomDelay = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return 10 + seed % 26; };
   const kills = [];
   const killedSubmissions = new Set();
+  const inspections = [];
+  let phase = "startup";
+  let completed = false;
 
   function child(script, env) {
     const proc = spawn(process.execPath, [script], { cwd: ROOT, env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] });
@@ -89,10 +92,27 @@ test("100 jobs survive three process crashes without duplicate paid creates or l
   }
 
   t.after(async () => {
-    for (const connection of sseConnections) connection.controller.abort();
-    await Promise.all([...processes].map((proc) => stop(proc)));
-    if (process.env.VIDEOGEN_E2E_KEEP === "1") t.diagnostic(`Temporary acceptance files: ${directory}`);
-    else fs.rmSync(directory, { recursive: true, force: true });
+    try {
+      if (!completed) {
+        const details = { seed: initialSeed, phase, kills, killedSubmissions: [...killedSubmissions], logs: [...processOutput, ...[...processes].map(proc => proc.output)], secrets, paths: [directory, ROOT, os.homedir()], inspectionErrors: {} };
+        const results = await Promise.allSettled(inspections.map(([, inspect]) => inspect()));
+        for (let index = 0; index < results.length; index += 1) {
+          const result = results[index], [name] = inspections[index];
+          if (result.status === "fulfilled") details[name] = result.value;
+          else details.inspectionErrors[name] = result.reason?.message || String(result.reason);
+        }
+        if (!details.jobs) {
+          try { details.jobs = durableJobs(dataDir); }
+          catch (cause) { details.inspectionErrors.durableJobs = cause.message; }
+        }
+        t.diagnostic(JSON.stringify(failureDiagnostics(details)));
+      }
+    } finally {
+      for (const connection of sseConnections) connection.controller.abort();
+      await Promise.all([...processes].map((proc) => stop(proc)));
+      if (process.env.VIDEOGEN_E2E_KEEP === "1") t.diagnostic(`Temporary acceptance files: ${directory}`);
+      else fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   const dropped = new Set([prompt(25), prompt(75)]);
@@ -106,7 +126,9 @@ test("100 jobs survive three process crashes without duplicate paid creates or l
   const mock = child("test/fixtures/mock-provider-server.js", { MOCK_CONFIG: JSON.stringify({
     requireKey: true, faults, retryAfterSec: 0.04,
     renderDelayMs: 2500, createDelayMs: 2, pollDelayMs: 20, downloadDelayMs: 800,
-    delays: { [prompt(0)]: { create: 1500, render: 2500 } },
+    // Delayed ordinary replies must remain successful without being confused
+    // with the explicit lost-reply faults on jobs 25 and 75.
+    delays: { [prompt(0)]: { create: 1500, render: 2500 }, [prompt(98)]: { create: 800 }, [prompt(99)]: { create: 800 } },
   }) });
   const mockOrigin = await until("mock process ready", () => {
     if (mock.exitCode !== null) throw new Error(`Mock exited: ${mock.output}`);
@@ -121,8 +143,11 @@ test("100 jobs survive three process crashes without duplicate paid creates or l
     return JSON.parse(text);
   }
   const stats = () => mockApi("/stats");
+  inspections.push(["mock", stats]);
 
-  fs.writeFileSync(path.join(dataDir, "catalog.local.json"), JSON.stringify({ providers: [{ provider: "openai-compatible", models: [{ id: "custom-model", pollIntervalSec: 0.01, requestTimeoutMs: 600, typicalRenderSec: 1 }] }] }));
+  // Ordinary creates must tolerate shared-runner stalls. Lost responses use an
+  // explicit socket disconnect; timeout behavior has its own targeted test.
+  fs.writeFileSync(path.join(dataDir, "catalog.local.json"), JSON.stringify({ providers: [{ provider: "openai-compatible", models: [{ id: "custom-model", pollIntervalSec: 0.01, requestTimeoutMs: 10000, typicalRenderSec: 1 }] }] }));
   const port = await unusedPort();
   appOrigin = `http://127.0.0.1:${port}`;
   async function api(route, value, method = value === undefined ? "GET" : "POST") {
@@ -185,9 +210,11 @@ test("100 jobs survive three process crashes without duplicate paid creates or l
     } while (cursor);
     return all;
   }
-  async function killInPhase(phase, predicate) {
+  inspections.push(["jobs", jobs], ["lanes", () => api("/api/lanes")], ["health", () => api("/api/health")]);
+  async function killInPhase(crashPhase, predicate) {
+    phase = crashPhase;
     let observation;
-    await until(`${phase} crash window`, async () => {
+    await until(`${crashPhase} crash window`, async () => {
       const before = await stats();
       if (!predicate(before, durableJobs(dataDir))) return false;
       await pause(randomDelay());
@@ -198,7 +225,7 @@ test("100 jobs survive three process crashes without duplicate paid creates or l
     assert.equal(app.signalCode, "SIGKILL");
     const interrupted = durableJobs(dataDir).filter((job) => job.state === "submitting" && !job.remote?.id);
     for (const job of interrupted) killedSubmissions.add(job.prompt);
-    kills.push({ phase, createPending: Object.keys(observation.createPending).length, pollsActive: Object.keys(observation.pollsActive).length, downloadsActive: Object.keys(observation.downloadsActive).length, interruptedCreates: interrupted.length });
+    kills.push({ phase: crashPhase, createPending: Object.keys(observation.createPending).length, pollsActive: Object.keys(observation.pollsActive).length, downloadsActive: Object.keys(observation.downloadsActive).length, interruptedCreates: interrupted.length });
   }
 
   await startApp();
@@ -208,6 +235,7 @@ test("100 jobs survive three process crashes without duplicate paid creates or l
   const sentinelBytes = Buffer.from("Existing user file; acceptance must not overwrite this.\n");
   fs.writeFileSync(sentinel, sentinelBytes);
   let eventClient = await openEvents();
+  phase = "enqueue";
   for (let index = 0; index < lanes.length; index += 1) {
     const result = await api("/api/batches", { ...lanes[index], model: "custom-model", params: { durationSeconds: 5, resolution: "720p", aspectRatio: "16:9", audio: false, requestFormat: "json" }, prompt: Array.from({ length: 50 }, (_, offset) => prompt(index * 50 + offset)).join("\n\n"), filename: index ? "batch-b" : "batch-a", outputDir: outputs[index] });
     assert.equal(result.count, 50);
@@ -263,30 +291,14 @@ test("100 jobs survive three process crashes without duplicate paid creates or l
   await restoreKeys();
   for (const id of laneIds) await api(`/api/lanes/${id}`, { action: "resume" });
   eventClient = await openEvents();
-  let finalJobs;
-  try {
-    finalJobs = await until("all 100 jobs reach acceptance terminal states", async () => {
-      const current = await jobs();
-      return current.length === 100 && current.every(done) && current;
-    }, 40000);
-  } catch (error) {
-    const names = ["jobs", "lanes", "health", "mock"];
-    const inspections = await Promise.allSettled([jobs(), api("/api/lanes"), api("/api/health"), stats()]);
-    const details = { seed: initialSeed, phase: "final completion", kills, killedSubmissions: [...killedSubmissions], logs: [...processOutput, app?.output, mock.output], secrets, inspectionErrors: {} };
-    for (let index = 0; index < inspections.length; index += 1) {
-      const result = inspections[index], name = names[index];
-      if (result.status === "fulfilled") details[name] = result.value;
-      else details.inspectionErrors[name] = result.reason?.message || String(result.reason);
-    }
-    if (!details.jobs) {
-      try { details.jobs = durableJobs(dataDir); }
-      catch (cause) { details.inspectionErrors.durableJobs = cause.message; }
-    }
-    t.diagnostic(JSON.stringify(failureDiagnostics(details)));
-    throw error;
-  }
+  phase = "final completion";
+  const finalJobs = await until("all 100 jobs reach acceptance terminal states", async () => {
+    const current = await jobs();
+    return current.length === 100 && current.every(done) && current;
+  }, 40000);
   await disconnect(eventClient);
   const observed = await stats();
+  phase = "final paid-job invariants";
   const succeeded = finalJobs.filter((job) => job.state === "succeeded");
   const failures = finalJobs.filter((job) => job.state === "failed");
   const reviews = finalJobs.filter((job) => job.state === "needs_review");
@@ -301,6 +313,7 @@ test("100 jobs survive three process crashes without duplicate paid creates or l
   const unexplained = reviews.filter((job) => !dropped.has(job.prompt) && !killedSubmissions.has(job.prompt));
   assert.equal(unexplained.length, 0); // (d)
   assert.ok([...dropped].every((value) => reviews.some((job) => job.prompt === value)));
+  phase = "output verification";
   const newFiles = outputs.flatMap(filesUnder).filter((filename) => filename !== sentinel);
   assert.equal(newFiles.length, succeeded.length);
   assert.equal(new Set(succeeded.map((job) => job.output.path)).size, succeeded.length);
@@ -314,6 +327,7 @@ test("100 jobs survive three process crashes without duplicate paid creates or l
   const partialFiles = outputs.flatMap(filesUnder).filter((filename) => filename.endsWith(".part"));
   assert.equal(partialFiles.length, 0);
   assert.deepEqual(fs.readFileSync(sentinel), sentinelBytes); // (e)
+  phase = "secrets and concurrency limits";
   // Stop before scanning so the scan includes shutdown output and final store flushes.
   await stop(app);
   const scan = [...captured, ...processOutput, ...[dataDir, ...outputs].flatMap(filesUnder).flatMap((filename) => [filename, fs.readFileSync(filename).toString("utf8")])];
@@ -338,4 +352,5 @@ test("100 jobs survive three process crashes without duplicate paid creates or l
     g: { maxInFlight: observed.maxInFlight, configured: { "/lane-a": 3, "/lane-b": 5 }, maxDownloadsActive: observed.maxDownloadsActive },
     rateLimitResponses: throttled.size, sseDisconnects, sigkills: kills,
   }));
+  completed = true;
 });

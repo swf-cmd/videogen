@@ -6,7 +6,7 @@ const vm = require("node:vm");
 
 const source = fs.readFileSync(path.join(__dirname, "../public/queue-view.js"), "utf8");
 
-function harness({ preview = false, request = async () => ({ jobs: [], seq: 0 }) } = {}) {
+function harness({ preview = false, request = async (endpoint) => endpoint === "/api/keys" ? [] : ({ jobs: [], batches: [], lanes: [], seq: 0 }) } = {}) {
   const window = new EventTarget();
   const listeners = new Map();
   const add = window.addEventListener.bind(window);
@@ -26,6 +26,9 @@ function harness({ preview = false, request = async () => ({ jobs: [], seq: 0 })
   QueueView.prototype.bindControls = function () {};
   QueueView.prototype.render = function () {};
   QueueView.prototype.renderJobs = function () {};
+  QueueView.prototype.renderBatches = function () {};
+  QueueView.prototype.renderLanes = function () {};
+  QueueView.prototype.renderGallerySummary = function () {};
   const view = new QueueView();
   view.message = (text, error) => messages.push({ text, error });
   const dispatch = (type, persisted = false) => { const event = new Event(type); Object.defineProperty(event, "persisted", { value: persisted }); window.dispatchEvent(event); };
@@ -36,7 +39,7 @@ function harness({ preview = false, request = async () => ({ jobs: [], seq: 0 })
 test("failed initial snapshots are reported and live refresh still recovers", async () => {
   const app = harness();
   let snapshots = 0;
-  app.view.refresh = async () => { if (++snapshots === 1) throw new Error("Snapshot unavailable"); };
+  app.view.loadJobs = async () => { if (++snapshots === 1) throw new Error("Snapshot unavailable"); };
   await app.view.run(() => app.view.start());
   assert.deepEqual(app.messages, [{ text: "Snapshot unavailable", error: true }]);
   assert.equal(app.intervals.size, 2, "snapshot failure must not prevent ongoing status updates");
@@ -53,7 +56,7 @@ test("failed initial snapshots are reported and live refresh still recovers", as
 test("back-forward page restoration reconnects once and rejects events from the closed stream", async () => {
   const app = harness();
   let snapshots = 0, changes = 0;
-  app.view.refresh = async () => { snapshots += 1; };
+  app.view.loadJobs = async () => { snapshots += 1; };
   app.view.applyEvent = () => { changes += 1; };
   await app.view.start();
   await app.view.start();
@@ -61,8 +64,8 @@ test("back-forward page restoration reconnects once and rejects events from the 
   assert.equal(app.intervals.size, 2);
   assert.equal(app.listeners.get("pagehide"), 1);
   assert.equal(app.listeners.get("pageshow"), 1);
-  app.sources[0].onopen();
-  assert.equal(app.timeouts.size, 1);
+  await app.sources[0].onopen();
+  assert.equal(app.timeouts.size, 0, "opening the stream starts its snapshot immediately");
   app.dispatch("pagehide", true);
   assert.equal(app.intervals.size, 0);
   assert.equal(app.timeouts.size, 0);
@@ -71,9 +74,9 @@ test("back-forward page restoration reconnects once and rejects events from the 
   await app.tick();
   assert.equal(app.sources.length, 2, "repeated restoration must not duplicate the stream");
   assert.equal(app.intervals.size, 2);
-  assert.equal(snapshots, 2);
+  assert.equal(snapshots, 3);
   assert.equal(app.states.at(-1), "connectionReconnecting");
-  app.sources[1].onopen();
+  await app.sources[1].onopen();
   const event = new Event("change"); Object.defineProperty(event, "data", { value: "{}" });
   app.sources[0].onerror();
   app.sources[0].dispatchEvent(event);
@@ -82,7 +85,7 @@ test("back-forward page restoration reconnects once and rejects events from the 
   app.sources[1].dispatchEvent(event);
   assert.equal(changes, 1);
   app.dispatch("pagehide", true);
-  app.view.refresh = async () => { throw new Error("Restored snapshot unavailable"); };
+  app.view.loadJobs = async () => { throw new Error("Restored snapshot unavailable"); };
   app.dispatch("pageshow", true);
   await app.tick();
   assert.equal(app.sources.length, 3);
@@ -161,4 +164,103 @@ test("disconnect and reconnect reject all old snapshots before and after fresh l
   respond(oldRequests, "old-after-open", 850, 2, false); await old;
   assert.equal(app.view.jobs.get("one").state, "downloading"); assert.equal(app.view.batches[0].state, "downloading"); assert.equal(app.view.lanes[0].state, "downloading"); assert.equal(app.view.gallerySummary.kept, 8); assert.equal(app.view.keys[0].present, true);
   app.dispatch("pagehide");
+});
+
+function answerSnapshots(requests, { state = "running", seq = 1, fail = false } = {}) {
+  for (const { endpoint, resolve, reject } of requests) {
+    if (fail) { reject(new Error("Old connection failed")); continue; }
+    resolve(endpoint.startsWith("/api/jobs?") ? { jobs: [{ id: "one", state }], seq, nextCursor: null }
+      : endpoint.startsWith("/api/batches?") ? { batches: [{ id: "batch", state: "active" }], seq, nextCursor: null }
+      : endpoint === "/api/lanes" ? { lanes: [{ id: "lane", state: "active" }] }
+      : endpoint === "/api/keys" ? [{ present: true }] : { kept: 1 });
+  }
+}
+
+test("open and resync start fresh requests immediately and announce readiness only after all current snapshots finish", async () => {
+  const pending = [];
+  const app = harness({ request: (endpoint) => new Promise((resolve, reject) => pending.push({ endpoint, resolve, reject })) });
+  const initial = app.view.start(); const initialRequests = pending.splice(0);
+  assert.equal(app.states.at(-1), "connectionReconnecting");
+  answerSnapshots(initialRequests); await initial;
+  assert.equal(app.states.includes("ready"), false, "HTTP alone cannot mark a disconnected stream ready");
+  const opened = app.sources[0].onopen();
+  assert.equal(pending.length, 5); assert.equal(app.timeouts.size, 0); assert.equal(app.states.at(-1), "connectionSyncing");
+  app.sources[0].dispatchEvent(new Event("ready"));
+  assert.equal(pending.length, 5, "the ready event does not duplicate the open snapshot or skip synchronization");
+  const requests = pending.splice(0); const last = requests.pop();
+  answerSnapshots(requests, { state: "downloading", seq: 2 }); await new Promise(setImmediate);
+  assert.equal(app.states.at(-1), "connectionSyncing", "ready waits for lanes, keys and gallery as well as jobs");
+  answerSnapshots([last], { seq: 2 }); await opened;
+  assert.equal(app.states.at(-1), "ready"); assert.equal(app.view.jobs.get("one").state, "downloading");
+  app.view.scheduleRefresh(); assert.equal(app.timeouts.size, 1);
+  app.sources[0].dispatchEvent(new Event("resync"));
+  assert.equal(pending.length, 5); assert.equal(app.timeouts.size, 0); assert.equal(app.states.at(-1), "connectionSyncing");
+  answerSnapshots(pending.splice(0), { state: "succeeded", seq: 3 }); await app.view.snapshotPromise;
+  assert.equal(app.states.at(-1), "ready"); assert.equal(app.view.jobs.get("one").state, "succeeded");
+  app.dispatch("pagehide");
+});
+
+test("an obsolete connection's success or failure cannot announce readiness during the new synchronization", async () => {
+  const pending = [];
+  const app = harness({ request: (endpoint) => new Promise((resolve, reject) => pending.push({ endpoint, resolve, reject })) });
+  const initial = app.view.start(); const initialRequests = pending.splice(0);
+  const oldOpen = app.sources[0].onopen(); const oldRequests = pending.splice(0);
+  app.sources[0].onerror();
+  const newOpen = app.sources[0].onopen(); const currentRequests = pending.splice(0);
+  answerSnapshots(initialRequests); answerSnapshots(oldRequests, { fail: true }); await initial; await oldOpen;
+  assert.equal(app.states.at(-1), "connectionSyncing"); assert.equal(app.states.includes("ready"), false); assert.deepEqual(app.messages, []);
+  answerSnapshots(currentRequests, { state: "downloading", seq: 1 }); await newOpen;
+  assert.equal(app.states.at(-1), "ready"); assert.equal(app.view.jobs.get("one").state, "downloading");
+  app.dispatch("pagehide");
+});
+
+test("snapshots overlay newer events for visible and previously unseen jobs and never resurrect deletions", async () => {
+  const pending = [];
+  const app = harness({ request: () => new Promise((resolve) => pending.push(resolve)) });
+  app.view.jobs.set("known", { id: "known", state: "running", _seq: 5 });
+  app.view.jobs.set("deleted", { id: "deleted", state: "succeeded", _seq: 5 });
+  const old = app.view.loadJobs();
+  app.view.applyEvent({ type: "job", jobId: "known", state: "downloading", seq: 11 });
+  app.view.applyEvent({ type: "job", jobId: "new-to-page", state: "running", seq: 12 });
+  app.view.applyEvent({ type: "delete", jobId: "deleted", seq: 13 });
+  pending.shift()({ jobs: [{ id: "known", state: "running", prompt: "Full current metadata" }, { id: "new-to-page", state: "queued" }, { id: "deleted", state: "succeeded" }], seq: 10, nextCursor: null }); await old;
+  assert.equal(app.view.jobs.get("known").state, "downloading"); assert.equal(app.view.jobs.get("known").prompt, "Full current metadata");
+  assert.equal(app.view.jobs.get("new-to-page").state, "running"); assert.equal(app.view.jobs.has("deleted"), false);
+  app.view.applyEvent({ type: "delete", jobId: "known", seq: 9 });
+  app.view.applyEvent({ type: "job", jobId: "deleted", state: "running", seq: 12 });
+  assert.equal(app.view.jobs.has("known"), true); assert.equal(app.view.jobs.has("deleted"), false, "older replay events cannot undo newer state");
+  const acknowledged = app.view.loadJobs(); pending.shift()({ jobs: [{ id: "known", state: "downloading" }], seq: 13, nextCursor: null }); await acknowledged;
+  assert.equal(app.view.jobEvents.size, 0, "acknowledged changes are released");
+  const stale = app.view.loadJobs(); pending.shift()({ jobs: [{ id: "deleted", state: "succeeded" }], seq: 12, nextCursor: "old" }); await stale;
+  assert.equal(app.view.jobs.has("deleted"), false); assert.equal(app.view.jobs.get("known").state, "downloading"); assert.equal(app.view.nextJobCursor, null);
+  app.view.suspendLiveUpdates();
+});
+
+test("newer batch deletion and status events survive old snapshots and job state filters stay correct", async () => {
+  const pending = [];
+  const app = harness({ request: () => new Promise((resolve) => pending.push(resolve)) });
+  app.view.batches = [{ id: "deleted", state: "active" }, { id: "kept", state: "active" }];
+  const batches = app.view.loadBatches();
+  app.view.applyEvent({ type: "delete_batch", jobId: "deleted", seq: 2 });
+  app.view.applyEvent({ type: "batch", jobId: "kept", state: "paused", seq: 3 });
+  pending.shift()({ batches: [{ id: "deleted", state: "active" }, { id: "kept", state: "active" }], seq: 1, nextCursor: null }); await batches;
+  assert.equal(app.view.batches.length, 1); assert.equal(app.view.batches[0].state, "paused");
+  app.view.stateFilter = "running"; app.view.jobs.set("one", { id: "one", state: "running", _seq: 1 });
+  const jobs = app.view.loadJobs(); app.view.applyEvent({ type: "job", jobId: "one", state: "downloading", seq: 4 });
+  pending.shift()({ jobs: [{ id: "one", state: "running" }], seq: 3, nextCursor: null }); await jobs;
+  assert.equal(app.view.jobs.size, 0, "the old filtered snapshot cannot put a changed job back into the wrong state filter");
+  app.view.suspendLiveUpdates();
+});
+
+test("event overlays stay bounded without forgetting the safety barrier for evicted deletions", async () => {
+  const pending = [];
+  const app = harness({ request: () => new Promise((resolve) => pending.push(resolve)) });
+  app.view.jobs.set("deleted-1", { id: "deleted-1", state: "succeeded", _seq: 0 });
+  for (let seq = 1; seq <= 2001; seq += 1) app.view.applyEvent({ type: "delete", jobId: `deleted-${seq}`, seq });
+  assert.equal(app.view.jobEvents.size, 2000); assert.equal(app.view.jobEventFloor, 1);
+  const stale = app.view.loadJobs(); pending.shift()({ jobs: [{ id: "deleted-1", state: "succeeded" }], seq: 0, nextCursor: null }); await stale;
+  assert.equal(app.view.jobs.has("deleted-1"), false, "eviction must not let an older snapshot revive the deleted row");
+  const fresh = app.view.loadJobs(); pending.shift()({ jobs: [], seq: 2001, nextCursor: null }); await fresh;
+  assert.equal(app.view.jobEvents.size, 0); assert.equal(app.view.jobs.size, 0);
+  app.view.suspendLiveUpdates();
 });

@@ -2,9 +2,43 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
+const { performance } = require("node:perf_hooks");
+const { isMainThread } = require("node:worker_threads");
 
 const PROCESS_IDENTITY = /^(?:(?:linux|darwin):1|win32:[12]):[a-f0-9]{64}$/;
-let selfIdentity;
+const PROCESS_INSTANCE = Symbol.for("videogen.store.processInstance.v3");
+const BIRTH_TIME_TOLERANCE_MS = 2000;
+const INSTANCE_TOKEN = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+
+// UTC is useful for confirming an approximate match, but cannot prove PID reuse:
+// an earlier wall-clock correction can also explain different start timestamps.
+function estimateProcessStart({ now = Date.now, uptime = process.uptime, timeOrigin = performance.timeOrigin } = {}) {
+  const before = now();
+  const startedAtMs = Math.round(before - uptime() * 1000);
+  const after = now();
+  return { startedAtMs, clockReliable: after >= before && after - before <= 100 &&
+    Math.abs(startedAtMs - timeOrigin) <= BIRTH_TIME_TOLERANCE_MS };
+}
+
+function selfProcessIdentity() {
+  // process survives a CommonJS module reload. Worker isolates cannot compare
+  // their own random token against another isolate that shares the same PID.
+  if (!process[PROCESS_INSTANCE]) {
+    Object.defineProperty(process, PROCESS_INSTANCE, { value: Object.freeze({
+      version: 3, platform: process.platform, ...estimateProcessStart(),
+      instanceToken: isMainThread ? crypto.randomUUID() : null,
+      kernelIdentity: process.platform === "linux" ? processIdentity(process.pid) : null,
+    }) });
+  }
+  return process[PROCESS_INSTANCE];
+}
+
+function validProcessInstance(identity) {
+  return identity && typeof identity === "object" && identity.version === 3 &&
+    ["linux", "darwin", "win32"].includes(identity.platform) &&
+    Number.isSafeInteger(identity.startedAtMs) && identity.startedAtMs > 0 &&
+    typeof identity.clockReliable === "boolean";
+}
 
 function pidAlive(pid) {
   if (!Number.isSafeInteger(pid) || pid < 1 || pid > 2147483647) return false;
@@ -23,10 +57,10 @@ function readSmallFile(filename) {
 
 // Return a stable kernel-backed creation identity, never executable paths or
 // command lines. A failed/unsupported query means "unknown", not a dead owner.
-function processIdentity(pid, { platform = process.platform, read = readSmallFile, run = spawnSync } = {}) {
+function queryProcessIdentity(pid, { platform = process.platform, read = readSmallFile, run = spawnSync } = {}) {
   if (!Number.isSafeInteger(pid) || pid < 1 || pid > 2147483647) return null;
   try {
-    let start;
+    let start, startedAtMs = null;
     if (platform === "linux") {
       const boot = read("/proc/sys/kernel/random/boot_id")?.trim();
       const stat = read(`/proc/${pid}/stat`);
@@ -54,22 +88,75 @@ function processIdentity(pid, { platform = process.platform, read = readSmallFil
     } else return null;
     // Native StartTime preserves finer precision than CIM CreationDate. Never
     // compare a v1 CIM value with v2 ticks and mistake a live owner for PID reuse.
-    return `${platform}:${platform === "win32" ? 2 : 1}:${digest(start)}`;
+    if (platform === "darwin") startedAtMs = Date.parse(`${start} GMT`);
+    else if (platform === "win32") startedAtMs = Number((BigInt(start) - 621355968000000000n) / 10000n);
+    return { identity: `${platform}:${platform === "win32" ? 2 : 1}:${digest(start)}`, platform,
+      startedAtMs: Number.isSafeInteger(startedAtMs) && startedAtMs > 0 ? startedAtMs : null };
   } catch { return null; }
 }
 
-function ownerAlive(owner, lookup = processIdentity, alive = pidAlive) {
-  try { if (!alive(owner.pid)) return false; } catch { return true; }
-  if (!PROCESS_IDENTITY.test(owner.processIdentity || "")) return true;
-  let current;
-  try { current = lookup(owner.pid); } catch { return true; }
-  // Do not compare different platforms/identity versions after a folder move.
-  if (!PROCESS_IDENTITY.test(current || "") || current.split(":").slice(0, 2).join(":") !== owner.processIdentity.split(":").slice(0, 2).join(":")) return true;
-  return current === owner.processIdentity;
+function processIdentity(pid, options) {
+  return queryProcessIdentity(pid, options)?.identity ?? null;
 }
 
-function locked() {
-  return Object.assign(new Error("dataLocked"), { code: "dataLocked" });
+function isExactIdentity(identity) {
+  return typeof identity === "string" && PROCESS_IDENTITY.test(identity);
+}
+
+function validInstanceToken(token) {
+  return typeof token === "string" && INSTANCE_TOKEN.test(token);
+}
+
+function exactIdentityStatus(previous, current) {
+  // Do not compare different platforms/identity versions after a folder move.
+  if (!isExactIdentity(previous) || !isExactIdentity(current) ||
+      current.split(":").slice(0, 2).join(":") !== previous.split(":").slice(0, 2).join(":")) return null;
+  return current === previous
+    ? { alive: true, reason: "ownerAlive" }
+    : { alive: false, reason: "processInstanceChanged" };
+}
+
+function ownerStatus(owner, lookup = queryProcessIdentity, alive = pidAlive,
+  { self = selfProcessIdentity(), mainThread = isMainThread } = {}) {
+  const unknown = { alive: true, reason: "ownershipUnverifiable" };
+  try { if (!alive(owner.pid)) return { alive: false, reason: "ownerExited" }; } catch { return unknown; }
+  const previous = owner.processIdentity;
+  const instance = validProcessInstance(previous);
+  if (!instance && !isExactIdentity(previous)) return unknown;
+  if (owner.pid === process.pid) {
+    // Never launch a shell to identify ourselves. A main-thread lifetime token
+    // is exact across wall-clock changes and boots; worker-local tokens are not.
+    if (!mainThread) return unknown;
+    if (instance && previous.platform === self.platform &&
+        validInstanceToken(previous.instanceToken) && validInstanceToken(self.instanceToken)) {
+      return previous.instanceToken === self.instanceToken
+        ? { alive: true, reason: "ownerAlive" }
+        : { alive: false, reason: "processInstanceChanged" };
+    }
+    return exactIdentityStatus(instance ? previous.kernelIdentity : previous, self.kernelIdentity) || unknown;
+  }
+  let current;
+  try { current = lookup(owner.pid); } catch { return unknown; }
+  if (typeof current === "string") current = { identity: current };
+  if (!current) return unknown;
+  const exact = exactIdentityStatus(instance ? previous.kernelIdentity : previous, current.identity);
+  if (exact) return exact;
+  if (instance && previous.platform === current.platform && previous.clockReliable &&
+      Number.isSafeInteger(current.startedAtMs) && current.startedAtMs > 0 &&
+      Math.abs(previous.startedAtMs - current.startedAtMs) <= BIRTH_TIME_TOLERANCE_MS) {
+    return { alive: true, reason: "processStartMatches" };
+  }
+  // A timestamp mismatch is not proof of death. Keep the lock when a creation
+  // identity was not recorded, including across reboots or wall-clock jumps.
+  return unknown;
+}
+
+function ownerAlive(owner, lookup, alive, options) {
+  return ownerStatus(owner, lookup, alive, options).alive;
+}
+
+function locked(reason = "ownershipUnverifiable") {
+  return Object.assign(new Error("dataLocked"), { code: "dataLocked", details: { reason } });
 }
 
 function digest(value) {
@@ -98,21 +185,21 @@ function sameOwner(filename, expected) {
 }
 
 class InstanceLock {
-  constructor(directory, port, checkpoint = () => {}, { lookupIdentity = processIdentity, isAlive = pidAlive } = {}) {
+  constructor(directory, port, checkpoint = () => {}, { lookupIdentity = queryProcessIdentity, isAlive = pidAlive,
+    selfIdentity = selfProcessIdentity(), mainThread = isMainThread } = {}) {
     this.directory = directory;
     this.filename = path.join(directory, "lock");
     this.port = port;
     this.checkpoint = checkpoint;
     this.lookupIdentity = lookupIdentity;
     this.isAlive = isAlive;
-    // Only cache this process's successful identity. Foreign PIDs must always
-    // be queried again because they can exit and be reused between attempts.
-    try {
-      this.processIdentity = lookupIdentity === processIdentity
-        ? selfIdentity ||= processIdentity(process.pid)
-        : lookupIdentity(process.pid);
-    } catch { this.processIdentity = null; }
-    if (!PROCESS_IDENTITY.test(this.processIdentity || "")) this.processIdentity = null;
+    this.processIdentity = selfIdentity;
+    this.identityOptions = { self: selfIdentity, mainThread };
+  }
+
+  assertStale(owner) {
+    const status = ownerStatus(owner, this.lookupIdentity, this.isAlive, this.identityOptions);
+    if (status.alive) throw locked(status.reason);
   }
 
   create() {
@@ -155,7 +242,7 @@ class InstanceLock {
         if (error.code !== "EEXIST") throw error;
       } finally { fs.unlinkSync(temporary); }
       const owner = readOwner(filename);
-      if (ownerAlive(owner, this.lookupIdentity, this.isAlive)) throw locked();
+      this.assertStale(owner);
       previous.push({ filename, owner });
       // Dead reclaimers are followed, never unlinked and raced for again.
       filename = path.join(this.directory, `.lock-reclaim-${digest(`${filename}:${owner.identity}`)}`);
@@ -183,7 +270,7 @@ class InstanceLock {
       let old;
       try { old = readOwner(this.filename); }
       catch (error) { if (error.code === "ENOENT") continue; throw error; }
-      if (ownerAlive(old, this.lookupIdentity, this.isAlive)) throw locked();
+      this.assertStale(old);
       let claim;
       try { claim = this.claim(old); }
       catch (error) {
@@ -215,4 +302,4 @@ class InstanceLock {
   }
 }
 
-module.exports = { InstanceLock, pidAlive, processIdentity, ownerAlive };
+module.exports = { InstanceLock, pidAlive, processIdentity, queryProcessIdentity, ownerAlive, ownerStatus, estimateProcessStart };

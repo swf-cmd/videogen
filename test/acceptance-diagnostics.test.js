@@ -19,3 +19,22 @@ test("acceptance failures explain review-slot exhaustion and redact secrets befo
   assert.equal(result.processLogs[0].includes("123456789"), false);
   assert.ok(result.processLogs[0].length <= 16000);
 });
+
+test("acceptance diagnostics remove POSIX, Windows and JSON-escaped paths from failures and logs", () => {
+  const posix = "/Users/private-person/private-work";
+  const windows = "C:\\Users\\private-person\\private-work";
+  const secret = "mock-private-credential";
+  const result = failureDiagnostics({
+    phase: "final paid-job invariants",
+    jobs: [{ id: "failed", state: "failed", error: { providerMessage: `${secret} at ${windows}\\output.mp4` } }],
+    inspectionErrors: { jobs: `read ${posix}/jobs.ndjson` },
+    logs: [JSON.stringify({ message: `request ${secret} at ${windows}\\data` }), `${windows.replaceAll("\\", "/")}/data`],
+    paths: [posix, windows], secrets: [secret],
+  });
+  const serialized = JSON.stringify(result);
+  assert.equal(serialized.includes(secret), false);
+  assert.equal(serialized.includes("private-person"), false);
+  assert.equal(serialized.includes("private-work"), false);
+  assert.equal(result.failures[0].error.providerMessage, "[REDACTED] at [PATH]\\output.mp4");
+  assert.equal(result.inspectionErrors.jobs, "read [PATH]/jobs.ndjson");
+});

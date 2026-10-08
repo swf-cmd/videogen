@@ -90,11 +90,17 @@
   function normalizePath(value) { return String(value).normalize("NFC").replace(/\\/g, "/").replace(/^\.\//, ""); }
   function findImageFile(name, files) {
     const target = normalizePath(name);
-    const exact = files.filter((file) => normalizePath(file.webkitRelativePath || file.name) === target);
-    if (exact.length === 1) return { file: exact[0] };
-    const suffix = files.filter((file) => normalizePath(file.webkitRelativePath || file.name).endsWith(`/${target}`) || normalizePath(file.name) === target);
-    if (suffix.length === 1) return { file: suffix[0] };
-    return { error: suffix.length || exact.length ? "imageAmbiguous" : "imageMissing" };
+    const candidates = files.map((file) => ({ file, path: normalizePath(file.webkitRelativePath || file.name), name: normalizePath(file.name) }));
+    const choose = (matches) => matches.length === 1 ? { file: matches[0].file } : { error: "imageAmbiguous" };
+    const exact = candidates.filter((entry) => entry.path === target);
+    if (exact.length) return choose(exact);
+    const suffix = candidates.filter((entry) => entry.path.endsWith(`/${target}`) || entry.name === target);
+    if (suffix.length) return choose(suffix);
+    // A case-insensitive fallback is safe only when the whole candidate set is
+    // unique. Never select the first of two different frames with folded names.
+    const folded = target.toLowerCase();
+    const matches = candidates.filter((entry) => entry.path.toLowerCase() === folded || entry.path.toLowerCase().endsWith(`/${folded}`) || entry.name.toLowerCase() === folded);
+    return matches.length ? choose(matches) : { error: "imageMissing" };
   }
   function compareImageFiles(a, b) { return normalizePath(a.webkitRelativePath || a.name).localeCompare(normalizePath(b.webkitRelativePath || b.name), "en", { numeric: true, sensitivity: "base" }); }
   function imageVariables(file, index) { return { filename: file.name, stem: file.name.replace(/\.[^.]+$/, ""), index: index + 1 }; }

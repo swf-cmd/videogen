@@ -17,6 +17,8 @@ async function startServer() {
   const report = (error) => {
     if (error?.code === "dataRecoveryRequired") {
       console.error(st(language, error.code, { directory: error.directory }));
+    } else if (error?.code === "dataLocked" && error.details?.reason === "ownershipUnverifiable") {
+      console.error(st(language, "dataLockOwnerUncertain"));
     } else if (error?.syscall === "link" && ["ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EPERM"].includes(error.code)) {
       const messages = {
         en: "The data directory must allow hard links (exFAT is unsupported). Choose a writable directory on a local system disk with VIDEOGEN_DATA_DIR.",

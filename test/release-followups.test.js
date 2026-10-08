@@ -77,6 +77,21 @@ test('damaged saved endpoints fail with recovery guidance before recovery writes
   }
 });
 
+test('startup explains unverifiable lock ownership without changing the old lock', t => {
+  const dir = directory(t), filename = path.join(dir, 'lock');
+  const saved = JSON.stringify({ pid: process.pid, token: 'legacy-owner-without-identity' });
+  fs.writeFileSync(filename, saved);
+  const child = spawnSync(process.execPath, ['server.js'], { cwd: path.resolve(__dirname, '..'), env: { ...process.env, VIDEOGEN_DATA_DIR: dir, VIDEOGEN_LANGUAGE: 'en', PORT: '5188' }, encoding: 'utf8', timeout: 10000 });
+  assert.equal(child.status, 1, child.stderr);
+  assert.match(child.stderr, /could not be verified/);
+  assert.doesNotMatch(child.stdout, /running at/);
+  assert.equal(fs.readFileSync(filename, 'utf8'), saved);
+  for (const language of Object.keys(SERVER_MESSAGES)) {
+    assert.notEqual(st(language, 'dataLockOwnerUncertain'), 'dataLockOwnerUncertain');
+    assert.match(st(language, 'dataRecoveryRequired', { directory: dir }), /recover-data\.cjs/);
+  }
+});
+
 test('compaction retries temporary busy replacements and preserves concurrent tail', async t => {
   for (const code of ['EPERM', 'EBUSY']) {
     const dir = directory(t);
@@ -106,7 +121,7 @@ test('compaction retries temporary busy replacements and preserves concurrent ta
   }
 });
 
-test('persistent or non-transient replacement failure stays bounded and recoverable', async t => {
+test('persistent busy replacement defers maintenance; storage failures stay fatal', async t => {
   for (const code of ['EPERM', 'ENOSPC']) {
     const dir = directory(t);
     let store = new JobStore(dir);
@@ -117,14 +132,96 @@ test('persistent or non-transient replacement failure stays bounded and recovera
       if (to === path.join(dir, 'jobs.ndjson')) { calls++; throw Object.assign(new Error(code), { code }); }
       return original(from, to);
     };
-    try { await assert.rejects(store.compactAsync(), { code }); }
+    try {
+      if (code === 'EPERM') {
+        await store.compactAsync();
+        assert.equal(store.failed, undefined);
+        assert.ok(store.compactionRetryAt > Date.now());
+        store.add(job('still-writable'));
+      } else {
+        await assert.rejects(store.compactAsync(), { code });
+        assert.equal(store.failed, true);
+      }
+    }
     finally { fs.renameSync = original; store.close(); }
     assert.equal(calls, code === 'EPERM' ? 6 : 1);
     store = new JobStore(dir);
     assert.equal(store.get('saved').prompt, 'A red fox');
+    if (code === 'EPERM') assert.equal(store.get('still-writable').prompt, 'A red fox');
     store.add(job('reopened'));
     store.close();
   }
+});
+
+test('busy snapshots and journals retry in the background without losing paid IDs', async t => {
+  for (const name of ['jobs.snapshot.ndjson', 'jobs.ndjson']) {
+    const dir = directory(t), store = new JobStore(dir);
+    store.add(job('paid'));
+    const original = fs.renameSync, notices = [];
+    let held = true, calls = 0;
+    store.on('maintenance', notice => notices.push(notice));
+    fs.renameSync = (from, to) => {
+      if (to === path.join(dir, name)) {
+        calls++;
+        if (held) throw Object.assign(new Error('scanner hold'), { code: 'EBUSY' });
+      }
+      return original(from, to);
+    };
+    try {
+      const compacting = store.compactAsync();
+      store.add(job('during'));
+      await compacting;
+      assert.equal(calls, 6);
+      assert.equal(notices.length, 1);
+      assert.equal(notices[0].retryAfterMs, 1000);
+      store.update('paid', { state: 'submitting', attempts: { create: 1, poll: 0, download: 0 } });
+      store.update('paid', { state: 'running', remote: { id: 'already-charged' } });
+      store.flush();
+      // Read the on-disk pair during deferral, without changing the active log.
+      const restored = new JobStore(dir, { lock: false, recover: false });
+      assert.equal(restored.get('paid').remote.id, 'already-charged');
+      assert.ok(restored.get('during'));
+      restored.close();
+      held = false;
+      const deadline = Date.now() + 5000;
+      while (store.compactionRetryAt && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 30));
+      if (store.compacting) await store.compacting;
+      assert.equal(store.compactionRetryAt, 0, 'background maintenance must recover');
+      assert.equal(store.failed, undefined);
+      assert.ok(calls > 6);
+      store.add(job('after'));
+    } finally { fs.renameSync = original; store.close(); }
+    const restored = new JobStore(dir);
+    assert.equal(restored.get('paid').remote.id, 'already-charged');
+    assert.ok(restored.get('during'));
+    assert.ok(restored.get('after'));
+    restored.close();
+  }
+});
+
+test('busy journal replacement fails closed if the original log cannot be reopened', async t => {
+  const dir = directory(t), store = new JobStore(dir);
+  store.add(job('saved'));
+  const rename = fs.renameSync, open = fs.openSync;
+  let closed = false;
+  store.onCheckpoint = name => { if (name === 'asyncCompact:journalClosed') closed = true; };
+  fs.renameSync = (from, to) => {
+    if (to === path.join(dir, 'jobs.ndjson')) throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+    return rename(from, to);
+  };
+  fs.openSync = (name, ...args) => {
+    if (closed && name === path.join(dir, 'jobs.ndjson')) throw Object.assign(new Error('cannot write'), { code: 'EACCES' });
+    return open(name, ...args);
+  };
+  try {
+    await assert.rejects(store.compactAsync(), { code: 'EACCES' });
+    assert.equal(store.failed, true);
+    assert.throws(() => store.add(job('unsafe')), { code: 'storeClosed' });
+  } finally { fs.renameSync = rename; fs.openSync = open; store.close(); }
+  const restored = new JobStore(dir);
+  assert.ok(restored.get('saved'));
+  assert.equal(restored.get('unsafe'), undefined);
+  restored.close();
 });
 
 test('model discovery strips raw provider fields and credentials', async t => {

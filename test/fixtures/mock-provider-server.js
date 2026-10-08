@@ -71,7 +71,13 @@ async function startMockServer(initial = {}) {
         stats.accepted.push({ id, prompt, lane, at: createdAt });
         track(res, "createPending", job);
         job.timer = setTimeout(() => { job.status = fault === "moderation" ? "failed" : "completed"; job.completedAt = Date.now(); job.expiresAt = job.completedAt + config.resultTtlMs; stats.inFlight[lane] -= 1; }, phaseDelay("render", prompt));
-        if (["drop_response", "accepted_no_response"].includes(fault)) { stats.faults.push({ prompt, type: "drop_response", at: createdAt }); return; }
+        if (["drop_response", "accepted_no_response"].includes(fault)) {
+          stats.faults.push({ prompt, type: fault, at: createdAt });
+          // Lost replies are explicit transport failures. A separate fault
+          // leaves the socket open for tests that intentionally exercise timeout.
+          if (fault === "drop_response") req.socket.destroy();
+          return;
+        }
         await delay(phaseDelay("create", prompt));
         if (!res.destroyed) job.responseSentAt = Date.now();
         return json(res, 200, { id, status: job.status, created_at: Math.floor(createdAt / 1000) });

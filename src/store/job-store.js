@@ -36,6 +36,18 @@ function replaceFile(source, destination) {
   }
 }
 
+function busy(error) { return ["EPERM", "EBUSY"].includes(error.code); }
+
+// Only use before changing the journal. An unsuccessful snapshot replacement
+// leaves the original append handle and every durable record intact.
+function replaceSnapshot(source, destination) {
+  try { replaceFile(source, destination); }
+  catch (error) {
+    if (busy(error)) error.compactionRetryAllowed = true;
+    throw error;
+  }
+}
+
 function freeze(value) {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
     for (const item of Object.values(value)) freeze(item);
@@ -328,7 +340,7 @@ class JobStore extends EventEmitter {
         fs.fsyncSync(fd);
         this.checkpoint("compact:fsynced");
       } finally { fs.closeSync(fd); }
-      replaceFile(temporary, target);
+      replaceSnapshot(temporary, target);
       this.checkpoint("compact:renamed");
       syncDirectory(this.directory);
       this.checkpoint("compact:directorySynced");
@@ -352,7 +364,11 @@ class JobStore extends EventEmitter {
       this.flush();
       this.checkpoint("compact:logSynced");
       this.logBytes = 0; this.eventsSinceCompact = 0;
-    } catch (error) { this.failed = true; throw error; }
+      this.compactionSucceeded();
+    } catch (error) {
+      if (this.deferCompaction(error)) { this.scheduleCompaction(); return; }
+      this.failed = true; throw error;
+    }
   }
 
   removeLegacySnapshot() {
@@ -361,15 +377,32 @@ class JobStore extends EventEmitter {
   }
 
   scheduleCompaction() {
-    if (this.fd === undefined || this.failed || this.compactionTimer || this.compacting || this.logBytes < this.compactBytes && this.eventsSinceCompact < this.compactEvents) return;
+    if (this.fd === undefined || this.failed || this.compactionTimer || this.compacting || !this.compactionRetryAt && this.logBytes < this.compactBytes && this.eventsSinceCompact < this.compactEvents) return;
     this.compactionTimer = setTimeout(() => {
       this.compactionTimer = null;
       this.compactAsync().catch(error => {
         this.failed = true;
         this.emit("failure", error);
       });
-    }, 100);
+    }, this.compactionRetryAt ? Math.max(100, this.compactionRetryAt - Date.now()) : 100);
     this.compactionTimer.unref?.();
+  }
+
+  deferCompaction(error) {
+    if (!error.compactionRetryAllowed || !busy(error) || this.fd === undefined || this.failed) return false;
+    this.compactionRetryDelay = Math.min(30000, (this.compactionRetryDelay || 500) * 2);
+    this.compactionRetryAt = Date.now() + this.compactionRetryDelay;
+    clearTimeout(this.compactionTimer);
+    this.compactionTimer = null;
+    this.emit("maintenance", { code: "compactionDeferred", filesystemCode: error.code, retryAfterMs: this.compactionRetryDelay });
+    return true;
+  }
+
+  compactionSucceeded() {
+    this.compactionRetryAt = 0;
+    this.compactionRetryDelay = 0;
+    clearTimeout(this.compactionTimer);
+    this.compactionTimer = null;
   }
 
   compactAsync() {
@@ -381,6 +414,18 @@ class JobStore extends EventEmitter {
     const target = path.join(this.directory, "jobs.snapshot.ndjson");
     const temporary = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`;
     this.compacting = (async () => {
+      // Do not create another full snapshot while a scanner still holds the
+      // previous temporary file. At most one deferred temporary is retained.
+      if (this.compactionTemporary) {
+        try { fs.unlinkSync(this.compactionTemporary); }
+        catch (error) {
+          if (error.code !== "ENOENT") {
+            if (busy(error)) error.compactionRetryAllowed = true;
+            throw error;
+          }
+        }
+        this.compactionTemporary = null;
+      }
       const handle = await fs.promises.open(temporary, "w", 0o600);
       try {
         let chunk = "";
@@ -394,7 +439,7 @@ class JobStore extends EventEmitter {
       } finally { await handle.close(); }
       if (this.fd === undefined || this.failed) return;
       // Finish synchronously so no append can race the final journal switch.
-      replaceFile(temporary, target);
+      replaceSnapshot(temporary, target);
       this.checkpoint("asyncCompact:snapshotRenamed");
       syncDirectory(this.directory);
       this.checkpoint("asyncCompact:snapshotDirectorySynced");
@@ -423,7 +468,24 @@ class JobStore extends EventEmitter {
       this.fd = undefined;
       fs.closeSync(previousFd);
       this.checkpoint("asyncCompact:journalClosed");
-      replaceFile(next, log);
+      try { replaceFile(next, log); }
+      catch (error) {
+        if (busy(error)) {
+          // Reopen the *same* original journal before allowing appends again.
+          // Snapshot + full journal replay safely even if we crash while the
+          // scanner still holds the destination. Never guess after a swap.
+          const before = fs.lstatSync(log);
+          const same = stat => stat.isFile() && stat.dev === expected.dev && stat.ino === expected.ino;
+          if (before.isSymbolicLink() || !same(before)) throw storeError();
+          const reopened = fs.openSync(log, fs.constants.O_WRONLY | fs.constants.O_APPEND | (fs.constants.O_NOFOLLOW || 0));
+          try {
+            if (!same(fs.fstatSync(reopened))) throw storeError();
+            this.fd = reopened;
+          } catch (failure) { fs.closeSync(reopened); throw failure; }
+          error.compactionRetryAllowed = true;
+        }
+        throw error;
+      }
       this.checkpoint("asyncCompact:journalRenamed");
       syncDirectory(this.directory);
       this.checkpoint("asyncCompact:journalDirectorySynced");
@@ -431,10 +493,24 @@ class JobStore extends EventEmitter {
       this.checkpoint("asyncCompact:journalReopened");
       this.logBytes = expected.size - offset;
       this.eventsSinceCompact = this.seq - seq;
-    })().catch(error => { this.failed = true; throw error; }).finally(async () => {
-      await fs.promises.unlink(temporary).catch(error => { if (error.code !== "ENOENT") throw error; });
-      this.compacting = null;
-      this.scheduleCompaction();
+      this.compactionSucceeded();
+    })().catch(error => {
+      if (this.deferCompaction(error)) return;
+      this.failed = true; throw error;
+    }).finally(async () => {
+      try {
+        await fs.promises.unlink(temporary).catch(error => {
+          if (busy(error)) {
+            this.compactionTemporary = temporary;
+            error.compactionRetryAllowed = true;
+            // The earlier rename failure already scheduled its backoff.
+            if (!this.compactionRetryAt) this.deferCompaction(error);
+          } else if (error.code !== "ENOENT") { this.failed = true; throw error; }
+        });
+      } finally {
+        this.compacting = null;
+        this.scheduleCompaction();
+      }
     });
     return this.compacting;
   }

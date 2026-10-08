@@ -10,7 +10,7 @@ A local AI video batch studio: per-shot frames, CSV imports, gallery selection, 
 
 The recording uses local fixtures with no paid generation. The short preview is a synthetic playback test, **not an AI-generated quality sample**. Real provider samples are deferred until a user authorizes paid generation or supplies publishable clips.
 
-**Sora is retired.** Version **2.1.1** builds on the persistent queue introduced in 2.0.0, which replaces Sora2App's discontinued integration with a persistent queue. Jobs continue when you close the browser, and survive service restarts. The old OpenAI Batch workflow and discount are gone.
+**Sora is retired.** Version **2.1.2** builds on the persistent queue introduced in 2.0.0, which replaces Sora2App's discontinued integration with a persistent queue. Jobs continue when you close the browser, and survive service restarts. The old OpenAI Batch workflow and discount are gone.
 
 ## Start
 
@@ -130,3 +130,5 @@ Tests use Node's built-in runner, local mock providers and temporary directories
 The app uses CommonJS and classic browser scripts. Legacy generation/status/download routes are removed; the UI uses persistent batch/job APIs and `/api/events`. See [Contributing](CONTRIBUTING.md), [Changelog](CHANGELOG.md) and the [release checklist](docs/GITHUB_LAUNCH_CHECKLIST.md).
 
 [MIT license](LICENSE). Keep `runtime/`, generated media, local task data and credentials out of source control.
+
+For records damaged by older short-key redaction, see [offline quarantine recovery](docs/DATA_RECOVERY.md).
