@@ -25,7 +25,7 @@ test("OpenRouter contract builds exact fields and uses authenticated same-origin
   assert.equal(requests[2].options.headers.get("authorization"), "Bearer sk-or-test-secret");
 });
 
-test("OpenRouter refuses local first frames, missing IDs and malformed create JSON", async () => {
+test("OpenRouter refuses unverified local frame capabilities, missing IDs and malformed create JSON", async () => {
   const lane = { provider: "openrouter", baseUrl: "https://openrouter.ai/api/v1" };
   await assert.rejects(openrouter.create(createContext({ lane, assets: [{ buffer: Buffer.from("image") }] }), job), { category: "invalid_request", accepted: false });
   await assert.rejects(openrouter.create(createContext({ lane, fetchImpl: async () => response({ status: "pending" }) }), job), { category: "unknown_outcome" });

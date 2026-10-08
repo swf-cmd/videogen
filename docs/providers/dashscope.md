@@ -43,3 +43,7 @@ Choose Beijing or Singapore, then replace `workspace-id` in the displayed endpoi
 The catalog includes Wan 3.0 and Wan 3.0 Prime, with `pricingByRegion` in CNY. The app limits reference images to its supported JPEG/PNG/WebP formats and validates the documented dimensions before create. Image alpha/content constraints remain subject to provider validation. Polls with `UNKNOWN` become expired when the saved start time establishes 24-hour age; an unexpectedly early `UNKNOWN` is a protocol error and cannot cause resubmission. OSS result downloads carry no API key. Remote cancellation is not exposed because a supported endpoint was not established.
 
 Offline contract tests cover both request shapes, workspace checks, signed-result download headers, stale tasks, moderation/billing/throttling, malformed create responses and uncertain transport failures. No paid smoke call was made because `VIDEOGEN_LIVE_DASHSCOPE_KEY` was absent.
+
+## v2.1 first and last frames
+
+Wan3.0 accepts `input.media` with one `first_frame` and one `last_frame`, both as local base64 data URLs. Videogen requires the first frame, preserves role order, validates each image, and rejects duplicate/unknown roles before generation. [Official material-combination rules and first-last-frame example](https://help.aliyun.com/en/model-studio/wan3-video-generation-api-reference).

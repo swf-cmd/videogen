@@ -8,7 +8,8 @@ const { sendJson, sendText } = require("./responses");
 const { handleSelectOutputDir } = require("./handlers/select-dir");
 const { readBody } = require("./body");
 const { languageFromRequest, st, SERVER_MESSAGES } = require("../i18n/server-messages");
-const { MAX_BATCH_BYTES } = require("../config");
+const { MAX_BATCH_BYTES, MAX_BATCH_UPLOAD_BYTES, DEFAULT_OUTPUT_DIR } = require("../config");
+const { serveMedia } = require("./handlers/media");
 let application;
 function configureApplication(value) { application = value; }
 
@@ -82,13 +83,26 @@ async function handleRequest(req, res) {
 
     if (req.method === "POST" && url.pathname === "/api/select-output-dir") return await handleSelectOutputDir(req, res);
     if (req.method === "GET" && url.pathname === "/api/catalog") {
-      return sendJson(res, 200, { ...application.catalog, platform: process.platform, proxy: proxyInfo() });
+      return sendJson(res, 200, { ...application.catalog, platform: process.platform, defaultOutputDir: DEFAULT_OUTPUT_DIR, proxy: proxyInfo() });
     }
     if (req.method === "GET" && url.pathname === "/api/jobs") return sendJson(res, 200, application.store.list(Object.fromEntries(url.searchParams)));
     if (req.method === "GET" && url.pathname === "/api/events") return application.events.connect(req, res);
     if (req.method === "GET" && url.pathname === "/api/keys") return sendJson(res, 200, application.keys.list());
     if (req.method === "GET" && url.pathname === "/api/lanes") return sendJson(res, 200, { lanes: application.scheduler.laneList() });
     if (req.method === "GET" && url.pathname === "/api/batches") return sendJson(res, 200, application.batches(Object.fromEntries(url.searchParams)));
+    if (req.method === "GET" && url.pathname === "/api/gallery/summary") return sendJson(res, 200, application.gallery.summary(Object.fromEntries(url.searchParams)));
+    const media = /^\/api\/jobs\/([^/]+)\/media$/.exec(url.pathname);
+    if (["GET", "HEAD"].includes(req.method) && media) {
+      if (req.headers["sec-fetch-site"] && req.headers["sec-fetch-site"] !== "same-origin" || req.headers.origin && !requestOriginAllowed(req)) return sendText(res, 403, "Forbidden");
+      return await serveMedia(req, res, application.store.get(media[1]));
+    }
+    const regenerateEstimate = /^\/api\/jobs\/([^/]+)\/regenerate\/estimate$/.exec(url.pathname);
+    if (req.method === "GET" && regenerateEstimate) return sendJson(res, 200, application.gallery.estimate(regenerateEstimate[1]));
+    const curate = /^\/api\/jobs\/([^/]+)\/(curate|regenerate)$/.exec(url.pathname);
+    if (req.method === "POST" && curate) {
+      const { payload } = await readBody(req, languageFromRequest(req));
+      return sendJson(res, curate[2] === "regenerate" ? 201 : 200, application.gallery[curate[2]](curate[1], payload));
+    }
     const resource = /^\/api\/(jobs|batches)\/([^/]+)$/.exec(url.pathname);
     if (req.method === "GET" && resource) {
       const value = resource[1] === "jobs" ? application.store.get(resource[2]) : application.batch(resource[2]);
@@ -103,10 +117,11 @@ async function handleRequest(req, res) {
       return sendJson(res, 200, application.setKey(payload));
     }
     if (req.method === "POST" && url.pathname === "/api/batches") {
-      const { payload, file } = await readBody(req, languageFromRequest(req), MAX_BATCH_BYTES);
+      const limit = /^multipart\/form-data\b/i.test(req.headers["content-type"] || "") ? MAX_BATCH_UPLOAD_BYTES : MAX_BATCH_BYTES;
+      const { payload, file, files } = await readBody(req, languageFromRequest(req), limit);
       if (payload.apiKey !== undefined || payload.key !== undefined) throw new Error("useKeysEndpoint");
       payload.language = languageFromRequest(req);
-      const result = await application.prepare(payload, file);
+      const result = await application.prepare(payload, file, files);
       return sendJson(res, 201, { id: result.id, count: result.count });
     }
     const action = /^\/api\/(jobs|batches)\/([^/]+)\/(cancel|retry|resolve|pause|resume)$/.exec(url.pathname);
@@ -130,7 +145,7 @@ async function handleRequest(req, res) {
       return sendJson(res, 200, await application.refreshCatalog(refresh[1], payload));
     }
     if (req.method === "POST" && url.pathname === "/api/estimate") {
-      const { payload } = await readBody(req, languageFromRequest(req));
+      const { payload } = await readBody(req, languageFromRequest(req), MAX_BATCH_BYTES);
       return sendJson(res, 200, application.estimate(payload));
     }
     if (req.method === "POST" && url.pathname === "/api/history/clear") return sendJson(res, 200, application.clearHistory());

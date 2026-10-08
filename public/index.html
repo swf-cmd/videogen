@@ -48,6 +48,16 @@
             <label class="field span-full prompt-field"><span data-i18n="promptLabel">提示词队列</span><textarea id="prompt" name="prompt" rows="8" required></textarea><small id="promptMetaText" class="field-meta">0 字符</small></label>
             <label id="batchCountField" class="field"><span data-i18n="repeatLabel">重复次数</span><input id="batchCount" name="batchCount" type="number" min="1" step="1" value="1" inputmode="numeric" /><small class="field-meta" data-i18n="repeatNote">只有一条提示词时可重复生成</small></label>
             <div class="field span-full reference-field"><span data-i18n="inputReferenceLabel">首帧图片</span><div class="reference-input-row"><input id="inputReference" name="input_reference" type="file" accept="image/jpeg,image/png,image/webp" /><button id="clearInputReference" type="button" class="icon-button reference-clear" disabled data-i18n="inputReferenceClear">移除</button></div><div id="inputReferencePreview" class="reference-preview" hidden><img id="inputReferenceImage" alt="" /><strong id="inputReferenceName">-</strong></div><small id="inputReferenceMeta" class="field-meta"></small></div>
+            <section class="batch-import span-full" aria-labelledby="importHeading">
+              <h3 id="importHeading" data-i18n="batchImportTitle">逐条任务与批量导入</h3>
+              <p class="field-meta" data-i18n="batchImportNote">每条任务可设置首尾帧。CSV 和图片文件夹导入后，先逐行检查能力和价格，再确认提交。</p>
+              <label class="field"><span data-i18n="importTemplate">导入提示词模板（可选）</span><textarea id="importTemplate" rows="2" placeholder="A cinematic shot of {{subject}}"></textarea><small class="field-meta" data-i18n="templateNote">CSV 使用列名变量；文件夹支持 {{filename}}、{{stem}}、{{index}}。</small></label>
+              <div class="row-frame-grid"><label class="field"><span data-i18n="csvImport">导入 CSV</span><input id="csvImport" type="file" accept=".csv,text/csv" /></label><label class="field"><span data-i18n="folderImport">导入图片文件夹</span><input id="folderImport" type="file" accept="image/jpeg,image/png,image/webp" multiple webkitdirectory /></label></div>
+              <p class="field-meta" data-i18n="folderImportNote">先导入 CSV，再选择文件夹，可按 firstFrame / lastFrame 文件名匹配；否则每张图片创建一条任务。</p>
+              <button id="downloadCsvExample" type="button" class="text-button" data-i18n="downloadCsvExample">下载 CSV 示例</button>
+              <label class="check-field"><input id="rowMode" type="checkbox" /><span data-i18n="rowMode">启用逐条编辑（提交下方列表）</span></label>
+              <div id="rowEditorPanel" hidden><div class="inline-actions"><button id="rowsFromPrompts" type="button" class="secondary" data-i18n="rowsFromPrompts">用上方提示词重建列表</button><button id="addBatchRow" type="button" class="secondary" data-i18n="addBatchRow">添加任务</button></div><div id="batchRows" class="batch-rows"></div></div>
+            </section>
             <label class="field span-full"><span data-i18n="outputDirLabel">输出目录</span><div class="input-row output-dir-row"><input id="outputDir" name="outputDir" type="text" placeholder="~/Downloads/videogen" /><button id="selectOutputDir" type="button" class="icon-button output-dir-button" data-i18n="selectOutputDir">选择</button></div></label>
             <label class="field span-full"><span data-i18n="filenamePrefix">文件名前缀</span><input id="filename" name="filename" type="text" /></label>
             <label class="field span-full"><span data-i18n="budgetLabel">预算上限（可选）</span><input id="budget" type="number" min="0.000001" step="any" /><small id="budgetNote" class="field-meta"></small></label>
@@ -79,6 +89,7 @@
             <section class="batch-section" aria-labelledby="batchesHeading"><div class="section-head compact"><h3 id="batchesHeading" data-i18n="batchesTitle">批次</h3><div class="pager"><button id="batchPrevious" type="button" class="secondary" data-i18n="previousPage">上一页</button><span id="batchPage"></span><button id="batchNext" type="button" class="secondary" data-i18n="nextPage">下一页</button></div></div><div id="batchList" class="batch-list"></div></section>
             <section class="jobs-section" aria-labelledby="jobsHeading"><div class="section-head compact"><h3 id="jobsHeading" data-i18n="jobsTitle">任务</h3><span id="jobsCount" class="field-meta"></span></div>
               <div class="queue-filters"><label><span data-i18n="filterBatch">批次</span><select id="batchFilter"></select></label><label><span data-i18n="filterState">状态</span><select id="stateFilter"></select></label></div>
+              <section class="gallery-section" aria-labelledby="galleryHeading"><div class="section-head compact"><h3 id="galleryHeading" data-i18n="galleryTitle">画廊与挑片</h3><label class="compact-field"><span data-i18n="selectionFilter">挑片状态</span><select id="gallerySelection"><option value="all" data-i18n="allSelections">全部</option><option value="keep" data-i18n="selectionKeep">保留</option><option value="reject" data-i18n="selectionReject">淘汰</option><option value="unreviewed" data-i18n="selectionUnreviewed">未挑选</option></select></label></div><p id="gallerySummary" class="field-meta" aria-live="polite"></p><p class="field-meta" data-i18n="galleryCostNote">成本为已接受或可能已接受的生成请求估算，包含重生成；不是供应商账单。挑片状态不会删除文件。</p><div id="galleryGrid" class="gallery-grid"></div><p class="field-meta" data-i18n="galleryPageNote">画廊显示当前任务页的成片；成本汇总覆盖所选批次的全部任务。</p></section>
               <div class="table-scroll"><table class="jobs-table"><thead><tr><th data-i18n="jobPrompt">任务 / 提示词</th><th data-i18n="jobProgress">状态 / 进度</th><th data-i18n="jobCost">预估成本</th><th data-i18n="jobResult">输出 / 错误</th><th data-i18n="jobActions">操作</th></tr></thead><tbody id="jobsBody"></tbody></table></div>
               <div class="pager jobs-pager"><button id="jobsPrevious" type="button" class="secondary" data-i18n="previousPage">上一页</button><span id="jobsPage"></span><button id="jobsNext" type="button" class="secondary" data-i18n="nextPage">下一页</button></div>
             </section>
@@ -105,6 +116,8 @@
     <script src="./image-reference.js"></script>
     <script src="./api.js"></script>
     <script src="./dialog.js"></script>
+    <script src="./import.js"></script>
+    <script src="./batch-editor.js"></script>
     <script src="./queue-view.js"></script>
     <script src="./app.js"></script>
   </body>

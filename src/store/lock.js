@@ -94,7 +94,10 @@ class InstanceLock {
 
   releaseClaim(claim) {
     for (const entry of [claim, ...claim.previous]) {
-      if (sameOwner(entry.filename, entry.owner)) fs.unlinkSync(entry.filename);
+      if (sameOwner(entry.filename, entry.owner)) {
+        try { fs.unlinkSync(entry.filename); }
+        catch (error) { if (error.code !== "ENOENT") throw error; }
+      }
     }
   }
 
@@ -110,7 +113,15 @@ class InstanceLock {
       try { old = readOwner(this.filename); }
       catch (error) { if (error.code === "ENOENT") continue; throw error; }
       if (pidAlive(old.pid)) throw locked();
-      const claim = this.claim(old);
+      let claim;
+      try { claim = this.claim(old); }
+      catch (error) {
+        // A winning reclaimer can remove its marker between our EEXIST and
+        // readOwner. Recheck the canonical lock instead of reusing an old
+        // generation; a live winner must now prevent this acquisition.
+        if (error.code === "ENOENT") continue;
+        throw error;
+      }
       try {
         this.checkpoint("lock:reclaimAcquired", old);
         if (!sameOwner(this.filename, old)) continue;

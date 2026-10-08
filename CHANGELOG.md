@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.1.0 — 2026-10-08
+
+- Add per-job first and supported last frames, CSV/template-variable imports and image-folder matching with row-level model validation and cost estimates.
+- Add a local video gallery with persistent keep/reject selections, estimated spending per kept clip and an explicit confirmation for every regeneration.
+- Switch Gemini to background interactions, saving the interaction ID before polling and resuming known IDs after a restart. Unknown creates still require review when no ID was received.
+- Enable OpenRouter local frame images as base64 data URLs for supported models; derive controls, validation and estimates from its video model catalog.
+- Add Windows x64 and macOS universal no-install ZIP packaging with pinned, SHA-256-verified Node v24.21.0 LTS and full Node license notices. Share proxy-safe launcher code, keep portable data/output defaults beside the application, and fail clearly if a bundled runtime is missing.
+- Add reproducible packaging, portable smoke tests and a public-repository-only Windows / Apple Silicon / Intel CI matrix. ZIPs do not require npm, system Node, automatic runtime downloads or paid signing services.
+- Add Japanese and Korean READMEs, a Sora 2 migration guide, historical v2.0 release notes and a local-fixture UI recording. Offline sample clips are labeled playback tests rather than AI quality examples.
+
+No paid provider calls are required for builds or offline validation. OS and live-provider checks must be reported from actual runs; estimates remain distinct from invoices. A missing create response can still lead to review even with background generation.
+
 ## 2.0.0 — 2026-10-08
 
 - Replace sequential, browser-bound generation with a persistent render queue. Closing or refreshing the page leaves server-side work running; restarting the service resumes known jobs after lane keys are re-entered.

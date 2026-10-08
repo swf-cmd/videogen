@@ -59,3 +59,7 @@ The catalog scopes each Seedance 2.5 model to its own region and key. The first 
 The adapter deliberately omits cancellation: a queued task can finish between a check and DELETE, at which point DELETE destroys the completed record. Already submitted cancelled batches continue tracking/download. A remote terminal parameter or moderation failure remains an accepted job; it does not authorize retry. Create 5xx, reset, timeout, missing ID and malformed responses remain unknown outcomes.
 
 Offline contract tests cover create/poll/download, first-frame adaptation, token estimates, error mapping and credential boundaries. `VIDEOGEN_LIVE_ARK_KEY` was absent, so no paid smoke call was made.
+
+## v2.1 first and last frames
+
+Seedance 2.5 accepts explicit `first_frame` and `last_frame` image roles, including the same image for both. Videogen orders and validates both roles, requires a first frame when a last frame is present, and sends `ratio:"adaptive"`. Because this inherits the image ratio, image-job token estimates remain unknown until dimensions can be priced accurately. [Official Seedance 2.5 guide](https://docs.byteplus.com/en/docs/modelark/seedance-2-5).

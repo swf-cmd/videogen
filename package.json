@@ -1,8 +1,8 @@
 {
   "name": "videogen",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
-  "description": "Local multi-provider AI video render queue with crash recovery and automatic downloads.",
+  "description": "Local AI video batch studio with per-shot frames, CSV imports, gallery selection and crash recovery.",
   "license": "MIT",
   "type": "commonjs",
   "repository": {
@@ -24,7 +24,9 @@
   "scripts": {
     "start": "node --no-use-env-proxy server.js",
     "test": "node --test test/*.test.js",
-    "test:e2e": "node --test acceptance/crash-queue.cjs"
+    "test:e2e": "node --test acceptance/crash-queue.cjs",
+    "package:portable": "python3 scripts/package-portable.py",
+    "test:portable": "node --test test/portable-launcher.test.js"
   },
   "engines": {
     "node": "^22.21.0 || >=24.5.0"

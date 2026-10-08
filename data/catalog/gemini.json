@@ -51,7 +51,7 @@
           "9:16"
         ],
         "firstFrame": true,
-        "lastFrame": false,
+        "lastFrame": true,
         "audio": true,
         "seed": false,
         "audioFixed": true
@@ -71,8 +71,7 @@
       "pollIntervalSec": 5,
       "resultTtlHours": 48,
       "typicalRenderSec": 360,
-      "createMode": "blocking",
-      "warningKey": "geminiBlockingWarning",
+      "createMode": "async",
       "pricingNoteKey": "geminiPartialPrice",
       "manualRecoveryNoteKey": "geminiManualRecoveryNote"
     }

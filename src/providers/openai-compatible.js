@@ -1,4 +1,5 @@
 const base = require("./base");
+const frames = require("./frames");
 
 function pixelSize(params) {
   if (/^\d+x\d+$/.test(params.resolution)) return params.resolution;
@@ -12,8 +13,10 @@ const adapter = {
   id: "openai-compatible", displayNameKey: "providerOpenAICompatible", createMode: "async", supportsIdempotencyKey: false,
   validateKey: (key) => base.validateKey(key, null, true),
   normalizeParams: base.normalizeParams, estimateCost: base.estimateCost, classifyError: base.classifyError,
-  async prepareAssets(ctx) { return ctx.assets; },
+  validateAssets: (model, params, roles) => frames.validateAssets(model, params, roles, { lastFrame: false }),
+  async prepareAssets(ctx, job) { return frames.frameAssets(ctx, job, { lastFrame: false }); },
   async create(ctx, job, { signal } = {}) {
+    const assets = frames.frameAssets(ctx, job, { lastFrame: false });
     const fields = { model: job.model, prompt: job.prompt, seconds: String(job.params.durationSeconds), size: pixelSize(job.params) };
     if (job.params.seed !== undefined) fields.seed = job.params.seed;
     const model = ctx.catalog?.models?.find((item) => item.id === job.model) || ctx.catalog;
@@ -23,7 +26,7 @@ const adapter = {
     if (multipart) {
       body = new FormData();
       for (const [name, value] of Object.entries(fields)) body.set(name, String(value));
-      const asset = ctx.assets[0];
+      const asset = assets[0];
       if (asset) body.set("input_reference", new Blob([asset.buffer], { type: asset.mimeType || asset.mime }), asset.filename || "first-frame.png");
       headers = {};
     }

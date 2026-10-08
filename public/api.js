@@ -5,7 +5,8 @@ async function apiRequest(endpoint, payload, method = payload === undefined ? "G
   if (file) {
     body = new FormData();
     body.append("payload", JSON.stringify(payload));
-    body.append("input_reference", file, file.name);
+    if (file instanceof Blob) body.append("input_reference", file, file.name);
+    else for (const [field, attachment] of Object.entries(file)) body.append(field, attachment, attachment.name || `${field}.jpg`);
   } else if (payload !== undefined) {
     headers["content-type"] = "application/json";
     body = JSON.stringify(payload);

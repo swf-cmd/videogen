@@ -172,7 +172,7 @@ test("definite rejections may retry but stale rejection flags cannot authorize a
 });
 
 test("compaction survives process death at every durability boundary", (t) => {
-  const checkpoints = ["compact:opened", "compact:written", "compact:fsynced", "compact:renamed", "compact:directorySynced", "compact:truncated", "compact:logSynced"];
+  const checkpoints = ["compact:opened", "compact:written", "compact:fsynced", "compact:renamed", "compact:directorySynced", "compact:truncateOpened", "compact:truncated", "compact:logSynced"];
   for (const checkpoint of checkpoints) {
     const dir = directory(t);
     let store = new JobStore(dir);
@@ -184,12 +184,15 @@ test("compaction survives process death at every durability boundary", (t) => {
     const child = spawnSync(process.execPath, ["-e", `
       const { JobStore } = require(process.argv[1]);
       const store = new JobStore(process.argv[2], { onCheckpoint(name) {
-        if (name === process.argv[3]) process.kill(process.pid, "SIGKILL");
+        if (name === process.argv[3]) { require("node:fs").writeSync(1, "checkpoint:" + name); process.kill(process.pid, "SIGKILL"); }
       } });
       store.update("first", { progress: 37 }, { sync: true });
       store.compact();
     `, modulePath, dir, checkpoint], { encoding: "utf8", timeout: 5000 });
-    assert.equal(child.signal, "SIGKILL", `${checkpoint}: ${child.stderr}`);
+    assert.equal(child.error, undefined, "child reached checkpoint rather than timing out");
+    assert.equal(child.stdout, `checkpoint:${checkpoint}`);
+    if (process.platform === "win32") assert.ok(child.signal === "SIGKILL" || Number.isInteger(child.status) && child.status !== 0, child.stderr);
+    else assert.equal(child.signal, "SIGKILL", `${checkpoint}: ${child.stderr}`);
     store = new JobStore(dir);
     assert.equal(store.jobs.size, 2, checkpoint);
     assert.equal(store.get("first").progress, 37, checkpoint);
@@ -203,6 +206,40 @@ test("compaction survives process death at every durability boundary", (t) => {
     assert.equal(store.jobs.size, 3, checkpoint);
     store.close();
   }
+});
+
+test("compaction works when append-only handles cannot truncate, then appends and replays without gaps", (t) => {
+  const dir = directory(t);
+  let store = new JobStore(dir);
+  store.add(job("before-compaction"));
+  const truncate = fs.ftruncateSync;
+  fs.ftruncateSync = (fd, length) => {
+    if (fd === store.fd) throw Object.assign(new Error("append-only truncate denied"), { code: "EPERM" });
+    return truncate(fd, length);
+  };
+  try { store.compact(); } finally { fs.ftruncateSync = truncate; }
+  assert.equal(fs.statSync(path.join(dir, "jobs.ndjson")).size, 0);
+  store.add(job("after-compaction"));
+  store.close();
+  store = new JobStore(dir);
+  t.after(() => store.close());
+  assert.deepEqual([...store.jobs.keys()], ["before-compaction", "after-compaction"]);
+  assert.equal(store.seq, 2);
+});
+
+test("compaction refuses to truncate a replacement journal after its snapshot is durable", (t) => {
+  const dir = directory(t);
+  const store = new JobStore(dir);
+  t.after(() => store.close());
+  store.add(job("preserved"));
+  const filename = path.join(dir, "jobs.ndjson"), original = `${filename}.original`;
+  fs.renameSync(filename, original);
+  const replacement = "unrelated replacement file";
+  fs.writeFileSync(filename, replacement);
+  assert.throws(() => store.compact(), { code: "invalidStore" });
+  assert.equal(store.failed, true);
+  assert.equal(fs.readFileSync(filename, "utf8"), replacement);
+  assert.match(fs.readFileSync(original, "utf8"), /"jobId":"preserved"/);
 });
 
 test("live locks reject another port, stale locks recover and release checks ownership", (t) => {
@@ -223,27 +260,59 @@ test("live locks reject another port, stale locks recover and release checks own
   assert.equal(fs.readFileSync(lock, "utf8"), replacement);
 });
 
-test("simultaneous stale-lock takeover elects exactly one live owner", async (t) => {
+test("a removed claim marker rechecks the live winner instead of leaking ENOENT or reclaiming it", (t) => {
+  const dir = directory(t), filename = path.join(dir, "lock");
+  fs.writeFileSync(filename, JSON.stringify({ pid: 2147483647, port: 1 }));
+  const link = fs.linkSync;
+  const winner = JSON.stringify({ pid: process.pid, port: 9999, token: "already-elected" });
+  let raced = false;
+  fs.linkSync = (source, target) => {
+    if (!raced && path.basename(target).startsWith(".lock-reclaim-")) {
+      raced = true;
+      // The marker existed when link ran, but its owner published the new
+      // canonical lock and cleaned the marker before the loser could read it.
+      fs.writeFileSync(filename, winner);
+      throw Object.assign(new Error("marker existed"), { code: "EEXIST" });
+    }
+    return link(source, target);
+  };
+  try { assert.throws(() => new JobStore(dir), { code: "dataLocked" }); }
+  finally { fs.linkSync = link; }
+  assert.equal(raced, true);
+  assert.equal(fs.readFileSync(filename, "utf8"), winner);
+});
+
+test("simultaneous stale-lock takeover elects exactly one live owner", { timeout: 15000 }, async (t) => {
   const dir = directory(t);
   fs.writeFileSync(path.join(dir, "lock"), JSON.stringify({ pid: 2147483647, port: 1 }));
-  const children = Array.from({ length: 8 }, () => new Promise((resolve, reject) => {
+  const children = Array.from({ length: 8 }, () => {
     const child = spawn(process.execPath, ["-e", `
       const { JobStore } = require(process.argv[1]);
-      try {
-        const store = new JobStore(process.argv[2]);
-        console.log("owner");
-        setTimeout(() => { store.close(); }, 500);
-      } catch (error) { console.log(error.code || error.message); }
-    `, modulePath, dir], { stdio: ["ignore", "pipe", "pipe"] });
+      let store;
+      process.on("message", message => {
+        if (message === "start") {
+          try { store = new JobStore(process.argv[2]); process.send("owner"); }
+          catch (error) { process.send(error.code || error.message); }
+        } else if (message === "release") { store?.close(); process.disconnect(); }
+      });
+      process.send("ready");
+    `, modulePath, dir], { stdio: ["ignore", "pipe", "pipe", "ipc"] });
     t.after(() => { if (child.exitCode === null) child.kill("SIGKILL"); });
-    let output = "";
     let errors = "";
-    child.stdout.on("data", (chunk) => { output += chunk; });
     child.stderr.on("data", (chunk) => { errors += chunk; });
-    child.once("error", reject);
-    child.once("exit", (code) => code === 0 ? resolve(output.trim()) : reject(new Error(errors)));
-  }));
-  const outputs = await Promise.all(children);
+    const receive = (ready) => new Promise((resolve, reject) => {
+      const message = (value) => { if ((value === "ready") === ready) { child.off("message", message); resolve(value); } };
+      child.on("message", message); child.once("error", reject);
+      child.once("exit", () => reject(new Error(`Child exited before ${ready ? "barrier" : "outcome"}: ${errors}`)));
+    });
+    const done = new Promise((resolve, reject) => child.once("exit", code => code === 0 ? resolve() : reject(new Error(errors))));
+    return { child, ready: receive(true), outcome: receive(false), done };
+  });
+  await Promise.all(children.map(entry => entry.ready));
+  for (const { child } of children) child.send("start");
+  const outputs = await Promise.all(children.map(entry => entry.outcome));
+  for (const { child } of children) child.send("release");
+  await Promise.all(children.map(entry => entry.done));
   assert.equal(outputs.filter((value) => value === "owner").length, 1, JSON.stringify(outputs));
   assert.equal(outputs.filter((value) => value === "dataLocked").length, 7, JSON.stringify(outputs));
 });
@@ -254,10 +323,13 @@ test("a reclaimer killed while owning its marker does not block future stale rec
   const child = spawnSync(process.execPath, ["-e", `
     const { JobStore } = require(process.argv[1]);
     new JobStore(process.argv[2], { onCheckpoint(name) {
-      if (name === "lock:reclaimAcquired") process.kill(process.pid, "SIGKILL");
+      if (name === "lock:reclaimAcquired") { require("node:fs").writeSync(1, "checkpoint:" + name); process.kill(process.pid, "SIGKILL"); }
     } });
   `, modulePath, dir], { encoding: "utf8", timeout: 5000 });
-  assert.equal(child.signal, "SIGKILL", child.stderr);
+  assert.equal(child.error, undefined, "child reached checkpoint rather than timing out");
+  assert.equal(child.stdout, "checkpoint:lock:reclaimAcquired");
+  if (process.platform === "win32") assert.ok(child.signal === "SIGKILL" || Number.isInteger(child.status) && child.status !== 0, child.stderr);
+  else assert.equal(child.signal, "SIGKILL", child.stderr);
   assert.ok(fs.readdirSync(dir).some((name) => name.startsWith(".lock-reclaim-")));
   const store = new JobStore(dir);
   store.close();
