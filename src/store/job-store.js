@@ -405,6 +405,7 @@ class JobStore extends EventEmitter {
       // Both journals contain the durable tail. Windows requires every handle
       // to the destination to be closed before atomically replacing it.
       const previousFd = this.fd;
+      fs.fsyncSync(previousFd);
       this.fd = undefined;
       fs.closeSync(previousFd);
       this.checkpoint("asyncCompact:journalClosed");
