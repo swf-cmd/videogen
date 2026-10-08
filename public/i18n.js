@@ -267,7 +267,17 @@ const translations = {
     "batchFinished": "已结束",
     "copyPathFailed": "无法访问剪贴板，请手动选择并复制显示的路径。",
     "confirmTitle": "请确认操作",
-    "confirmProceed": "确认"
+    "confirmProceed": "确认",
+    "proxyTitle": "网络代理",
+    "proxyEnabled": "已启用",
+    "proxyDisabled": "未启用",
+    "proxyHttp": "HTTP 请求",
+    "proxyHttps": "HTTPS 请求",
+    "proxyBypass": "直接连接",
+    "proxyDirect": "直连",
+    "proxyNone": "无",
+    "proxyAllDirect": "所有请求直连",
+    "proxyInfoNote": "显示本机服务实际使用的代理，认证信息已隐藏。"
   },
   "ja": {
     "locale": "ja-JP",
@@ -536,7 +546,17 @@ const translations = {
     "batchFinished": "終了",
     "copyPathFailed": "クリップボードを利用できません。表示されたパスを選択してコピーしてください。",
     "confirmTitle": "操作を確認",
-    "confirmProceed": "確認"
+    "confirmProceed": "確認",
+    "proxyTitle": "ネットワークプロキシ",
+    "proxyEnabled": "有効",
+    "proxyDisabled": "無効",
+    "proxyHttp": "HTTP リクエスト",
+    "proxyHttps": "HTTPS リクエスト",
+    "proxyBypass": "直接接続",
+    "proxyDirect": "直接接続",
+    "proxyNone": "なし",
+    "proxyAllDirect": "すべてのリクエストを直接接続",
+    "proxyInfoNote": "ローカルサービスで使用中のプロキシです。認証情報は非表示です。"
   },
   "en": {
     "locale": "en-US",
@@ -805,7 +825,17 @@ const translations = {
     "batchFinished": "Finished",
     "copyPathFailed": "Clipboard access is unavailable. Select and copy the displayed path manually.",
     "confirmTitle": "Confirm action",
-    "confirmProceed": "Confirm"
+    "confirmProceed": "Confirm",
+    "proxyTitle": "Network proxy",
+    "proxyEnabled": "Enabled",
+    "proxyDisabled": "Disabled",
+    "proxyHttp": "HTTP requests",
+    "proxyHttps": "HTTPS requests",
+    "proxyBypass": "Bypass proxy",
+    "proxyDirect": "Direct connection",
+    "proxyNone": "None",
+    "proxyAllDirect": "All requests connect directly",
+    "proxyInfoNote": "The proxy used by the local service. Authentication details are hidden."
   },
   "ko": {
     "locale": "ko-KR",
@@ -1074,6 +1104,16 @@ const translations = {
     "batchFinished": "종료됨",
     "copyPathFailed": "클립보드를 사용할 수 없습니다. 표시된 경로를 직접 선택하여 복사하세요.",
     "confirmTitle": "작업 확인",
-    "confirmProceed": "확인"
+    "confirmProceed": "확인",
+    "proxyTitle": "네트워크 프록시",
+    "proxyEnabled": "사용 중",
+    "proxyDisabled": "사용 안 함",
+    "proxyHttp": "HTTP 요청",
+    "proxyHttps": "HTTPS 요청",
+    "proxyBypass": "직접 연결",
+    "proxyDirect": "직접 연결",
+    "proxyNone": "없음",
+    "proxyAllDirect": "모든 요청을 직접 연결",
+    "proxyInfoNote": "로컬 서비스가 실제 사용하는 프록시입니다. 인증 정보는 숨겨집니다."
   }
 };

@@ -58,6 +58,11 @@
           <aside class="panel monitor-panel" aria-label="任务状态">
             <div class="section-head compact"><div><p class="section-kicker" data-i18n="queueKicker">本机持久化</p><h2 data-i18n="queueTitle">渲染队列</h2></div><button id="refreshQueueButton" type="button" class="secondary" data-i18n="refreshQueue">刷新</button></div>
             <p class="field-meta" data-i18n="queuePersists">关闭页面不影响队列。服务重启后，请重新输入所需密钥。</p>
+            <details id="proxyInfo" class="proxy-info" hidden>
+              <summary><span data-i18n="proxyTitle">网络代理</span><span id="proxyStatus"></span></summary>
+              <dl><div><dt data-i18n="proxyHttp">HTTP 请求</dt><dd id="proxyHttp"></dd></div><div><dt data-i18n="proxyHttps">HTTPS 请求</dt><dd id="proxyHttps"></dd></div><div><dt data-i18n="proxyBypass">直接连接</dt><dd id="proxyBypass"></dd></div></dl>
+              <p class="field-meta" data-i18n="proxyInfoNote">显示本机服务实际使用的代理，认证信息已隐藏。</p>
+            </details>
             <section class="lane-section" aria-labelledby="lanesHeading"><h3 id="lanesHeading" data-i18n="lanesTitle">供应商车道</h3><div id="laneList" class="lane-list"></div></section>
             <details class="estimate-summary"><summary data-i18n="summaryAria">当前参数</summary>
             <div class="summary-grid" aria-label="当前参数">

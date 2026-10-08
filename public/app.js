@@ -54,6 +54,7 @@ const previewCatalog = [{ provider: "openai-compatible", regions: [{ id: "custom
 let providers = previewCatalog;
 let lanes = [];
 let platform = "";
+let proxyInfo = null;
 let activeLanguage = "zh";
 let connectionStateKey = isFilePreview ? "connectionPreview" : "connectionReconnecting";
 let inputReferenceInfo = null;
@@ -81,6 +82,15 @@ function t(key, replacements = {}) {
 function currentLocale() { return t("locale"); }
 function formatInteger(value) { return new Intl.NumberFormat(currentLocale()).format(value); }
 function setConnectionState(key) { connectionStateKey = key; connectionState.textContent = t(key); }
+function renderProxyInfo() {
+  const panel = document.querySelector("#proxyInfo");
+  panel.hidden = isFilePreview || !proxyInfo;
+  const enabled = proxyInfo?.enabled === true;
+  document.querySelector("#proxyStatus").textContent = t(enabled ? "proxyEnabled" : "proxyDisabled");
+  document.querySelector("#proxyHttp").textContent = enabled && proxyInfo.http ? proxyInfo.http : t("proxyDirect");
+  document.querySelector("#proxyHttps").textContent = enabled && proxyInfo.https ? proxyInfo.https : t("proxyDirect");
+  document.querySelector("#proxyBypass").textContent = enabled && proxyInfo.noProxy ? proxyInfo.noProxy : t(enabled ? "proxyNone" : "proxyAllDirect");
+}
 function formMessage(text, error = false) {
   const element = document.querySelector("#formMessage");
   element.textContent = text;
@@ -126,10 +136,12 @@ function renderModels(selected) {
     return [model.label || id, !model.verified && t("experimental"), modelRetiring(model) && t("retiring")].filter(Boolean).join(" · ");
   });
 }
+function supportsCatalogRefresh() { return !isFilePreview && selectedLane()?.provider.provider === "openrouter"; }
 function syncOptionControls() {
   const lane = selectedLane();
   const model = selectedModelConfig();
   const capabilities = selectedCapabilities();
+  document.querySelector("#refreshCatalogButton").disabled = busy || !supportsCatalogRefresh();
   customModelFields.hidden = !isCustomModel();
   customCapabilitiesPanel.hidden = !isCustomModel();
   document.querySelector("#requestFormatField").hidden = lane?.provider.provider !== "openai-compatible";
@@ -489,21 +501,22 @@ function applyTranslations() {
   promptInput.placeholder = t("promptPlaceholder"); outputDirInput.placeholder = t("outputDirPlaceholder"); filenameInput.placeholder = t("filenamePlaceholder");
   inputReferenceInput.setAttribute("aria-label", t("inputReferenceLabel"));
   toggleApiKeyButton.textContent = t(apiKeyInput.type === "password" ? "showApiKey" : "hideApiKey");
-  setConnectionState(connectionStateKey); renderProviders(providerInput.value); renderModels(modelInput.value); syncOptionControls();
+  setConnectionState(connectionStateKey); renderProxyInfo(); renderProviders(providerInput.value); renderModels(modelInput.value); syncOptionControls();
   queueView?.render();
 }
 function setLanguage(language) { activeLanguage = normalizeLanguage(language); applyTranslations(); storageSet("videogen.language", activeLanguage); }
 async function refreshCatalog() {
+  if (busy || !supportsCatalogRefresh()) return;
   const button = document.querySelector("#refreshCatalogButton"); button.disabled = true;
   try { const lane = formLane(); const result = await apiRequest(`/api/catalog/refresh/${lane.provider}`, lane); if (result.providers) providers = result.providers; renderProviders(providerInput.value); renderModels(modelInput.value); syncOptionControls(); scheduleEstimate(); formMessage(t(result.refreshed ? "catalogRefreshed" : "catalogFallback")); }
   catch (error) { formMessage(error.message, true); }
-  finally { button.disabled = false; }
+  finally { button.disabled = busy || !supportsCatalogRefresh(); }
 }
 async function init() {
   const restored = restoreSettings(); activeLanguage = normalizeLanguage(restored.language || "zh");
   let loadError = null;
   if (!isFilePreview) {
-    try { const data = await apiRequest("/api/catalog"); if (!Array.isArray(data.providers) || !data.providers.length) throw new Error(t("noModels")); providers = data.providers; platform = data.platform; }
+    try { const data = await apiRequest("/api/catalog"); if (!Array.isArray(data.providers) || !data.providers.length) throw new Error(t("noModels")); providers = data.providers; platform = data.platform; proxyInfo = data.proxy || null; }
     catch (error) { loadError = error; }
   }
   renderProviders(restored.provider); chooseLane(); renderModels(restored.model); syncOptionControls();

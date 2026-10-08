@@ -67,6 +67,12 @@ button:hover:not(:disabled) { border-color: var(--accent); background: #edf7f4; 
 .custom-options, .custom-capability-grid { display: grid; gap: 12px; }
 .custom-options details, .estimate-summary { border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 12px; }
 summary { cursor: pointer; font-size: 12px; font-weight: 650; color: var(--muted); }
+.proxy-info { border: 1px solid var(--line); border-radius: 8px; padding: 11px 12px; background: var(--surface); }
+.proxy-info summary span + span { margin-left: 10px; font-weight: 400; }
+.proxy-info dl { display: grid; gap: 8px; margin: 14px 0 10px; font-size: 12px; }
+.proxy-info dl > div { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 12px; }
+.proxy-info dt { color: var(--muted); }
+.proxy-info dd { margin: 0; overflow-wrap: anywhere; }
 .custom-options details[open] summary { margin-bottom: 10px; }
 .custom-capability-grid { margin-top: 12px; }
 .reference-input-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }

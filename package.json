@@ -22,11 +22,11 @@
     "openrouter"
   ],
   "scripts": {
-    "start": "node server.js",
+    "start": "node --no-use-env-proxy server.js",
     "test": "node --test test/*.test.js",
     "test:e2e": "node --test acceptance/crash-queue.cjs"
   },
   "engines": {
-    "node": ">=18"
+    "node": "^22.21.0 || >=24.5.0"
   }
 }

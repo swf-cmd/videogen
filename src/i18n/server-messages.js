@@ -1,6 +1,9 @@
 const SUPPORTED_LANGUAGES = new Set(["zh", "ja", "en", "ko"]);
 const SERVER_MESSAGES = {
   zh: {
+    runtimeStartFailed: "无法启动视频服务，请检查 Node.js 运行时后重试。",
+    invalidProxy: "代理地址无效。请检查 HTTP_PROXY 和 HTTPS_PROXY；地址内容已隐藏。",
+    unsupportedRuntime: "需要 Node.js 22.21+（22.x）或 24.5+；建议使用 Node 24 LTS。",
     workspaceRequired: "请填写此区域的百炼工作空间专属端点。",
     regionMismatch: "端点与所选区域不匹配，请同时检查区域、端点和密钥。",
     geminiFileIdRequired: "Gemini 手动关联需要 Files 资源 ID（files/…）或同源 Files 地址；仅凭 interaction ID 无法找回视频链接。",
@@ -83,6 +86,9 @@ const SERVER_MESSAGES = {
     missingApiKeyAndVideoId: "需要 API key 和 video id。",
   },
   ja: {
+    runtimeStartFailed: "動画サービスを起動できませんでした。Node.js ランタイムを確認して再試行してください。",
+    invalidProxy: "プロキシ設定が無効です。HTTP_PROXY と HTTPS_PROXY を確認してください。アドレスは非表示です。",
+    unsupportedRuntime: "Node.js 22.21 以降の 22.x、または 24.5 以降が必要です。Node 24 LTS を推奨します。",
     workspaceRequired: "この地域の専用ワークスペースエンドポイントを入力してください。",
     regionMismatch: "エンドポイントと地域が一致しません。地域、URL、キーを確認してください。",
     geminiFileIdRequired: "Gemini の手動関連付けには Files リソース ID（files/…）または同一ホストの Files URL が必要です。interaction ID のみでは復元できません。",
@@ -165,6 +171,9 @@ const SERVER_MESSAGES = {
     missingApiKeyAndVideoId: "API key と video id が必要です。",
   },
   en: {
+    runtimeStartFailed: "The video service could not start. Check the Node.js runtime and try again.",
+    invalidProxy: "Invalid proxy configuration. Check HTTP_PROXY and HTTPS_PROXY; addresses are hidden.",
+    unsupportedRuntime: "Node.js 22.21+ (22.x) or 24.5+ is required; Node 24 LTS is recommended.",
     workspaceRequired: "Enter the workspace-specific Model Studio endpoint for this region.",
     regionMismatch: "The endpoint does not match this region. Check the region, URL and key.",
     geminiFileIdRequired: "Gemini manual recovery requires a Files resource ID (files/…) or same-origin Files URL. An interaction ID alone cannot recover the video link.",
@@ -247,6 +256,9 @@ const SERVER_MESSAGES = {
     missingApiKeyAndVideoId: "API key and video id are required.",
   },
   ko: {
+    runtimeStartFailed: "동영상 서비스를 시작할 수 없습니다. Node.js 런타임을 확인한 후 다시 시도하세요.",
+    invalidProxy: "프록시 설정이 잘못되었습니다. HTTP_PROXY 및 HTTPS_PROXY를 확인하세요. 주소는 숨겨져 있습니다.",
+    unsupportedRuntime: "Node.js 22.21 이상(22.x) 또는 24.5 이상이 필요합니다. Node 24 LTS를 권장합니다.",
     workspaceRequired: "이 지역의 Model Studio 워크스페이스 전용 엔드포인트를 입력하세요.",
     regionMismatch: "엔드포인트가 선택한 지역과 일치하지 않습니다. 지역, URL, 키를 확인하세요.",
     geminiFileIdRequired: "Gemini 수동 연결에는 Files 리소스 ID(files/…) 또는 같은 호스트의 Files URL이 필요합니다. interaction ID만으로는 영상 링크를 복구할 수 없습니다.",

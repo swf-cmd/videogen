@@ -87,6 +87,47 @@ test("file preview rejects API calls before network access and catalog metadata 
   }
 });
 
+test("catalog refresh is unavailable in preview or providers without model discovery", async () => {
+  const support = appSource.slice(appSource.indexOf("function supportsCatalogRefresh()"), appSource.indexOf("function syncOptionControls()"));
+  const refresh = appSource.slice(appSource.indexOf("async function refreshCatalog()"), appSource.indexOf("async function init()"));
+  for (const preview of [false, true]) for (const provider of ["openrouter", "gemini", "dashscope", "ark", "mock", "openai-compatible"]) {
+    let requests = 0;
+    const context = { isFilePreview: preview, selectedLane: () => ({ provider: { provider } }), busy: false, apiRequest: () => { requests += 1; } };
+    const result = vm.runInNewContext(`${support}\n${refresh}\n({ supportsCatalogRefresh, refreshCatalog })`, context);
+    assert.equal(result.supportsCatalogRefresh(), !preview && provider === "openrouter");
+    if (preview || provider !== "openrouter") { await result.refreshCatalog(); assert.equal(requests, 0); }
+  }
+});
+
+test("proxy panel shows effective sanitized values as text and makes disabled and preview states explicit", () => {
+  const source = appSource.slice(appSource.indexOf("function renderProxyInfo()"), appSource.indexOf("function formMessage("));
+  const ids = ["#proxyInfo", "#proxyStatus", "#proxyHttp", "#proxyHttps", "#proxyBypass"];
+  const elements = Object.fromEntries(ids.map((id) => [id, { hidden: false, textContent: "", set innerHTML(value) { throw new Error("Proxy values must be plain text"); } }]));
+  const context = { document: { querySelector: (id) => elements[id] }, isFilePreview: false, t: (key) => key, proxyInfo: { enabled: true, http: "http://[REDACTED]@proxy.example:8080", https: "http://<proxy>:8080", noProxy: "localhost,127.0.0.1,::1,.aliyuncs.com" } };
+  const render = vm.runInNewContext(`${source}\nrenderProxyInfo`, context);
+  render();
+  assert.equal(elements["#proxyInfo"].hidden, false);
+  assert.equal(elements["#proxyStatus"].textContent, "proxyEnabled");
+  assert.equal(elements["#proxyHttp"].textContent, context.proxyInfo.http);
+  assert.equal(elements["#proxyHttps"].textContent, context.proxyInfo.https);
+  assert.equal(elements["#proxyBypass"].textContent, context.proxyInfo.noProxy);
+  context.proxyInfo.enabled = false;
+  render();
+  assert.equal(elements["#proxyStatus"].textContent, "proxyDisabled");
+  assert.equal(elements["#proxyHttp"].textContent, "proxyDirect");
+  assert.equal(elements["#proxyHttps"].textContent, "proxyDirect");
+  assert.equal(elements["#proxyBypass"].textContent, "proxyAllDirect");
+  context.proxyInfo = { enabled: true, http: null, https: null, noProxy: "localhost" };
+  render();
+  assert.equal(elements["#proxyHttp"].textContent, "proxyDirect");
+  context.isFilePreview = true;
+  render();
+  assert.equal(elements["#proxyInfo"].hidden, true);
+  context.isFilePreview = false; context.proxyInfo = null;
+  render();
+  assert.equal(elements["#proxyInfo"].hidden, true);
+});
+
 test("HTML confirmations require an explicit click, preserve risk text and default to cancellation", async () => {
   const source = fs.readFileSync(path.join(publicDir, "dialog.js"), "utf8");
   const document = { activeElement: null };

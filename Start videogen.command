@@ -85,24 +85,17 @@ for candidate in "${NODE_CANDIDATES[@]}"; do
     continue
   fi
 
-  NODE_MAJOR="$("$candidate" -p 'process.versions.node.split(".")[0]' 2>/dev/null || true)"
-  case "$NODE_MAJOR" in
-    ''|*[!0-9]*)
-      continue
-      ;;
-    *)
-      if (( NODE_MAJOR >= 18 )); then
-        NODE_BIN="$candidate"
-        break
-      fi
-      ;;
-  esac
+  if "$candidate" --no-use-env-proxy -e 'process.exit(require("./src/runtime").supportsRuntime(process.versions.node) ? 0 : 1)' 2>/dev/null; then
+    NODE_BIN="$candidate"
+    break
+  fi
+
 done
 
 if [[ -z "$NODE_BIN" ]]; then
   echo "A compatible Node.js runtime was not found."
   echo "Make sure the whole videogen folder was copied, including the runtime folder."
-  echo "If the runtime folder is missing, install Node.js 18 or newer from https://nodejs.org/ and run this file again."
+  echo "If the runtime folder is missing, install Node.js 22.21+ (22.x) or 24.5+ (Node 24 LTS recommended) from https://nodejs.org/ and run this file again."
   echo
   read -r "?Press Return to close this window."
   exit 1
@@ -111,7 +104,10 @@ fi
 echo "Node runtime: $(basename "$NODE_BIN")"
 echo
 
-"$NODE_BIN" <<'NODE'
+"$NODE_BIN" --no-use-env-proxy <<'NODE'
+const { initializeRuntime, runtimeErrorMessage } = require("./src/runtime");
+try { initializeRuntime(); }
+catch (error) { console.error(runtimeErrorMessage(error)); process.exit(1); }
 const { spawn } = require("node:child_process");
 const http = require("node:http");
 const net = require("node:net");
@@ -223,7 +219,7 @@ async function openWhenReady() {
   console.log("Keep this Terminal window open while using videogen.");
   console.log("");
 
-  const server = spawn(process.execPath, [path.join(appDir, "server.js")], {
+  const server = spawn(process.execPath, ["--use-env-proxy", path.join(appDir, "server.js")], {
     cwd: appDir,
     env: process.env,
     stdio: "inherit",
@@ -241,17 +237,13 @@ async function openWhenReady() {
   process.on("SIGINT", () => forwardSignal("SIGINT"));
   process.on("SIGTERM", () => forwardSignal("SIGTERM"));
 
+  server.on("exit", (code, signal) => { process.exit(signal ? 1 : code ?? 0); });
+
   const opened = await openWhenReady();
   if (!opened) {
     console.log(`Server did not respond yet. You can still try opening ${url}`);
   }
 
-  server.on("exit", (code, signal) => {
-    if (signal) {
-      process.exit(1);
-    }
-    process.exit(code ?? 0);
-  });
 })();
 NODE
 

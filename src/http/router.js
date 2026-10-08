@@ -3,6 +3,7 @@ const path = require("node:path");
 const { URL } = require("node:url");
 const { PORT, PUBLIC_DIR } = require("../config");
 const { safeError } = require("./errors");
+const { proxyInfo } = require("../runtime");
 const { sendJson, sendText } = require("./responses");
 const { handleSelectOutputDir } = require("./handlers/select-dir");
 const { readBody } = require("./body");
@@ -81,7 +82,7 @@ async function handleRequest(req, res) {
 
     if (req.method === "POST" && url.pathname === "/api/select-output-dir") return await handleSelectOutputDir(req, res);
     if (req.method === "GET" && url.pathname === "/api/catalog") {
-      return sendJson(res, 200, { ...application.catalog, platform: process.platform });
+      return sendJson(res, 200, { ...application.catalog, platform: process.platform, proxy: proxyInfo() });
     }
     if (req.method === "GET" && url.pathname === "/api/jobs") return sendJson(res, 200, application.store.list(Object.fromEntries(url.searchParams)));
     if (req.method === "GET" && url.pathname === "/api/events") return application.events.connect(req, res);
