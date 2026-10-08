@@ -37,7 +37,7 @@ function openBrowser(url) {
   if (process.env.OPEN_BROWSER === "0") return;
   const executable = process.platform === "win32"
     ? path.join(process.env.SystemRoot || "C:\\Windows", "System32", "cmd.exe") : "/usr/bin/open";
-  const args = process.platform === "win32" ? ["/d", "/s", "/c", "start", '""', url] : [url];
+  const args = process.platform === "win32" ? ["/d", "/s", "/c", "start", url] : [url];
   const opener = spawn(executable, args, { detached: true, stdio: "ignore" });
   opener.once("error", () => console.log(`Open this address in your browser: ${url}`));
   opener.unref();
