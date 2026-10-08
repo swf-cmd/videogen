@@ -104,7 +104,9 @@ cover the durable queue and release artifacts.
   represented once by references in the journal and streaming snapshot. Startup
   streams journal and version 2 snapshot records; legacy `jobs.snapshot.json`
   snapshots remain compatible but require the old whole-file parse until the
-  next compaction writes version 2. The snapshot is fsynced, atomically
+  next compaction writes version 2. The live job index still grows with retained
+  history; streaming bounds parsing scratch space, not the entire index. The
+  snapshot is fsynced, atomically
   renamed, and its directory fsynced before log truncation.
   Tests kill real processes at each compaction boundary. An incomplete final log
   line is truncated and fsynced before new appends; complete corrupt records or

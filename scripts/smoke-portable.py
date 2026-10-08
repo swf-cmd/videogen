@@ -25,7 +25,7 @@ def stop_windows_launcher(service, env):
     # Headless Windows runners may not have an attached console, in which case
     # GenerateConsoleCtrlEvent fails. Terminate only cmd's Node launcher, never
     # its detached service: the closed IPC pipe must let that service drain.
-    powershell = Path(env.get("SystemRoot", "C:\\Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+    powershell = Path(env.get("SystemRoot", env.get("SYSTEMROOT", "C:\\Windows"))) / "System32/WindowsPowerShell/v1.0/powershell.exe"
     query = '(Get-CimInstance Win32_Process -Filter "ParentProcessId=%d" | Where-Object {$_.Name -eq "node.exe"}).ProcessId' % service.pid
     result = subprocess.run([str(powershell), "-NoProfile", "-NonInteractive", "-Command", query],
                             capture_output=True, text=True, check=True, timeout=15, env=env)
@@ -72,7 +72,7 @@ def smoke(archive):
         env.update({"PORT": str(port), "OPEN_BROWSER": "0"})
         windows = platform.system() == "Windows"
         if windows:
-            env["PATH"] = str(Path(env.get("SystemRoot", "C:\\Windows")) / "System32")
+            env["PATH"] = str(Path(env.get("SystemRoot", env.get("SYSTEMROOT", "C:\\Windows"))) / "System32")
             command = [str(Path(env["PATH"]) / "cmd.exe"), "/d", "/c", str(app / "Start videogen.cmd")]
         else:
             env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
