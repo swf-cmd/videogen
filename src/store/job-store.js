@@ -402,12 +402,16 @@ class JobStore extends EventEmitter {
         fs.fsyncSync(fd);
         this.checkpoint("asyncCompact:tailFsynced");
       } finally { fs.closeSync(fd); fs.closeSync(source); }
-      // The old journal still includes all tail records until this atomic rename.
+      // Both journals contain the durable tail. Windows requires every handle
+      // to the destination to be closed before atomically replacing it.
+      const previousFd = this.fd;
+      this.fd = undefined;
+      fs.closeSync(previousFd);
+      this.checkpoint("asyncCompact:journalClosed");
       fs.renameSync(next, log);
       this.checkpoint("asyncCompact:journalRenamed");
       syncDirectory(this.directory);
       this.checkpoint("asyncCompact:journalDirectorySynced");
-      fs.closeSync(this.fd);
       this.fd = fs.openSync(log, "a", 0o600);
       this.checkpoint("asyncCompact:journalReopened");
       this.logBytes = expected.size - offset;

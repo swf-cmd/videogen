@@ -530,3 +530,21 @@ test('copying a job or updating it cannot override store-owned pagination order'
   const first = store.list({ limit: 1 });
   assert.deepEqual(store.list({ cursor: first.nextCursor }).jobs.map(job => job.id), ['copy']);
 });
+
+test('async journal replacement closes the append handle before rename as required on Windows', async t => {
+  const store = new JobStore(directory(t)); t.after(() => store.close());
+  store.add(job('windows-replace'));
+  const rename = fs.renameSync;
+  let replaced = false;
+  fs.renameSync = (from, to) => {
+    if (to === path.join(store.directory, 'jobs.ndjson')) {
+      assert.equal(store.fd, undefined, 'no append handle may remain open during journal replacement');
+      replaced = true;
+    }
+    return rename(from, to);
+  };
+  try { await store.compactAsync(); } finally { fs.renameSync = rename; }
+  assert.equal(replaced, true);
+  store.add(job('after-replace'));
+  assert.equal(store.jobs.size, 2);
+});
