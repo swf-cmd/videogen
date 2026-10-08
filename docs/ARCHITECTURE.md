@@ -2,7 +2,7 @@
 
 ## Current and target system
 
-Version 2.1.2 is a local, zero-dependency, multi-provider render queue. The browser
+Version 2.1.3 is a local, zero-dependency, multi-provider render queue. The browser
 observes work owned by the service process. It replaces v1.0.2's monolithic
 OpenAI Videos/Batch server, where jobs lived only inside request handlers.
 

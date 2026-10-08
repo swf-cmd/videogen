@@ -5,6 +5,78 @@ const path = require("node:path");
 const os = require("node:os");
 const net = require("node:net");
 const { configurePortable, choosePort } = require("../scripts/launcher.cjs");
+const { redactDiagnostics } = require("../src/queue/keys");
+
+function observeLauncher(child, privatePaths = []) {
+  let stdout = "", stderr = "", error, closed = false;
+  const changed = new Set();
+  const notify = () => { for (const listener of changed) listener(); };
+  child.stdout.on("data", chunk => { stdout += chunk; notify(); });
+  child.stderr.on("data", chunk => { stderr += chunk; notify(); });
+  child.on("error", cause => { error = cause; notify(); });
+  child.on("exit", notify);
+  child.on("close", () => { closed = true; notify(); });
+  const sanitize = value => {
+    let text = redactDiagnostics(String(value));
+    for (const filename of [...privatePaths, os.homedir()].filter(Boolean).sort((a, b) => b.length - a.length)) {
+      for (const spelling of [filename, filename.replaceAll("\\", "/")]) text = text.split(spelling).join("[PATH]");
+    }
+    // Redact before truncation so the boundary cannot expose part of a secret.
+    return text.slice(-12000);
+  };
+  const diagnostics = () => JSON.stringify({ pid: child.pid, exitCode: child.exitCode, signalCode: child.signalCode,
+    killed: child.killed, connected: child.connected, closed, stdout: sanitize(stdout), stderr: sanitize(stderr),
+    ...(error ? { error: { code: error.code, message: sanitize(error.message) } } : {}) });
+  const exited = () => child.exitCode !== null || child.signalCode !== null;
+  function waitFor(phase, condition, timeoutMs, rejectExit = false) {
+    return new Promise((resolve, reject) => {
+      const finish = failure => {
+        clearTimeout(timer);
+        changed.delete(check);
+        if (failure) reject(new Error(`${phase}: ${failure}; ${diagnostics()}`));
+        else resolve();
+      };
+      const check = () => {
+        if (error) finish("child process error");
+        else if (rejectExit && exited()) finish("launcher exited before readiness");
+        else if (condition()) finish();
+      };
+      const timer = setTimeout(() => finish(`deadline exceeded (${timeoutMs} ms)`), timeoutMs);
+      changed.add(check);
+      check();
+    });
+  }
+  return { child, diagnostics, exited, get closed() { return closed; }, get stdout() { return stdout; },
+    ready: () => waitFor("launcher ready", () => /(?:^|\n)Ready at /.test(stdout), 15000, true),
+    exit: (timeoutMs = 10000) => waitFor("launcher exit", exited, timeoutMs),
+    close: (timeoutMs = 3000) => waitFor("launcher pipes closed", () => closed, timeoutMs),
+  };
+}
+
+async function cleanupLauncher(observed, directory, knownServicePid) {
+  const { child } = observed, servicePids = new Set([knownServicePid]);
+  try { servicePids.add(JSON.parse(fs.readFileSync(path.join(directory, "lock"), "utf8")).pid); } catch {}
+  if (!observed.closed) {
+    if (process.platform === "win32" && !observed.exited() && child.pid) {
+      // The service is detached on Windows. Kill the owned process tree while
+      // its parent still exists, including failures before its PID was logged.
+      const { spawnSync } = require("node:child_process");
+      const taskkill = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "taskkill.exe");
+      spawnSync(taskkill, ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true, timeout: 3000 });
+    } else if (process.platform !== "win32" && child.pid) {
+      // Each test launcher owns its process group, so pre-ready failures cannot
+      // strand a service whose lock file has not been observed yet.
+      try { process.kill(-child.pid, "SIGKILL"); } catch {}
+    }
+    if (!observed.exited()) child.kill("SIGKILL");
+    for (const pid of servicePids) {
+      if (Number.isInteger(pid) && pid > 0 && pid !== process.pid) { try { process.kill(pid, "SIGKILL"); } catch {} }
+    }
+    await observed.close().catch(() => {});
+  }
+  child.stdout.destroy(); child.stderr.destroy();
+  fs.rmSync(directory, { recursive: true, force: true });
+}
 
 test("portable mode keeps private records and outputs with app; source preserves defaults", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "videogen portable "));
@@ -39,9 +111,8 @@ test("explicit busy port fails; automatic port selection skips occupied port", a
   } finally { await new Promise((resolve) => server.close(resolve)); }
 });
 
-test("launcher forwards termination and releases service lock", { skip: process.platform === "win32" }, async () => {
+test("launcher forwards termination and releases service lock", { skip: process.platform === "win32", timeout: 35000 }, async () => {
   const { spawn } = require("node:child_process");
-  const { once } = require("node:events");
   const root = path.resolve(__dirname, "..");
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "videogen launcher stop "));
   const probe = net.createServer();
@@ -50,30 +121,54 @@ test("launcher forwards termination and releases service lock", { skip: process.
   await new Promise((resolve) => probe.close(resolve));
   const env = { ...process.env, VIDEOGEN_DATA_DIR: directory, OPEN_BROWSER: "0", PORT: String(port) };
   for (const key of Object.keys(env)) if (/proxy/i.test(key) || ["NODE_OPTIONS", "NODE_USE_ENV_PROXY"].includes(key)) delete env[key];
-  const child = spawn(process.execPath, ["--no-use-env-proxy", path.join(root, "scripts/launcher.cjs")], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
-  let output = "", servicePid;
-  child.stdout.on("data", chunk => { output += chunk; });
-  child.stderr.on("data", chunk => { output += chunk; });
+  const child = spawn(process.execPath, ["--no-use-env-proxy", path.join(root, "scripts/launcher.cjs")], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
+  const observed = observeLauncher(child, [directory, root]);
+  let servicePid;
   try {
-    for (let index = 0; index < 100 && !output.includes("Ready at"); index += 1) {
-      if (child.exitCode !== null) break;
-      await new Promise(resolve => setTimeout(resolve, 20));
-    }
-    assert.match(output, /Ready at/, output);
+    await observed.ready();
     servicePid = JSON.parse(fs.readFileSync(path.join(directory, "lock"), "utf8")).pid;
-    const exited = once(child, "exit");
+    const exited = observed.exit();
     child.kill("SIGTERM");
-    const timer = setTimeout(() => child.kill("SIGKILL"), 3000);
-    const [code] = await exited;
-    clearTimeout(timer);
-    assert.equal(code, 0, output);
-    assert.equal(fs.existsSync(path.join(directory, "lock")), false);
-    assert.throws(() => process.kill(servicePid, 0), { code: "ESRCH" });
+    await exited;
+    assert.equal(child.exitCode, 0, observed.diagnostics());
+    assert.equal(fs.existsSync(path.join(directory, "lock")), false, observed.diagnostics());
+    assert.throws(() => process.kill(servicePid, 0), { code: "ESRCH" }, observed.diagnostics());
   } finally {
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-    if (servicePid) { try { process.kill(servicePid, "SIGKILL"); } catch {} }
-    fs.rmSync(directory, { recursive: true, force: true });
+    await cleanupLauncher(observed, directory, servicePid);
   }
+});
+
+test("readiness waits for a delayed child beyond two seconds before requesting shutdown", { timeout: 35000 }, async () => {
+  const { spawn } = require("node:child_process");
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "videogen delayed ready "));
+  const child = spawn(process.execPath, ["-e", `
+    const started = performance.now();
+    let ready = false;
+    console.error("authorization: Bearer fixture-private-secret");
+    console.error(process.argv[1]);
+    process.on("message", message => {
+      if (message?.type !== "shutdown") return;
+      require("node:fs").writeSync(1, JSON.stringify({ shutdownAfterReady: ready, elapsedMs: Math.round(performance.now() - started) }) + "\\n");
+      process.exit(ready ? 0 : 9);
+    });
+    setTimeout(() => { ready = true; console.log("Ready at fixture"); }, 2300);
+  `, directory], { stdio: ["ignore", "pipe", "pipe", "ipc"], detached: process.platform !== "win32" });
+  const observed = observeLauncher(child, [directory]);
+  try {
+    await observed.ready();
+    const exited = observed.exit();
+    child.send({ type: "shutdown" });
+    await exited;
+    await observed.close();
+    assert.equal(child.exitCode, 0, observed.diagnostics());
+    const state = JSON.parse(observed.stdout.trim().split("\n").at(-1));
+    assert.equal(state.shutdownAfterReady, true);
+    assert.ok(state.elapsedMs >= 2200, observed.diagnostics());
+    assert.doesNotMatch(observed.diagnostics(), /fixture-private-secret/);
+    assert.equal(observed.diagnostics().includes(directory), false);
+    assert.match(observed.diagnostics(), /\[REDACTED\]/);
+    assert.match(observed.diagnostics(), /\[PATH\]/);
+  } finally { await cleanupLauncher(observed, directory); }
 });
 
 test("shutdown supervision requests IPC drain instead of Windows-style process termination", async () => {
@@ -96,9 +191,8 @@ test("shutdown supervision requests IPC drain instead of Windows-style process t
   }
 });
 
-for (const stop of ["ipc", "SIGHUP", "SIGKILL"]) test(`launcher ${stop} shutdown leaves no orphan or data lock`, { skip: stop !== "ipc" && process.platform === "win32", timeout: 12000 }, async () => {
+for (const stop of ["ipc", "SIGHUP", "SIGKILL"]) test(`launcher ${stop} shutdown leaves no orphan or data lock`, { skip: stop !== "ipc" && process.platform === "win32", timeout: 35000 }, async () => {
   const { spawn } = require("node:child_process");
-  const { once } = require("node:events");
   const root = path.resolve(__dirname, "..");
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "videogen parent exit "));
   const probe = net.createServer();
@@ -107,28 +201,24 @@ for (const stop of ["ipc", "SIGHUP", "SIGKILL"]) test(`launcher ${stop} shutdown
   await new Promise(resolve => probe.close(resolve));
   const env = { ...process.env, VIDEOGEN_DATA_DIR: directory, OPEN_BROWSER: "0", PORT: String(port), VIDEOGEN_LANGUAGE: "en" };
   for (const key of Object.keys(env)) if (/proxy/i.test(key) || ["NODE_OPTIONS", "NODE_USE_ENV_PROXY"].includes(key)) delete env[key];
-  const child = spawn(process.execPath, ["--no-use-env-proxy", path.join(root, "scripts/launcher.cjs")], { cwd: root, env, stdio: ["ignore", "pipe", "pipe", "ipc"] });
-  let output = "", servicePid;
-  child.stdout.on("data", chunk => { output += chunk; });
-  child.stderr.on("data", chunk => { output += chunk; });
+  const child = spawn(process.execPath, ["--no-use-env-proxy", path.join(root, "scripts/launcher.cjs")], { cwd: root, env, stdio: ["ignore", "pipe", "pipe", "ipc"], detached: process.platform !== "win32" });
+  const observed = observeLauncher(child, [directory, root]);
+  let servicePid;
   try {
-    for (let index = 0; index < 250 && !output.includes("Ready at") && child.exitCode === null; index += 1) await new Promise(resolve => setTimeout(resolve, 20));
-    assert.match(output, /Ready at/, output);
+    await observed.ready();
     servicePid = JSON.parse(fs.readFileSync(path.join(directory, "lock"), "utf8")).pid;
-    const exited = once(child, "exit");
+    const exited = observed.exit();
     if (stop === "ipc") child.send({ type: "videogen:shutdown" });
     else child.kill(stop);
-    const [code] = await exited;
-    if (stop !== "SIGKILL") assert.equal(code, 0, output);
+    await exited;
+    if (stop !== "SIGKILL") assert.equal(child.exitCode, 0, observed.diagnostics());
     for (let index = 0; index < 250 && fs.existsSync(path.join(directory, "lock")); index += 1) await new Promise(resolve => setTimeout(resolve, 20));
-    assert.equal(fs.existsSync(path.join(directory, "lock")), false, output);
+    assert.equal(fs.existsSync(path.join(directory, "lock")), false, observed.diagnostics());
     // A killed parent can leave a momentary zombie until the system reaps it;
     // the closed listener and released ownership are the useful invariants.
     assert.equal(await choosePort(port, true), port);
   } finally {
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-    if (servicePid) { try { process.kill(servicePid, "SIGKILL"); } catch {} }
-    fs.rmSync(directory, { recursive: true, force: true });
+    await cleanupLauncher(observed, directory, servicePid);
   }
 });
 
@@ -171,7 +261,7 @@ test("runtime preflight explains unsupported Node before a new CLI flag is used"
   assert.doesNotMatch(result.stderr, /bad option|\n\s+at /);
 });
 
-test("a second launcher reports a localized lock error without advertising an unusable URL", async () => {
+test("a second launcher reports a localized lock error without advertising an unusable URL", { timeout: 20000 }, async () => {
   const { spawnSync } = require("node:child_process");
   const { InstanceLock } = require("../src/store/lock");
   const root = path.resolve(__dirname, "..");
@@ -185,7 +275,8 @@ test("a second launcher reports a localized lock error without advertising an un
     lock.acquire();
     const env = { ...process.env, PORT: String(port), VIDEOGEN_DATA_DIR: directory, VIDEOGEN_LANGUAGE: "en", OPEN_BROWSER: "0" };
     for (const key of Object.keys(env)) if (/proxy/i.test(key) || ["NODE_OPTIONS", "NODE_USE_ENV_PROXY"].includes(key)) delete env[key];
-    const result = spawnSync(process.execPath, ["--no-use-env-proxy", "scripts/launcher.cjs"], { cwd: root, env, encoding: "utf8", timeout: 5000 });
+    // A legitimate foreign-owner identity query alone may consume five seconds.
+    const result = spawnSync(process.execPath, ["--no-use-env-proxy", "scripts/launcher.cjs"], { cwd: root, env, encoding: "utf8", timeout: 15000 });
     assert.equal(result.status, 1, result.stderr);
     assert.match(result.stderr, /already|locked|another/i);
     assert.doesNotMatch(result.stderr, /[\u4e00-\u9fff]/);

@@ -1,6 +1,6 @@
 # Privacy notes
 
-videogen 2.1.2 runs locally. It has no telemetry, update checks, project-operated cloud service or npm runtime dependencies. The HTTP server listens only on `127.0.0.1`. Submitting work sends prompts, model parameters and optional first-frame images to the provider, region and endpoint you selected. Provider-side retention and account terms apply independently.
+videogen 2.1.3 runs locally. It has no telemetry, update checks, project-operated cloud service or npm runtime dependencies. The HTTP server listens only on `127.0.0.1`. Submitting work sends prompts, model parameters and optional first-frame images to the provider, region and endpoint you selected. Provider-side retention and account terms apply independently.
 
 ## Data saved on this computer
 
