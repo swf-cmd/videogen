@@ -93,7 +93,7 @@ function redact(value, seen = new WeakSet()) {
     if (Array.isArray(value)) return value.map((item) => redact(item, seen));
     const entries = value instanceof Headers ? [...value.entries()] : Object.entries(value);
     return Object.fromEntries(entries.map(([key, item]) => [
-      redactText(key),
+      key,
       sensitiveFields.has(key.toLowerCase().replace(/[-_\s]/g, "")) ? "[REDACTED]" : redact(item, seen),
     ]));
   } finally {

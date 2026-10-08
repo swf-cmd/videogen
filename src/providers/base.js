@@ -99,14 +99,39 @@ function createContext({ lane, key = "", catalog, fetchImpl = globalThis.fetch, 
     if (key) result = result.split(key).join("[REDACTED]");
     return result.replace(/((?:authorization|x-goog-api-key|api-key)["'\s:=]+)(?:Bearer\s+)?[^\s,"'}]+/gi, "$1[REDACTED]");
   };
-  const ctx = { lane, key, catalog, assets, redact: clean, log: (...values) => log(...values.map(clean)) };
+  const cleanValues = (value) => {
+    if (typeof value === "string") return clean(value);
+    if (Array.isArray(value)) return value.map(cleanValues);
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(Object.entries(value).map(([name, item]) => [name,
+      /^(?:authorization|proxy[-_]?authorization|x[-_]goog[-_]api[-_]key|x[-_]api[-_]key|api[-_]?key)$/i.test(name) ? "[REDACTED]" : cleanValues(item),
+    ]));
+  };
+  const validateUrl = (url) => {
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password
+      || [...url.searchParams.keys()].some((name) => /^(?:key|api_key|api-key|token|authorization|x-goog-api-key|x-api-key)$/i.test(name))) {
+      throw new ProviderError("unsafeProviderUrl", { category: "invalid_request", accepted: false });
+    }
+    // Public route names may coincide with short local keys. Query values and
+    // external URLs have no such schema exemption; inspect decoded forms too.
+    let candidate = url.origin === base.origin ? `${url.search}${url.hash}` : url.href;
+    for (let depth = 0; depth < 8; depth += 1) {
+      if (clean(candidate) !== candidate) throw new ProviderError("unsafeProviderUrl", { category: "invalid_request", accepted: false });
+      let decoded;
+      try { decoded = decodeURIComponent(candidate); } catch { break; }
+      if (decoded === candidate) break;
+      candidate = decoded;
+    }
+  };
+  const ctx = { lane, key, catalog, assets, redact: clean, redactValues: (value) => cleanValues(redact(value)), log: (...values) => log(...values.map(clean)) };
   ctx.fetch = async (path, options = {}) => {
     const { needsAuth = true, timeoutMs = 60000, phase = "poll", ...requestOptions } = options;
     let url = new URL(path, `${base.href.replace(/\/$/, "")}/`);
-    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || [...url.searchParams.keys()].some((name) => /^(?:key|api_key|api-key|token|authorization)$/i.test(name))) throw new ProviderError("unsafeProviderUrl", { category: "invalid_request", accepted: false });
+    validateUrl(url);
     if (needsAuth && url.origin !== base.origin) throw new ProviderError("unsafeProviderUrl", { category: "invalid_request", accepted: false });
     const headers = new Headers(requestOptions.headers || {});
-    for (const name of ["authorization", "x-goog-api-key", "api-key"]) headers.delete(name);
+    const credentialHeaders = ["authorization", "proxy-authorization", "x-goog-api-key", "x-api-key", "api-key", "cookie"];
+    for (const name of credentialHeaders) headers.delete(name);
     if (needsAuth && key) headers.set(lane.provider === "gemini" ? "x-goog-api-key" : "authorization", lane.provider === "gemini" ? key : `Bearer ${key}`);
     const timeout = AbortSignal.timeout(timeoutMs);
     const signal = requestOptions.signal ? AbortSignal.any([timeout, requestOptions.signal]) : timeout;
@@ -119,8 +144,9 @@ function createContext({ lane, key = "", catalog, fetchImpl = globalThis.fetch, 
         if (!next || !["GET", "HEAD"].includes((requestOptions.method || "GET").toUpperCase())) throw new ProviderError("unexpectedProviderRedirect", { category: phase === "create" ? "unknown_outcome" : "transient" });
         await response.body?.cancel();
         url = new URL(next, url);
-        if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || (base.protocol === "https:" && url.protocol !== "https:")) throw new ProviderError("unsafeProviderUrl", { category: "invalid_request" });
-        for (const name of ["authorization", "x-goog-api-key", "api-key"]) headers.delete(name);
+        validateUrl(url);
+        if (base.protocol === "https:" && url.protocol !== "https:") throw new ProviderError("unsafeProviderUrl", { category: "invalid_request" });
+        for (const name of credentialHeaders) headers.delete(name);
       }
       if (!response.ok) {
         let body = "";
@@ -171,12 +197,13 @@ async function parseJson(ctx, response, phase = "poll") {
         chunks.push(Buffer.from(part.value));
       }
     } finally { await reader.cancel(); }
-    return JSON.parse(ctx.redact(Buffer.concat(chunks).toString("utf8")));
+    const value = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    return ctx.redactValues ? ctx.redactValues(value) : value;
   } catch (error) { throw new ProviderError("invalidProviderResponse", { category: phase === "create" ? "unknown_outcome" : "transient" }); }
 }
 
-function requireRemoteId(id) {
-  if (typeof id !== "string" || !id.trim()) throw new ProviderError("missingRemoteId", { category: "unknown_outcome" });
+function requireRemoteId(id, redact = (value) => value) {
+  if (typeof id !== "string" || !id.trim() || id.includes("[REDACTED]") || redact(id) !== id) throw new ProviderError("missingRemoteId", { category: "unknown_outcome" });
   return id;
 }
 

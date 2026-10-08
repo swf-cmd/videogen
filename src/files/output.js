@@ -148,17 +148,68 @@ async function recoverPublishedOutput(partialPath, desiredPath, contentType, sig
   return null;
 }
 
-async function writeOutput(response, desiredPath, { jobId = crypto.randomUUID(), signal, onPublished } = {}) {
-  if (response?.ok === false || !response?.body) {
-    throw Object.assign(new Error("downloadFailed"), { code: "downloadFailed", status: response?.status });
-  }
-  checkDownloadSignal(signal);
+function outputPaths(desiredPath, jobId) {
   const directory = path.dirname(path.resolve(desiredPath));
   const target = path.join(directory, sanitizeFilename(path.basename(desiredPath)));
   const owner = /^[a-zA-Z0-9_-]{1,100}$/.test(String(jobId))
     ? String(jobId)
     : crypto.createHash("sha256").update(String(jobId)).digest("hex");
-  const partialPath = `${target}.${owner}.part`;
+  return { directory, target, partialPath: `${target}.${owner}.part` };
+}
+
+async function finishRecoveredOutput(paths, { signal, onPublished, contentType }) {
+  const recovered = await recoverPublishedOutput(paths.partialPath, paths.target, contentType, signal);
+  if (!recovered) return null;
+  await syncOutputDirectory(paths.directory);
+  onPublished?.(recovered);
+  await fsp.unlink(paths.partialPath);
+  await syncOutputDirectory(paths.directory);
+  return recovered;
+}
+
+// Run before remote polling/downloading: a published file remains recoverable
+// even when the provider is offline or its result URL has expired.
+async function recoverOutput(desiredPath, { jobId, signal, onPublished, contentType = "video/mp4" } = {}) {
+  checkDownloadSignal(signal);
+  if (jobId === undefined) return null;
+  const paths = outputPaths(desiredPath, jobId);
+  if (activePartialPaths.has(paths.partialPath)) throw Object.assign(new Error("downloadAlreadyRunning"), { code: "downloadAlreadyRunning" });
+  activePartialPaths.add(paths.partialPath);
+  try {
+    return await finishRecoveredOutput(paths, { signal, onPublished, contentType });
+  } finally {
+    activePartialPaths.delete(paths.partialPath);
+  }
+}
+
+// The succeeded record may have been fsynced just before a crash interrupted
+// marker cleanup. Only remove a marker proven to be the saved file's hardlink.
+async function cleanupPublishedPartial(desiredPath, { jobId, output, signal } = {}) {
+  checkDownloadSignal(signal);
+  if (jobId === undefined || !output?.path) return false;
+  const paths = outputPaths(desiredPath, jobId);
+  if (activePartialPaths.has(paths.partialPath)) return false;
+  activePartialPaths.add(paths.partialPath);
+  try {
+    const stat = async (filename) => fsp.lstat(filename).catch((error) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+    const [partial, final] = await Promise.all([stat(paths.partialPath), stat(output.path)]);
+    if (!partial?.isFile() || !final?.isFile() || partial.dev !== final.dev || partial.ino !== final.ino) return false;
+    checkDownloadSignal(signal);
+    await fsp.unlink(paths.partialPath);
+    await syncOutputDirectory(paths.directory);
+    return true;
+  } finally {
+    activePartialPaths.delete(paths.partialPath);
+  }
+}
+
+async function writeOutput(response, desiredPath, { jobId = crypto.randomUUID(), signal, onPublished } = {}) {
+  checkDownloadSignal(signal);
+  const paths = outputPaths(desiredPath, jobId);
+  const { directory, target, partialPath } = paths;
   if (activePartialPaths.has(partialPath)) {
     throw Object.assign(new Error("downloadAlreadyRunning"), { code: "downloadAlreadyRunning" });
   }
@@ -170,15 +221,15 @@ async function writeOutput(response, desiredPath, { jobId = crypto.randomUUID(),
   let published = false;
   try {
     await fsp.mkdir(directory, { recursive: true, mode: 0o700 });
-    const contentType = response.headers?.get?.("content-type") || "application/octet-stream";
-    const recovered = await recoverPublishedOutput(partialPath, target, contentType, signal);
+    const contentType = response?.ok !== false && response?.headers?.get?.("content-type") || "video/mp4";
+    const recovered = await finishRecoveredOutput(paths, { signal, onPublished, contentType });
     if (recovered) {
-      onPublished?.(recovered);
-      if (typeof response.body.cancel === "function") await response.body.cancel();
-      else response.body.destroy?.();
-      await fsp.unlink(partialPath);
-      await syncOutputDirectory(directory);
+      if (typeof response?.body?.cancel === "function") await response.body.cancel().catch(() => {});
+      else response?.body?.destroy?.();
       return recovered;
+    }
+    if (response?.ok === false || !response?.body) {
+      throw Object.assign(new Error("downloadFailed"), { code: "downloadFailed", status: response?.status });
     }
     await fsp.unlink(partialPath).catch((error) => {
       if (error.code !== "ENOENT") throw error;
@@ -223,8 +274,8 @@ async function writeOutput(response, desiredPath, { jobId = crypto.randomUUID(),
         if (error.code !== "EEXIST") throw error;
       }
     }
-    onPublished?.(output);
     await syncOutputDirectory(directory);
+    onPublished?.(output);
     await fsp.unlink(partialPath);
     ownsPartial = false;
     await syncOutputDirectory(directory);
@@ -248,5 +299,7 @@ module.exports = {
   normalizeDirectoryPath,
   displayPathForUser,
   outputInfoForUser,
+  recoverOutput,
+  cleanupPublishedPartial,
   writeOutput,
 };
