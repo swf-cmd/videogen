@@ -4,6 +4,7 @@
 
 - Include the startup, quarantine recovery, compaction and frontend fixes prepared for v2.1.2, plus the launcher readiness regression from v2.1.3.
 - Replace short real-I/O test waits with explicit readiness/state conditions and bounded deadlines, preserve graceful shutdown budgets, and record sanitized diagnostics. Exercise deliberately slow requests without weakening paid-create, output-integrity or restart assertions.
+- Keep application-only crash workers alive until the intended process kill and capture process closure from launch. This prevents a normal early exit from being mistaken for a crash or leaving a late close-event waiter stuck.
 - v2.1.2 and v2.1.3 tags are retained unchanged and were not published after CI fixture timing failures; v2.1.4 is the subsequent release.
 
 ## 2.1.3 — 2026-10-08 (not published)
