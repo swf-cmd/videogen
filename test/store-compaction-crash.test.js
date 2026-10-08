@@ -21,7 +21,7 @@ const retiredModel = { id: "model-with-no-live-jobs", capabilities: { durations:
 const newModel = { id: "new-tail-model", capabilities: { durations: [10] } };
 
 test("asynchronous compaction survives process death at every durability boundary with new and retired model references in the tail", (t) => {
-  const checkpoints = ["snapshotFsynced", "snapshotRenamed", "snapshotDirectorySynced", "tailFsynced", "journalRenamed", "journalDirectorySynced", "journalReopened"];
+  const checkpoints = ["snapshotFsynced", "snapshotRenamed", "snapshotDirectorySynced", "tailFsynced", "journalClosed", "journalRenamed", "journalDirectorySynced", "journalReopened"];
   for (const phase of checkpoints) {
     const checkpoint = `asyncCompact:${phase}`;
     const dir = directory(t);
