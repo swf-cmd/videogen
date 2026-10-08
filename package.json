@@ -1,6 +1,6 @@
 {
   "name": "videogen",
-  "version": "2.1.2",
+  "version": "2.1.3",
   "private": true,
   "description": "Local AI video batch studio with per-shot frames, CSV imports, gallery selection and crash recovery.",
   "license": "MIT",

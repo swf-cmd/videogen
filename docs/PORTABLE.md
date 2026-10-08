@@ -1,6 +1,6 @@
 # Portable Windows and macOS bundles
 
-The release artifacts are `videogen-2.1.2-windows-x64.zip` and `videogen-2.1.2-macos-universal.zip`. The macOS archive includes separate native Apple Silicon and Intel executables; the launcher selects the matching one. Both archives include the application, Node **v24.21.0 LTS**, its third-party license notices and a runtime integrity manifest. No Node, Python or npm installation is needed to use a bundle.
+The release artifacts are `videogen-2.1.3-windows-x64.zip` and `videogen-2.1.3-macos-universal.zip`. The macOS archive includes separate native Apple Silicon and Intel executables; the launcher selects the matching one. Both archives include the application, Node **v24.21.0 LTS**, its third-party license notices and a runtime integrity manifest. No Node, Python or npm installation is needed to use a bundle.
 
 1. Extract the **entire ZIP** into a writable folder, such as Documents. Do not start it inside the archive viewer or a read-only disk image.
 2. On Windows, double-click **Start videogen.cmd**. On macOS, double-click **Start videogen.command**. A terminal opens, starts the local service and opens the browser.
@@ -39,7 +39,7 @@ From a source checkout, with Python 3.9+:
 
 ```bash
 python3 scripts/package-portable.py --target all --output dist --cache work/runtime-cache
-python3 scripts/smoke-portable.py dist/videogen-2.1.2-macos-universal.zip
+python3 scripts/smoke-portable.py dist/videogen-2.1.3-macos-universal.zip
 ```
 
 On Windows use `python` and smoke-test the Windows archive. The packaging script downloads only three pinned archives from the [official Node distribution](https://nodejs.org/dist/v24.21.0/), validates their SHA-256 values against the checked-in `scripts/node-runtime.json`, and copies only the executable and its complete license notices. To update Node, independently check the [official release index](https://nodejs.org/download/release/index.json) and versioned `SHASUMS256.txt`, review the new pins, then rebuild and rerun platform tests.

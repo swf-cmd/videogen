@@ -1,6 +1,12 @@
 # Changelog
 
-## 2.1.2 — 2026-10-08
+## 2.1.3 — 2026-10-08
+
+- Include all v2.1.2 product fixes and the offline quarantine recovery tool.
+- Wait for actual launcher readiness with a bounded deadline in process tests, including a deliberately delayed startup regression, instead of failing after a fixed two-second polling window on a busy Intel runner. Shutdown, orphan-process and data-lock assertions remain enforced.
+- v2.1.2 was tagged but not published after that CI fixture failure. Its tag is retained unchanged; v2.1.3 is the subsequent release.
+
+## 2.1.2 — 2026-10-08 (not published)
 
 - Remove PowerShell/ps from normal lock creation. Inspect foreign processes only on lock conflicts, tolerate approximate birth times conservatively, and explain unverifiable ownership.
 - Stabilize crash acceptance with a ten-second normal create timeout and explicit lost-response faults; retain separate timeout and duplicate-charge safety tests plus sanitized diagnostics for every failure phase.
