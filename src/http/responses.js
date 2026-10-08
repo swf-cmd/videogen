@@ -1,9 +1,12 @@
+const { redact } = require("../queue/keys");
+const { redactLocalPaths } = require("./errors");
+
 function sendJson(res, status, data) {
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
   });
-  res.end(JSON.stringify(data));
+  res.end(JSON.stringify(redactLocalPaths(redact(data))));
 }
 
 function writeNdjson(res, event) {

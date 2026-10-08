@@ -1,3 +1,7 @@
+> Migration in progress: Sora is retired. The current implementation supports OpenRouter and configurable OpenAI-compatible video servers, plus a development mock (`VIDEOGEN_DEV=1`). Server-side Batch and its discount have been removed. See [provider contracts](docs/providers/openrouter.md).
+>
+> Privacy change: prompts, parameters, first-frame images, remote task IDs, estimated costs and output paths now persist in the private videogen data directory. Keys remain in process memory. Use **Clear history and assets** to delete finished task records and unreferenced images; videos are retained. Stage 0 records tasks for manual recovery by remote ID; automatic restart recovery arrives with the persistent queue. The historical usage guide below will be replaced in the next milestone.
+
 # Sora2App
 
 **A local-first workbench for OpenAI Sora 2 / Sora 2 Pro.**  

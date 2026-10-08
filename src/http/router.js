@@ -5,14 +5,13 @@ const { PORT, PUBLIC_DIR } = require("../config");
 const { safeError } = require("./errors");
 const { sendJson, sendText } = require("./responses");
 const { handleSelectOutputDir } = require("./handlers/select-dir");
-const {
-  handleGenerate,
-  handleGenerateStream,
-  handleGenerateBatchStream,
-  handleStatus,
-  handleDownload,
-  handleOptions,
-} = require("./handlers/legacy");
+const { readBody } = require("./body");
+const { languageFromRequest, st, SERVER_MESSAGES } = require("../i18n/server-messages");
+const { MAX_BATCH_BYTES } = require("../config");
+const { writeNdjson } = require("./responses");
+const { redact } = require("../queue/keys");
+let application;
+function configureApplication(value) { application = value; }
 
 const LOCAL_BASE_URL = new URL(`http://127.0.0.1:${PORT}`);
 const LOCALHOST_ORIGIN = new URL(`http://localhost:${PORT}`).origin;
@@ -77,30 +76,53 @@ async function handleRequest(req, res) {
       sendText(res, 400, "Bad request");
       return;
     }
-    if (req.method === "POST" && url.pathname.startsWith("/api/") && !requestOriginAllowed(req)) {
+    if (!["GET", "HEAD"].includes(req.method) && url.pathname.startsWith("/api/") && !requestOriginAllowed(req)) {
       sendText(res, 403, "Forbidden");
       return;
     }
 
-    if (req.method === "POST" && url.pathname === "/api/generate-batch-stream") await handleGenerateBatchStream(req, res);
-    else if (req.method === "POST" && url.pathname === "/api/generate-stream") await handleGenerateStream(req, res);
-    else if (req.method === "POST" && url.pathname === "/api/generate") await handleGenerate(req, res);
-    else if (req.method === "POST" && url.pathname === "/api/status") await handleStatus(req, res);
-    else if (req.method === "POST" && url.pathname === "/api/download") await handleDownload(req, res);
-    else if (req.method === "POST" && url.pathname === "/api/select-output-dir") await handleSelectOutputDir(req, res);
-    else if (req.method === "GET" && url.pathname === "/api/options") handleOptions(req, res);
-    else if (req.method === "GET" || req.method === "HEAD") await serveStatic(req, res, url.pathname);
-    else sendText(res, 405, "Method not allowed");
+    if (req.method === "POST" && url.pathname === "/api/select-output-dir") return await handleSelectOutputDir(req, res);
+    if (req.method === "GET" && ["/api/catalog", "/api/options"].includes(url.pathname)) {
+      return sendJson(res, 200, { ...application.catalog, platform: process.platform });
+    }
+    if (req.method === "GET" && url.pathname === "/api/jobs") return sendJson(res, 200, application.store.list(Object.fromEntries(url.searchParams)));
+    if (req.method === "POST" && ["/api/generate-batch-stream", "/api/generate-stream", "/api/generate", "/api/recover", "/api/download"].includes(url.pathname)) {
+      const language = languageFromRequest(req);
+      const { payload, file } = await readBody(req, language, MAX_BATCH_BYTES);
+      payload.language = language;
+      res.writeHead(200, { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" });
+      const emit = (event) => { if (!res.destroyed) writeNdjson(res, redact(event)); };
+      const operation = application.generate(payload, file, emit, ["/api/recover", "/api/download"].includes(url.pathname));
+      application.work.add(operation);
+      try { await operation; }
+      catch (error) { emit({ type: "error", error: localizedError(error, language) }); }
+      finally { application.work.delete(operation); res.end(); }
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/estimate") {
+      const { payload } = await readBody(req, languageFromRequest(req));
+      return sendJson(res, 200, application.estimate(payload));
+    }
+    if (req.method === "POST" && url.pathname === "/api/history/clear") return sendJson(res, 200, application.clearHistory());
+    if (req.method === "GET" || req.method === "HEAD") return await serveStatic(req, res, url.pathname);
+    sendText(res, 405, "Method not allowed");
   } catch (error) {
     if (res.headersSent) {
       res.end();
       return;
     }
-    sendJson(res, 400, { ok: false, error: safeError(error) });
+    sendJson(res, error.status || 400, { ok: false, error: localizedError(error, languageFromRequest(req)) });
   }
 }
 
+function localizedError(error, language) {
+  const code = error.code || error.message;
+  return SERVER_MESSAGES.zh[code] ? { code, message: st(language, code) } : safeError(error);
+}
+
 module.exports = {
+  configureApplication,
+  localizedError,
   contentTypeFor,
   serveStatic,
   requestHostAllowed,

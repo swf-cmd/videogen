@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "provider": "mock",
+  "asOf": "2026-10-08",
+  "sources": [],
+  "regions": [{"id": "local", "labelKey": "regionLocal", "baseUrl": "http://127.0.0.1", "keyFormatHint": "optional", "availabilityNoteKey": "mockOnlyNote"}],
+  "models": [{
+    "id": "mock-video", "label": "Mock video", "verified": true, "verifiedAt": "2026-10-08", "sources": [],
+    "capabilities": {"durations": [1, 5, 10], "resolutions": ["480p", "720p"], "aspectRatios": ["16:9", "9:16", "1:1"], "firstFrame": true, "lastFrame": false, "audio": false},
+    "pricing": {"currency": "USD", "unit": "second", "rates": {"default": 0}}, "concurrencyDefault": 1, "pollIntervalSec": 0.05, "resultTtlHours": 24, "typicalRenderSec": 1
+  }]
+}

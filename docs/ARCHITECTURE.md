@@ -68,3 +68,13 @@ proxy behavior and v2.0.0. Stage 2 is outside this implementation.
 - Phase 0 and phase 1 use the same data directory and event schema.
 - No telemetry, update checks, package dependencies, tags, Releases or repository
   settings changes. All implementation commits target main.
+
+- Output publication uses an atomic exclusive hard link from the fsynced partial,
+  followed by unlinking the partial. Node's portable rename replaces existing
+  targets and cannot implement the stronger never-overwrite requirement without
+  a race. The exclusive link has atomic publication with no replacement; recovery
+  matches a leftover partial's inode to its published output. Bytes are unchanged.
+- Retry-After is honored even above 30 seconds; the exponential fallback retains
+  the former 30-second cap. Pure relocation was committed before this change.
+- Custom compatible endpoints select JSON or multipart before create; vLLM-Omni
+  documents multipart even for text-only requests. No fallback encoding retry.

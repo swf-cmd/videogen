@@ -13,6 +13,7 @@ function parseRetryAfterMs(value) {
 }
 
 function isRetryableIdempotentError(error) {
+  if (["transient", "rate_limited"].includes(error?.category)) return true;
   const status = Number(error?.status);
   if (Number.isInteger(status)) return status === 408 || status === 429 || status >= 500;
   if (["TypeError", "SyntaxError", "AbortError"].includes(error?.name)) return true;
@@ -42,7 +43,7 @@ async function withIdempotentRetry(operation) {
       }
       const retryAfterMs = Number(error?.retryAfterMs);
       const delayMs = Number.isFinite(retryAfterMs) && retryAfterMs >= 0
-        ? Math.min(retryAfterMs, RETRY_MAX_DELAY_MS)
+        ? retryAfterMs
         : Math.min(RETRY_BASE_DELAY_MS * (2 ** attempt), RETRY_MAX_DELAY_MS);
       await sleep(delayMs);
     }

@@ -3,203 +3,78 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Sora 2 工作台</title>
+    <title>videogen 视频工作台</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <main class="app-shell">
-      <section class="workbench" aria-label="Sora video generator">
+      <section class="workbench" aria-label="videogen">
         <header class="topbar">
-          <div class="brand-block">
-            <div class="brand-copy">
-              <p class="eyebrow">Sora 视频生成器</p>
-              <h1>Sora 2 工作台</h1>
-            </div>
-          </div>
+          <div class="brand-block"><div class="brand-copy"><p class="eyebrow" data-i18n="brandKicker">多供应商视频队列</p><h1>videogen</h1></div></div>
           <div class="topbar-actions">
-            <label class="language-field" for="languageSelect">
-              <span class="sr-only" data-i18n="languageLabel">语言</span>
-              <select id="languageSelect" name="language" aria-label="语言">
-                <option value="zh">中文</option>
-                <option value="ja">日本語</option>
-                <option value="en">English</option>
-                <option value="ko">한국어</option>
-              </select>
+            <label class="language-field" for="languageSelect"><span class="sr-only" data-i18n="languageLabel">语言</span>
+              <select id="languageSelect" name="language" aria-label="语言"><option value="zh">中文</option><option value="ja">日本語</option><option value="en">English</option><option value="ko">한국어</option></select>
             </label>
-            <div class="status-pill" id="connectionState">标准 API 就绪</div>
+            <div class="status-pill" id="connectionState">就绪</div>
           </div>
         </header>
-
+        <p class="notice retirement-note" data-i18n="soraRetired">Sora 已停用。请选择其他供应商或兼容端点。</p>
         <form id="generateForm" class="layout">
           <section class="panel controls-panel" aria-label="生成选项">
-            <div class="section-head span-full">
-              <div>
-                <p class="section-kicker">生成</p>
-                <h2>生成参数</h2>
-              </div>
-              <span class="trust-note">API key 仅用于本次请求</span>
+            <div class="section-head span-full"><div><p class="section-kicker" data-i18n="generateKicker">生成</p><h2 data-i18n="generationSettings">生成参数</h2></div></div>
+            <label class="field span-full"><span data-i18n="providerLabel">供应商 · 区域</span><select id="provider" name="provider"></select></label>
+            <label class="field span-full"><span data-i18n="baseUrl">端点地址</span><input id="baseUrl" name="baseUrl" type="url" spellcheck="false" required /><small class="field-meta" data-i18n="baseUrlNote">请填写 API 根地址。</small></label>
+            <label class="field span-full secret-field"><span data-i18n="apiKeyLabel">API key</span><div class="input-row"><input id="apiKey" name="apiKey" type="password" autocomplete="off" spellcheck="false" /><button id="toggleApiKey" type="button" class="icon-button" data-i18n="showApiKey">显示</button></div><small class="field-meta" data-i18n="trustNote">密钥仅存在本机服务内存中，服务停止即清除</small></label>
+            <div class="field span-full"><label for="model" data-i18n="modelLabel">模型</label><select id="model" name="model"></select><small id="modelNote" class="field-meta"></small></div>
+            <div id="customModelFields" class="span-full custom-options" hidden>
+              <label class="field"><span data-i18n="customModelId">模型 ID</span><input id="customModelId" type="text" spellcheck="false" /></label>
+              <details id="customCapabilitiesPanel"><summary data-i18n="customCapabilities">兼容端点能力（由你提供）</summary><p class="field-meta" data-i18n="customCapabilityNote"></p>
+                <div class="custom-capability-grid">
+                  <label class="field"><span data-i18n="durations">支持的秒数</span><input id="customDurations" type="text" value="4" /></label>
+                  <label class="field"><span data-i18n="resolutions">支持的分辨率</span><input id="customResolutions" type="text" value="1280x720" /></label>
+                  <label class="field"><span data-i18n="aspectRatios">支持的画幅</span><input id="customAspectRatios" type="text" value="16:9" /></label>
+                  <label class="check-field"><input id="customFirstFrame" type="checkbox" /><span data-i18n="firstFrame">支持首帧图片</span></label>
+                  <label class="check-field"><input id="customAudio" type="checkbox" /><span data-i18n="audio">生成音频</span></label>
+                </div>
+              </details>
             </div>
-
-            <div class="mode-switch span-full" role="group" aria-label="调用方式">
-              <button id="standardModeButton" class="mode-option is-active" type="button" data-mode="standard" aria-pressed="true">
-                标准 API
-              </button>
-              <button id="batchModeButton" class="mode-option" type="button" data-mode="batch" aria-pressed="false">
-                Batch API
-                <span class="discount-badge"><span class="money-icon" aria-hidden="true">$</span>-50%</span>
-              </button>
-            </div>
-
-            <label class="field span-full secret-field">
-              <span>API key</span>
-              <div class="input-row">
-                <input id="apiKey" name="apiKey" type="password" autocomplete="off" placeholder="sk-..." required />
-                <button id="toggleApiKey" type="button" class="icon-button" aria-label="显示 API key">显示</button>
-              </div>
-            </label>
-
-            <label class="field span-full prompt-field">
-              <span id="promptLabel">提示词</span>
-              <textarea id="prompt" name="prompt" rows="8" placeholder="描述画面、镜头、主体、动作、光线和风格..." required></textarea>
-              <small id="promptMetaText" class="field-meta">0 字符</small>
-            </label>
-
-            <label id="batchCountField" class="field batch-only" hidden>
-              <span>提交条数</span>
-              <input id="batchCount" name="batchCount" type="number" min="1" max="50000" step="1" value="1" inputmode="numeric" />
-              <small id="batchCountMeta" class="field-meta">最多 50,000 条</small>
-            </label>
-
-            <div class="field">
-              <span>模型</span>
-              <select id="model" name="model">
-                <option value="sora-2">sora-2</option>
-                <option value="sora-2-pro">sora-2-pro</option>
-              </select>
-            </div>
-
-            <div class="field">
-              <span>时长</span>
-              <select id="seconds" name="seconds">
-                <option value="4">4 秒</option>
-                <option value="8">8 秒</option>
-                <option value="12">12 秒</option>
-                <option value="16">16 秒</option>
-                <option value="20">20 秒</option>
-              </select>
-            </div>
-
-            <div class="field span-full">
-              <span>分辨率</span>
-              <select id="size" name="size">
-                <option value="720x1280">720 x 1280 竖屏</option>
-                <option value="1280x720">1280 x 720 横屏</option>
-              </select>
-            </div>
-
-            <div class="field span-full reference-field">
-              <span>首帧图片</span>
-              <div class="reference-input-row">
-                <input id="inputReference" name="input_reference" type="file" accept="image/jpeg,image/png,image/webp" />
-                <button id="clearInputReference" type="button" class="icon-button reference-clear" disabled>移除</button>
-              </div>
-              <div id="inputReferencePreview" class="reference-preview" hidden>
-                <img id="inputReferenceImage" alt="" />
-                <strong id="inputReferenceName">-</strong>
-              </div>
-              <small id="inputReferenceMeta" class="field-meta">可选；JPEG/PNG/WebP，尺寸不一致会自动处理为当前分辨率</small>
-            </div>
-
-            <label class="field span-full">
-              <span>输出目录</span>
-              <div class="input-row output-dir-row">
-                <input id="outputDir" name="outputDir" type="text" placeholder="~/Downloads/SoraVideos" />
-                <button id="selectOutputDir" type="button" class="icon-button output-dir-button" aria-label="选择输出目录">选择</button>
-              </div>
-            </label>
-
-            <label class="field span-full">
-              <span>文件名</span>
-              <input id="filename" name="filename" type="text" placeholder="留空会自动生成 mp4 文件名" />
-            </label>
-
-            <div class="actions span-full">
-              <button id="generateButton" type="submit" class="primary-action">开始生成</button>
-              <button id="clearButton" type="button" class="secondary">清空状态</button>
-            </div>
+            <label class="field"><span data-i18n="secondsLabel">时长</span><select id="seconds" name="seconds"></select></label>
+            <label class="field"><span data-i18n="sizeLabel">分辨率</span><select id="size" name="size"></select></label>
+            <label id="aspectRatioField" class="field"><span data-i18n="aspectRatio">画幅</span><select id="aspectRatio" name="aspectRatio"></select></label>
+            <label id="audioField" class="check-field"><input id="audio" name="audio" type="checkbox" /><span data-i18n="audio">生成音频</span></label>
+            <label id="seedField" class="field" hidden><span data-i18n="seed">随机种子（可选）</span><input id="seed" type="number" step="1" /></label>
+            <label id="requestFormatField" class="field" hidden><span data-i18n="requestFormat">创建请求格式</span><select id="requestFormat"><option value="json">JSON</option><option value="multipart">multipart/form-data</option></select></label>
+            <label class="field span-full prompt-field"><span data-i18n="promptLabel">提示词队列</span><textarea id="prompt" name="prompt" rows="8" required></textarea><small id="promptMetaText" class="field-meta">0 字符</small></label>
+            <label id="batchCountField" class="field"><span data-i18n="repeatLabel">重复次数</span><input id="batchCount" name="batchCount" type="number" min="1" step="1" value="1" inputmode="numeric" /><small class="field-meta" data-i18n="repeatNote">只有一条提示词时可重复生成</small></label>
+            <div class="field span-full reference-field"><span data-i18n="inputReferenceLabel">首帧图片</span><div class="reference-input-row"><input id="inputReference" name="input_reference" type="file" accept="image/jpeg,image/png,image/webp" /><button id="clearInputReference" type="button" class="icon-button reference-clear" disabled data-i18n="inputReferenceClear">移除</button></div><div id="inputReferencePreview" class="reference-preview" hidden><img id="inputReferenceImage" alt="" /><strong id="inputReferenceName">-</strong></div><small id="inputReferenceMeta" class="field-meta"></small></div>
+            <label class="field span-full"><span data-i18n="outputDirLabel">输出目录</span><div class="input-row output-dir-row"><input id="outputDir" name="outputDir" type="text" placeholder="~/Downloads/videogen" /><button id="selectOutputDir" type="button" class="icon-button output-dir-button" data-i18n="selectOutputDir">选择</button></div></label>
+            <label class="field span-full"><span data-i18n="filenameLabel">文件名</span><input id="filename" name="filename" type="text" /></label>
+            <p class="notice privacy-note span-full" data-i18n="privacyNote">任务数据保存在本机，密钥不写入磁盘。</p>
+            <div class="actions span-full"><button id="generateButton" type="submit" class="primary-action" data-i18n="generateButton">估算并提交</button><button id="clearButton" type="button" class="secondary" data-i18n="clearStatus">清空状态</button></div>
           </section>
-
           <aside class="panel monitor-panel" aria-label="任务状态">
-            <div class="section-head compact">
-              <div>
-                <p class="section-kicker">状态</p>
-                <h2>任务状态</h2>
-              </div>
-            </div>
-
-            <div class="progress-wrap">
-              <div class="progress-meta">
-                <span id="statusText">等待提交</span>
-                <span id="progressText">0%</span>
-              </div>
-              <div class="progress-track" aria-hidden="true">
-                <div id="progressBar" class="progress-bar"></div>
-              </div>
-            </div>
-
+            <div class="section-head compact"><div><p class="section-kicker" data-i18n="statusKicker">状态</p><h2 data-i18n="taskStatus">任务状态</h2></div></div>
+            <div class="progress-wrap"><div class="progress-meta"><span id="statusText">等待提交</span><span id="progressText">0%</span></div><div class="progress-track" aria-hidden="true"><div id="progressBar" class="progress-bar"></div></div></div>
             <div class="summary-grid" aria-label="当前参数">
-              <div class="summary-item">
-                <span>方式</span>
-                <strong id="summaryMode">标准 API</strong>
-              </div>
-              <div class="summary-item">
-                <span>模型</span>
-                <strong id="summaryModel">Sora 2</strong>
-              </div>
-              <div class="summary-item">
-                <span>时长</span>
-                <strong id="summarySeconds">4 秒</strong>
-              </div>
-              <div class="summary-item">
-                <span id="priceLabel">预估价格</span>
-                <strong id="summaryPrice">$0.40</strong>
-              </div>
-              <div id="summaryBatchCountItem" class="summary-item" hidden>
-                <span>提交条数</span>
-                <strong id="summaryBatchCount">1 条</strong>
-              </div>
-              <div id="summaryReferenceItem" class="summary-item span-summary">
-                <span>首帧</span>
-                <strong id="summaryReference">未设置</strong>
-              </div>
-              <div id="summarySizeItem" class="summary-item span-summary">
-                <span>分辨率</span>
-                <strong id="summarySize">720 x 1280 竖屏</strong>
-              </div>
+              <div class="summary-item span-summary"><span data-i18n="providerLabel">供应商 · 区域</span><strong id="summaryMode">-</strong></div>
+              <div class="summary-item"><span data-i18n="summaryModel">模型</span><strong id="summaryModel">-</strong></div>
+              <div class="summary-item"><span data-i18n="summarySeconds">时长</span><strong id="summarySeconds">-</strong></div>
+              <div class="summary-item"><span data-i18n="estimatedPrice">预估价格</span><strong id="summaryPrice">未知</strong></div>
+              <div class="summary-item"><span data-i18n="eta">预计耗时</span><strong id="summaryEta">未知</strong></div>
+              <div class="summary-item"><span data-i18n="summaryBatchCount">提交条数</span><strong id="summaryBatchCount">1</strong></div>
+              <div class="summary-item"><span data-i18n="summaryReference">首帧</span><strong id="summaryReference">未设置</strong></div>
+              <div class="summary-item span-summary"><span data-i18n="summarySize">分辨率</span><strong id="summarySize">-</strong></div>
             </div>
-
-            <div class="job-card">
-              <span id="resultIdLabel">视频 ID</span>
-              <strong id="videoId">-</strong>
-            </div>
-
-            <div class="job-card">
-              <span>输出文件</span>
-              <strong id="outputPath">-</strong>
-            </div>
-
-            <div class="log-panel">
-              <div class="log-head">
-                <span>运行日志</span>
-                <span id="logCount">0 条</span>
-              </div>
-              <div class="log-box" id="logBox" aria-live="polite"></div>
-            </div>
+            <div class="job-card"><span data-i18n="resultVideoId">视频 ID</span><strong id="videoId">-</strong></div>
+            <div class="job-card"><span data-i18n="outputFile">输出文件</span><strong id="outputPath">-</strong></div>
+            <section class="recovery-panel"><h2 data-i18n="recoverTitle">找回已有任务</h2><p class="field-meta" data-i18n="recoverNote"></p><label class="field"><span data-i18n="remoteId">远端任务 ID</span><input id="remoteId" type="text" autocomplete="off" /></label><button id="recoverButton" type="button" class="secondary" data-i18n="recoverButton">找回并下载</button></section>
+            <div class="log-panel"><div class="log-head"><span data-i18n="runLog">运行日志</span><span id="logCount">0 条</span></div><div class="log-box" id="logBox" aria-live="polite"></div></div>
+            <button id="clearHistoryButton" type="button" class="secondary" data-i18n="clearHistory">清除历史和素材</button>
           </aside>
         </form>
       </section>
     </main>
-
+    <script src="./i18n.js"></script>
     <script src="./image-reference.js"></script>
     <script src="./app.js"></script>
   </body>

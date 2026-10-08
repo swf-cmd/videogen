@@ -1,3 +1,6 @@
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const assert = require("node:assert/strict");
 const { spawn } = require("node:child_process");
 const http = require("node:http");
@@ -31,9 +34,10 @@ function request(port, options = {}) {
 }
 
 async function startServer(t, port) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "videogen-security-"));
   const child = spawn(process.execPath, ["server.js"], {
     cwd: root,
-    env: { ...process.env, PORT: String(port) },
+    env: { ...process.env, PORT: String(port), VIDEOGEN_DATA_DIR: directory },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -44,6 +48,7 @@ async function startServer(t, port) {
     const exited = once(child, "exit");
     child.kill("SIGTERM");
     await exited;
+    fs.rmSync(directory, { recursive: true, force: true });
   });
   await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`Server startup timed out: ${output}`)), 5000);
@@ -84,8 +89,10 @@ test("child-process HTTP server preserves localhost security boundaries", { time
   await t.test("API POST requires an Origin matching its Host", async () => {
     for (const origin of [undefined, "null", "https://example.com", `http://localhost:${port}`, `https://127.0.0.1:${port}`, `http://127.0.0.1:${port + 1}`]) {
       const headers = origin === undefined ? {} : { origin };
-      const response = await request(port, { path: "/api/not-a-route", method: "POST", headers });
-      assert.equal(response.status, 403, String(origin));
+      for (const method of ["POST", "DELETE", "PUT", "PATCH"]) {
+        const response = await request(port, { path: "/api/not-a-route", method, headers });
+        assert.equal(response.status, 403, `${method}: ${String(origin)}`);
+      }
     }
     for (const host of [`127.0.0.1:${port}`, `localhost:${port}`]) {
       const response = await request(port, { path: "/api/not-a-route", method: "POST", headers: { host, origin: `http://${host}` } });

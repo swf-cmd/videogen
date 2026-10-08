@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "provider": "openai-compatible",
+  "asOf": "2026-10-08",
+  "sources": ["https://docs.sglang.io/docs/sglang-diffusion/api/openai_api", "https://docs.vllm.ai/projects/vllm-omni/en/latest/serving/videos_api/"],
+  "regions": [{"id": "custom", "labelKey": "regionCustom", "baseUrl": "http://127.0.0.1:30000/v1", "keyFormatHint": "optional", "availabilityNoteKey": "customEndpointNote"}],
+  "models": [{
+    "id": "custom-model", "label": "Custom model", "verified": false, "verifiedAt": null,
+    "sources": ["https://docs.sglang.io/docs/sglang-diffusion/api/openai_api"],
+    "capabilities": {"durations": [5, 10], "resolutions": ["720p"], "aspectRatios": ["16:9", "9:16"], "firstFrame": true, "lastFrame": false, "audio": false},
+    "pricing": null, "concurrencyDefault": 1, "pollIntervalSec": 5, "resultTtlHours": null, "typicalRenderSec": 180,
+    "requestFormat": "json"
+  }]
+}

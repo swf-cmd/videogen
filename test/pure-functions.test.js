@@ -104,10 +104,11 @@ test("filenames remove directory components and unsafe characters without losing
 test("batch prompts preserve multiline prompts, split blank lines, repeat or truncate", () => {
   assert.deepEqual(Array.from(legacy.parseBatchPrompts("  first\nline\n\n second\r\n\r\nthird  ")), ["first\nline", "second", "third"]);
   assert.deepEqual(Array.from(legacy.parseBatchPrompts("one", "3")), ["one", "one", "one"]);
+  assert.equal(legacy.parseBatchPrompts("one", 50001).length, 50001);
   assert.deepEqual(Array.from(legacy.parseBatchPrompts("one\n\ntwo", 1)), ["one"]);
   assert.throws(() => legacy.parseBatchPrompts(" \n\n ", 1, "en"));
   assert.throws(() => legacy.parseBatchPrompts("one\n\ntwo", 3, "en"));
-  for (const count of [0, -1, 1.5, "many", 50001]) {
+  for (const count of [0, -1, 1.5, "many", Number.MAX_SAFE_INTEGER + 1]) {
     assert.throws(() => legacy.parseBatchPrompts("one", count, "en"));
   }
 });
@@ -151,7 +152,7 @@ test("idempotent retries back off, respect Retry-After and stop on exhaustion", 
   attempts = 0;
   await assert.rejects(withIdempotentRetry(async () => { attempts += 1; throw throttled; }), (error) => error === throttled && error.retryExhausted === true);
   assert.equal(attempts, 5);
-  assert.deepEqual(delays.splice(0), [30000, 30000, 30000, 30000]);
+  assert.deepEqual(delays.splice(0), [60000, 60000, 60000, 60000]);
   attempts = 0;
   await assert.rejects(withIdempotentRetry(async () => { attempts += 1; throw Object.assign(new Error("invalid"), { status: 400 }); }), /invalid/);
   assert.equal(attempts, 1);
