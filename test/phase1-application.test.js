@@ -26,17 +26,30 @@ test("new provider selection resolves regional prices and rejects unresolved or 
   assert.equal(app.store.jobs.size, 0);
 });
 
-test("Gemini manual recovery rejects interaction IDs before changing a review record", async (t) => {
+test("Gemini manual recovery rejects unsafe IDs before attaching a legacy Files record", async (t) => {
   const app = application(t);
   const { jobs } = await app.prepare({ provider: "gemini", region: "global", model: "gemini-omni-1.1-flash", prompt: "manual file recovery", params: { durationSeconds: 3, resolution: "720p", aspectRatio: "16:9" } });
   const id = jobs[0].id;
   app.store.update(id, { state: "submitting", attempts: { create: 1, poll: 0, download: 0 } });
   app.store.update(id, { state: "needs_review" });
-  await assert.rejects(app.scheduler.jobAction(id, "resolve", { action: "attach_remote_id", remoteId: "v1_interaction_id" }), { code: "geminiFileIdRequired" });
+  await assert.rejects(app.scheduler.jobAction(id, "resolve", { action: "attach_remote_id", remoteId: "v1_invalid/path" }), { code: "geminiFileIdRequired" });
   assert.equal(app.store.get(id).state, "needs_review");
   await app.scheduler.jobAction(id, "resolve", { action: "attach_remote_id", remoteId: "files/found-video" });
   assert.equal(app.store.get(id).state, "running");
   assert.equal(app.store.get(id).remote.id, "files/found-video");
+  assert.equal(app.store.get(id).attempts.create, 1);
+  assert.equal(app.scheduler.laneList()[0].state, "needs_key");
+});
+
+test("Gemini manual recovery attaches a background interaction ID without another create", async (t) => {
+  const app = application(t);
+  const { jobs } = await app.prepare({ provider: "gemini", region: "global", model: "gemini-omni-1.1-flash", prompt: "manual interaction recovery", params: { durationSeconds: 3, resolution: "720p", aspectRatio: "16:9" } });
+  const id = jobs[0].id;
+  app.store.update(id, { state: "submitting", attempts: { create: 1, poll: 0, download: 0 } });
+  app.store.update(id, { state: "needs_review" });
+  await app.scheduler.jobAction(id, "resolve", { action: "attach_remote_id", remoteId: "v1_interaction_id" });
+  assert.equal(app.store.get(id).state, "running");
+  assert.equal(app.store.get(id).remote.id, "v1_interaction_id");
   assert.equal(app.store.get(id).attempts.create, 1);
   assert.equal(app.scheduler.laneList()[0].state, "needs_key");
 });

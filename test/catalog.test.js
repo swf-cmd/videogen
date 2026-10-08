@@ -56,7 +56,8 @@ test("OpenRouter public fixture normalizes variable SKUs conservatively", () => 
   const models = normalizeOpenRouterModels(fixture, fixture.asOf);
   assert.equal(models.length, 3);
   assert.equal(models.find((model) => model.id === "runway/gen-4.5").pricing.rates["720p"], 0.12);
-  assert.ok(models.every((model) => !model.capabilities.firstFrame));
+  assert.ok(models.every((model) => model.capabilities.firstFrame));
+  assert.deepEqual(models.map((model) => model.capabilities.lastFrame), [false, false, true]);
   const unknown = normalizeOpenRouterModels({ data: [{ ...fixture.data[0], pricing_skus: { video_tokens: "0.000007" } }] });
   assert.equal(unknown[0].pricing, null);
   assert.throws(() => normalizeOpenRouterModels({}), /Invalid catalog/);
@@ -68,7 +69,7 @@ test("phase one catalog prices remain regional and token formulas use exact dime
   assert.equal(normalizeParams(gemini, { audio: false }).ok, false);
   assert.equal(normalizeParams(gemini, { seed: 1 }).ok, false);
   assert.equal(normalizeParams(gemini).value.audio, true);
-  assert.equal(gemini.createMode, "blocking");
+  assert.equal(gemini.createMode, "async");
   const wan = findModel(catalog, "dashscope", "wan3.0-video");
   for (const [region, expected] of [["beijing", 3], ["singapore", 3.7471]]) {
     assert.equal(estimateCost({ ...wan, pricing: wan.pricingByRegion[region] }, { durationSeconds: 5, resolution: "720p" }).amount, expected);

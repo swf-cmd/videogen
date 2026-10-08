@@ -1,0 +1,3 @@
+prompt,subject,durationSeconds,resolution,aspectRatio,firstFrame,lastFrame,filename
+"A cinematic shot of {{subject}}",a quiet forest,4,720p,16:9,forest-first.png,forest-last.png,forest
+"A slow shot of {{subject}}",a sunlit garden,4,720p,16:9,garden.png,,garden

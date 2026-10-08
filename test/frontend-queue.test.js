@@ -169,5 +169,5 @@ test("HTML confirmations require an explicit click, preserve risk text and defau
   assert.equal(await fourth, false);
   const queue = fs.readFileSync(path.join(publicDir, "queue-view.js"), "utf8");
   assert.doesNotMatch(`${appSource}\n${queue}`, /window\.confirm\s*\(/);
-  assert.equal((`${appSource}\n${queue}`.match(/await confirmAction\(/g) || []).length, 6);
+  assert.equal((`${appSource}\n${queue}`.match(/await confirmAction\(/g) || []).length, 7);
 });

@@ -1,17 +1,40 @@
 const base = require("./base");
+const frames = require("./frames");
+const pricing = require("../catalog/openrouter-pricing");
+
+function validateAssets(model, params, roles) {
+  const error = frames.validateAssets(model, params, roles);
+  if (error) return error;
+  if (roles?.includes("first_frame") && model?.capabilities?.firstFrame !== true) return "unsupportedFirstFrame";
+  if (roles?.includes("last_frame") && model?.capabilities?.lastFrame !== true) return "unsupportedLastFrame";
+  return null;
+}
+
+function validateLocalAssets(assets) {
+  return assets.some((asset) => !Buffer.isBuffer(asset.buffer) || !asset.buffer.length || asset.buffer.length > 20 * 1024 * 1024 || !["image/jpeg", "image/png", "image/webp"].includes(asset.mimeType)) ? "invalidAsset" : null;
+}
+
+function frameImages(ctx, job) {
+  const model = ctx.catalog?.models?.find((item) => item.id === job?.model) || ctx.catalog;
+  const assets = frames.frameAssets(ctx, job);
+  const error = validateAssets(model, job?.params, assets.map((asset) => asset.role)) || validateLocalAssets(assets);
+  if (error) throw new base.ProviderError(error, { code: error, category: "invalid_request", accepted: false });
+  return assets.map((asset) => {
+    return { type: "image_url", image_url: { url: `data:${asset.mimeType};base64,${asset.buffer.toString("base64")}` }, frame_type: asset.role };
+  });
+}
 
 module.exports = {
   id: "openrouter", displayNameKey: "providerOpenRouter", createMode: "async", supportsIdempotencyKey: false,
   validateKey: (key) => base.validateKey(key, "sk-or-"),
-  normalizeParams: base.normalizeParams, estimateCost: base.estimateCost, classifyError: base.classifyError,
-  async prepareAssets(ctx) {
-    if (ctx.assets.length) throw new base.ProviderError("firstFrameUnsupported", { category: "invalid_request", accepted: false });
-    return [];
-  },
+  validateAssets, validateLocalAssets, normalizeParams: base.normalizeParams,
+  estimateCost: (model, params) => model.pricingSkus ? pricing.estimate(model.pricingSkus, params) : base.estimateCost(model, params), classifyError: base.classifyError,
+  async prepareAssets(ctx, job) { frameImages(ctx, job); return []; },
   async create(ctx, job, { signal } = {}) {
-    if (ctx.assets.length || job.assets?.length) throw new base.ProviderError("firstFrameUnsupported", { category: "invalid_request", accepted: false });
+    const images = frameImages(ctx, job);
     const body = { model: job.model, prompt: job.prompt, duration: job.params.durationSeconds, resolution: job.params.resolution, aspect_ratio: job.params.aspectRatio, generate_audio: job.params.audio };
     if (job.params.seed !== undefined) body.seed = job.params.seed;
+    if (images.length) body.frame_images = images;
     const data = await base.parseJson(ctx, await ctx.fetch("videos", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal, phase: "create" }), "create");
     const remoteId = base.requireRemoteId(data.id);
     const pollingUrl = new URL(`videos/${encodeURIComponent(remoteId)}`, `${ctx.lane.baseUrl.replace(/\/$/, "")}/`).href;

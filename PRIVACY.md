@@ -6,6 +6,8 @@ videogen 2.0.0 runs locally. It has no telemetry, update checks, project-operate
 
 The persistent queue stores:
 
+- Per-task first and last frames, gallery Keep/Reject decisions, and links between explicitly confirmed regeneration takes. CSV/template rows are expanded locally before submission; the expanded prompts and task parameters enter the normal job journal.
+
 - Prompts, normalized parameters and first-frame image bytes.
 - Provider, region, base URL, model, local IDs, remote task IDs and recovery URLs.
 - Job/batch states, timestamps, attempts, budget estimates, cancellation/review decisions and classified errors.
@@ -25,7 +27,7 @@ The default directory is `~/Library/Application Support/videogen/` on macOS, `${
 
 Directories use mode 0700 and data files 0600 where supported. These files are not encrypted by videogen. Other processes with the same account's access, operating-system backups and disk-recovery tools are outside this boundary. Result/recovery URLs may grant access to generated media while valid; treat the task store as private even though it contains no API keys.
 
-Downloaded videos default to `~/Downloads/videogen` or your chosen directory. Provider bytes, embedded metadata and generation labels are preserved without transcoding. Job-specific `.part` files can exist during a download or after process interruption. Startup recovery reconciles published files and their known markers; it does not delete arbitrary files in your output directory.
+Source downloads default to `~/Downloads/videogen` or your chosen directory. Portable bundles store their records and default downloads in `portable-data/` and `portable-output/` beside the application. The local gallery streams only completed recorded output files and supports seeking; it does not upload previews. Provider bytes, embedded metadata and generation labels are preserved without transcoding. Job-specific `.part` files can exist during a download or after process interruption. Startup recovery reconciles published files and their known markers; it does not delete arbitrary files in your output directory.
 
 ## Clearing data
 

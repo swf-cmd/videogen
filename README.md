@@ -1,12 +1,22 @@
 # videogen
 
-A local AI video render queue with five provider adapters, bring-your-own keys and automatic downloads. Runs without npm dependencies or a build step, with Chinese, Japanese, English and Korean interfaces. [中文说明](README.zh-CN.md)
+A local AI video batch studio: per-shot frames, CSV imports, gallery selection, crash recovery and automatic downloads. Bring your own provider key.
 
-**Sora is retired.** Version **2.0.0** replaces Sora2App's discontinued integration with a persistent queue. Jobs continue when you close the browser, and survive service restarts. The old OpenAI Batch workflow and discount are gone.
+[English](README.md) · [中文](README.zh-CN.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
+
+[![Offline workflow recording: import, per-shot frames and gallery](docs/media/videogen-workflow.gif)](docs/media/videogen-workflow.webm)
+
+[Watch the workflow recording](docs/media/videogen-workflow.webm) · [Play the offline preview fixture](docs/media/offline-preview.mp4) · [Portable setup](docs/PORTABLE.md) · [From Sora 2](docs/MIGRATING_FROM_SORA.md)
+
+The recording uses local fixtures with no paid generation. The short preview is a synthetic playback test, **not an AI-generated quality sample**. Real provider samples are deferred until a user authorizes paid generation or supplies publishable clips.
+
+**Sora is retired.** Version **2.1.0** builds on the persistent queue introduced in 2.0.0, which replaces Sora2App's discontinued integration with a persistent queue. Jobs continue when you close the browser, and survive service restarts. The old OpenAI Batch workflow and discount are gone.
 
 ## Start
 
-Use **Node.js 22.21.0 or later in the 22.x line, or Node.js 24.5.0 or later** (`^22.21.0 || >=24.5.0`). Node 18, 20 and 23 are unsupported. No `npm install` is needed.
+**No-install ZIP:** choose the Windows x64 or macOS universal archive from [Releases](https://github.com/swf-cmd/videogen/releases), extract the whole folder, then double-click **Start videogen.cmd** or **Start videogen.command**. Node 24 LTS is included. Portable records and default videos stay in `portable-data/` and `portable-output/` beside the launcher. OS first-open confirmation may be required; see [portable setup and checksums](docs/PORTABLE.md). If a bundle has not yet been published, use source startup below.
+
+**From source:** Use **Node.js 22.21.0 or later in the 22.x line, or Node.js 24.5.0 or later** (`^22.21.0 || >=24.5.0`). Node 18, 20 and 23 are unsupported. No `npm install` is needed.
 
 ```bash
 git clone https://github.com/swf-cmd/videogen.git
@@ -14,19 +24,19 @@ cd videogen
 npm start
 ```
 
-Open the printed address, normally `http://127.0.0.1:5177`. `PORT` changes the port; the service binds only to `127.0.0.1`. On macOS, double-click **Start videogen.command**. The former `Start Sora2App.command` name is retired. Keep the launcher and application files together. Maintainer-built release bundles should include Node 24 LTS in `runtime/`; packaging is a maintainer step, not an automatic download.
-
-Linux and Windows run from source and use a manually entered output directory. Opening `public/index.html` directly provides a preview without generation. Only one service may use a data directory, even on different ports.
+Open the printed address, normally `http://127.0.0.1:5177`. `PORT` changes the port; the service binds only to `127.0.0.1`. The launchers choose another local port when the default is busy. Keep the launcher, runtime and application files together. The former `Start Sora2App.command` name is retired. Linux runs from source; Windows and Linux use a manually entered output directory. Opening `public/index.html` directly provides a preview without generation. Only one service may use a data directory, even on different ports.
 
 ## Submit a batch
 
+See the [CSV columns, templates and folder-matching guide](docs/BATCH_IMPORT.md) for copyable examples.
+
 1. Select **provider · region** and a model. For a compatible server, enter its base URL, model ID and documented capabilities. Choose JSON or multipart before submission; the app never retries a create with another request format.
 2. Enter and save the lane's key. A lane is provider + region + base URL. Keys stay in service memory; changing lane or URL clears the input. A local endpoint may allow an empty key. You may queue work before supplying a required key.
-3. Separate prompts with blank lines, or repeat a single prompt. Choose parameters, an optional first frame, output directory and filename. Controls follow the selected model's capabilities.
+3. Separate prompts with blank lines, repeat a single prompt, or import a CSV/template and image folder. Give each row its own first frame and, when supported, last frame. Row validation checks the selected model before submission; templates expand variables into prompts. Choose output directory and filename.
 4. Review the estimated cost and ETA, optionally set a batch budget, then confirm. Missing prices show **Unknown**. Currency totals remain separate; estimates are not provider billing guarantees.
-5. Watch lanes, batches and the paginated job table. Default render concurrency is 1 for compatible endpoints, 2 for OpenRouter and Model Studio, and 3 for Gemini and Ark. You can adjust each lane. A separate pool downloads up to 3 results at once.
+5. Preview completed videos in the gallery, mark takes **Keep** or **Reject**, and inspect the estimated cost per kept clip. Every regeneration requires a fresh explicit confirmation and can incur a new charge. Watch lanes, batches and the paginated job table. Default render concurrency is 1 for compatible endpoints, 2 for OpenRouter and Model Studio, and 3 for Gemini and Ark. You can adjust each lane. A separate pool downloads up to 3 results at once.
 
-Outputs default to `~/Downloads/videogen`. Downloads stream to disk, preserve provider bytes and metadata, and never replace an existing file. A collision gets another filename. Results nearing expiry are highlighted; keep the service running to save them promptly.
+Source outputs default to `~/Downloads/videogen`; portable bundles use `portable-output/`. `VIDEOGEN_OUTPUT_DIR` overrides the default. Downloads stream to disk, preserve provider bytes and metadata, and never replace an existing file. A collision gets another filename. Results nearing expiry are highlighted; keep the service running to save them promptly.
 
 A budget limits **estimated future dispatch**, not your provider's bill. It accounts for reserved and possibly charged work; already submitted jobs continue. Unknown pricing cannot be used for a budget. Gemini's estimate covers video output only and excludes additional input/thinking charges. Pausing a lane or batch stops new creates while submitted work remains tracked. Cancelling stops queued jobs; current production adapters continue tracking and downloading already submitted work, which may already be charged.
 
@@ -42,7 +52,7 @@ An interrupted or ambiguous create becomes **Needs review** (`needs_review`). Th
 
 A failed job can be retried only when the app has evidence that create was not accepted. A timeout, connection reset, malformed response or create 5xx is not such evidence. Rate limits cool the lane; authentication waits for a replacement key; balance/model-access problems pause the lane. Moderation failures affect only their own jobs.
 
-**Gemini uses blocking create.** A restart or timeout during that call may leave a charged job that cannot be recovered automatically. Successful responses save both the interaction ID and Files address. Manual association requires `files/<id>` or a same-origin Files URL; an interaction ID alone cannot retrieve the original URI. See the [Gemini contract](docs/providers/gemini.md).
+**Gemini uses background interactions.** The create request sets `background: true`; the interaction ID is saved before polling. A restart resumes that ID after key re-entry, and successful results retain their Files address. A create response lost before the ID is received can still require review; background mode cannot guarantee recovery across every network failure. Existing Files references remain usable for manual recovery. See the [Gemini contract](docs/providers/gemini.md).
 
 ## Providers and estimates
 
@@ -50,10 +60,10 @@ Catalog/source date: **2026-10-08**. All adapters have offline contract tests. N
 
 | Provider · region | Included models and limitations |
 | --- | --- |
-| OpenRouter · global | `alibaba/wan-3.0`, `alibaba/wan-2.7`, `runway/gen-4.5` in the fallback snapshot. Explicit refresh fetches the current video catalog. Local first frames are disabled because a local upload/data-URL contract was not verified. USD SKU estimates; retention and account limits remain unknown. [Contract](docs/providers/openrouter.md) |
-| Gemini API · supported regions | `gemini-omni-1.1-flash`, 3–10 seconds, 360p/720p/1080p/4K, first frame and native audio. Audio is fixed on; seed is unavailable. Only the 720p video-output token factor is verified: about USD 0.10136/second, plus input/thinking charges. Other resolution estimates are unknown. [Contract](docs/providers/gemini.md) |
-| Alibaba Cloud Model Studio · Beijing / Singapore | `wan3.0-video`, `wan3.0-video-prime`, 2–30 seconds, 480p/720p/1080p, first frame, audio toggle and seed. Enter your **workspace-specific hostname**; placeholders, generic legacy hosts and region mismatches are rejected. List prices are CNY and differ by region; no promotional discount is assumed. [Contract](docs/providers/dashscope.md) |
-| Volcengine Ark · Beijing / BytePlus ModelArk · overseas | Seedance 2.5: `doubao-seedance-2-5-260628` / `dreamina-seedance-2-5-260628`, 4–30 seconds, 480p/720p/1080p, first frame and audio toggle. Seed is disabled because 2.5 support was not verified. CN pricing is unknown; BytePlus uses a verified USD token/dimension formula. Adaptive output dimensions have unknown cost. 1080p HEVC may not play in every browser. [Contract](docs/providers/ark.md) |
+| OpenRouter · global | The dated fallback snapshot includes Veo 3.1 Lite, Seedance 2.5, Wan and other catalog models. Explicit refresh fetches the current video catalog. Local first frames use base64 data URLs in `frame_images` when the refreshed model advertises support. Controls, validation and estimates follow `/videos/models`; unavailable capabilities are not assumed. USD SKU estimates; retention and account limits remain unknown. [Contract](docs/providers/openrouter.md) |
+| Gemini API · supported regions | `gemini-omni-1.1-flash`, 3–10 seconds, 360p/720p/1080p/4K, first/last frames and native audio. Audio is fixed on; seed is unavailable. Only the 720p video-output token factor is verified: about USD 0.10136/second, plus input/thinking charges. Other resolution estimates are unknown. [Contract](docs/providers/gemini.md) |
+| Alibaba Cloud Model Studio · Beijing / Singapore | `wan3.0-video`, `wan3.0-video-prime`, 2–30 seconds, 480p/720p/1080p, supported first/last frames, audio toggle and seed. Enter your **workspace-specific hostname**; placeholders, generic legacy hosts and region mismatches are rejected. List prices are CNY and differ by region; no promotional discount is assumed. [Contract](docs/providers/dashscope.md) |
+| Volcengine Ark · Beijing / BytePlus ModelArk · overseas | Seedance 2.5: `doubao-seedance-2-5-260628` / `dreamina-seedance-2-5-260628`, 4–30 seconds, 480p/720p/1080p, first/last frames and audio toggle. Seed is disabled because 2.5 support was not verified. CN pricing is unknown; BytePlus uses a verified USD token/dimension formula. Adaptive output dimensions have unknown cost. 1080p HEVC may not play in every browser. [Contract](docs/providers/ark.md) |
 | OpenAI-compatible · custom | Configure a local or trusted server's exact model/capabilities; experimental by default. Choose its supported request format. No default Sora model or assumed price. [Contract](docs/providers/openai-compatible.md) |
 | Mock · local | Development only with `VIDEOGEN_DEV=1`; deterministic test bytes, not playable generated videos. |
 
@@ -93,7 +103,7 @@ On PowerShell, set the same names with `$env:HTTPS_PROXY`, `$env:HTTP_PROXY` and
 
 ## Privacy and local files
 
-**Prompts, parameters, first-frame images, remote IDs, job/batch states, cost estimates and output paths persist on disk.** Keys stay in memory and disappear when the service stops.
+**Prompts, parameters, reference images, gallery selections, remote IDs, job/batch states, cost estimates and output paths persist on disk.** Keys stay in memory and disappear when the service stops.
 
 | System | Default data directory |
 | --- | --- |
@@ -101,7 +111,7 @@ On PowerShell, set the same names with `$env:HTTPS_PROXY`, `$env:HTTP_PROXY` and
 | Linux | `${XDG_DATA_HOME:-~/.local/share}/videogen/` |
 | Windows | `%APPDATA%\videogen\` |
 
-`VIDEOGEN_DATA_DIR` overrides the location. Files include `jobs.ndjson`, `jobs.snapshot.json`, `assets/`, nonsecret lane `settings.json`, optional `catalog.local.json`, OpenRouter's catalog cache and the instance lock. Directories/files use 0700/0600 where supported; they are not encrypted by the app.
+Portable bundles instead use `portable-data/` beside the launcher. `VIDEOGEN_DATA_DIR` overrides the location. Files include `jobs.ndjson`, `jobs.snapshot.json`, `assets/`, nonsecret lane `settings.json`, optional `catalog.local.json`, OpenRouter's catalog cache and the instance lock. Directories/files use 0700/0600 where supported; they are not encrypted by the app.
 
 **Clear history and assets** removes finished records and unused images. Unfinished and `needs_review` items remain, as do downloaded videos; delete videos separately. It does not delete provider data or backups. Nonsecret `videogen.*` browser preferences persist; API keys and output-directory preferences do not. Job records still contain their output paths.
 

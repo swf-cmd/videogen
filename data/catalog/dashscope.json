@@ -85,7 +85,7 @@
           "adaptive"
         ],
         "firstFrame": true,
-        "lastFrame": false,
+        "lastFrame": true,
         "audio": true,
         "seed": true
       },
@@ -172,7 +172,7 @@
           "adaptive"
         ],
         "firstFrame": true,
-        "lastFrame": false,
+        "lastFrame": true,
         "audio": true,
         "seed": true
       },

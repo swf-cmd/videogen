@@ -184,12 +184,15 @@ test("compaction survives process death at every durability boundary", (t) => {
     const child = spawnSync(process.execPath, ["-e", `
       const { JobStore } = require(process.argv[1]);
       const store = new JobStore(process.argv[2], { onCheckpoint(name) {
-        if (name === process.argv[3]) process.kill(process.pid, "SIGKILL");
+        if (name === process.argv[3]) { require("node:fs").writeSync(1, "checkpoint:" + name); process.kill(process.pid, "SIGKILL"); }
       } });
       store.update("first", { progress: 37 }, { sync: true });
       store.compact();
     `, modulePath, dir, checkpoint], { encoding: "utf8", timeout: 5000 });
-    assert.equal(child.signal, "SIGKILL", `${checkpoint}: ${child.stderr}`);
+    assert.equal(child.error, undefined, "child reached checkpoint rather than timing out");
+    assert.equal(child.stdout, `checkpoint:${checkpoint}`);
+    if (process.platform === "win32") assert.ok(child.signal === "SIGKILL" || Number.isInteger(child.status) && child.status !== 0, child.stderr);
+    else assert.equal(child.signal, "SIGKILL", `${checkpoint}: ${child.stderr}`);
     store = new JobStore(dir);
     assert.equal(store.jobs.size, 2, checkpoint);
     assert.equal(store.get("first").progress, 37, checkpoint);
@@ -254,10 +257,13 @@ test("a reclaimer killed while owning its marker does not block future stale rec
   const child = spawnSync(process.execPath, ["-e", `
     const { JobStore } = require(process.argv[1]);
     new JobStore(process.argv[2], { onCheckpoint(name) {
-      if (name === "lock:reclaimAcquired") process.kill(process.pid, "SIGKILL");
+      if (name === "lock:reclaimAcquired") { require("node:fs").writeSync(1, "checkpoint:" + name); process.kill(process.pid, "SIGKILL"); }
     } });
   `, modulePath, dir], { encoding: "utf8", timeout: 5000 });
-  assert.equal(child.signal, "SIGKILL", child.stderr);
+  assert.equal(child.error, undefined, "child reached checkpoint rather than timing out");
+  assert.equal(child.stdout, "checkpoint:lock:reclaimAcquired");
+  if (process.platform === "win32") assert.ok(child.signal === "SIGKILL" || Number.isInteger(child.status) && child.status !== 0, child.stderr);
+  else assert.equal(child.signal, "SIGKILL", child.stderr);
   assert.ok(fs.readdirSync(dir).some((name) => name.startsWith(".lock-reclaim-")));
   const store = new JobStore(dir);
   store.close();

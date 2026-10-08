@@ -23,6 +23,10 @@ class QueueView {
     this.lanes = [];
     this.keys = [];
     this.laneCards = new Map();
+    this.galleryCards = new Map();
+    this.gallerySummary = null;
+    this.galleryRevision = 0;
+    this.gallerySelection = "all";
     this.jobCursors = [null];
     this.batchCursors = [null];
     this.jobPage = 0;
@@ -59,6 +63,7 @@ class QueueView {
     }
     document.querySelector("#batchFilter").addEventListener("change", (event) => { this.batchFilter = event.target.value; this.resetJobs(); });
     document.querySelector("#stateFilter").addEventListener("change", (event) => { this.stateFilter = event.target.value; this.resetJobs(); });
+    document.querySelector("#gallerySelection").addEventListener("change", (event) => { this.gallerySelection = event.target.value; this.renderGallery(); });
     document.querySelector("#closeReview").addEventListener("click", () => document.querySelector("#reviewDialog").close());
     document.querySelector("#attachRemoteButton").addEventListener("click", () => this.resolveReview("attach_remote_id"));
     document.querySelector("#resubmitReviewButton").addEventListener("click", () => this.resolveReview("resubmit"));
@@ -114,7 +119,7 @@ class QueueView {
     this.statusTimer = this.countdownTimer = this.refreshTimer = null;
     this.refreshJobs = false;
     // Discard snapshots started before the page was suspended.
-    this.jobRevision += 1; this.batchRevision += 1; this.laneRevision += 1;
+    this.jobRevision += 1; this.batchRevision += 1; this.laneRevision += 1; this.galleryRevision += 1;
   }
 
   scheduleRefresh(includeJobs = false) {
@@ -124,7 +129,7 @@ class QueueView {
       this.refreshTimer = null;
       const all = this.refreshJobs;
       this.refreshJobs = false;
-      this.run(() => all ? this.refresh() : Promise.all([this.loadBatches(), this.loadLanes()]));
+      this.run(() => all ? this.refresh() : Promise.all([this.loadBatches(), this.loadLanes(), this.loadGallerySummary()]));
     }, 180);
   }
 
@@ -139,7 +144,7 @@ class QueueView {
 
   async refresh() {
     if (isFilePreview) return;
-    await Promise.all([this.loadJobs(), this.loadBatches(), this.loadLanes()]);
+    await Promise.all([this.loadJobs(), this.loadBatches(), this.loadLanes(), this.loadGallerySummary()]);
   }
 
   async loadJobs() {
@@ -180,7 +185,7 @@ class QueueView {
     updateSelectedKeyStatus();
   }
 
-  resetJobs() { this.jobPage = 0; this.jobCursors = [null]; this.run(() => this.loadJobs()); }
+  resetJobs() { this.jobPage = 0; this.jobCursors = [null]; this.run(() => Promise.all([this.loadJobs(), this.loadGallerySummary()])); }
   showBatch(id) { this.batchFilter = id; this.stateFilter = ""; this.renderFilters(); this.resetJobs(); }
   keyPresent(lane) { return this.keys.some((item) => item.present && sameLane(item.lane, lane)); }
 
@@ -336,6 +341,10 @@ class QueueView {
       if (Number.isFinite(expires) && expires - Date.now() < 3600000 && !["succeeded", "cancelled", "failed"].includes(job.state)) result.append(viewElement("strong", "expiry-warning", t(expires < Date.now() ? "resultExpiredWarning" : "resultExpiring", { at: new Date(expires).toLocaleString(currentLocale()) })));
       const actions = viewElement("td", "job-actions");
       if (job.state === "needs_review") actions.append(viewButton(t("reviewAction"), () => this.openReview(job), "secondary review-action"));
+      if (["succeeded", "failed", "cancelled", "result_expired"].includes(job.state)) {
+        const regenerate = viewButton(t("regenerateOne"), () => this.run(() => this.regenerateJob(this.jobs.get(job.id)), regenerate));
+        actions.append(regenerate);
+      }
       for (const action of [canRetryJob(job) && "retry", canCancelJob(job) && "cancel"].filter(Boolean)) {
         const button = viewButton(t(action), () => this.run(async () => {
           if (action === "cancel" && !await confirmAction(t("cancelJobConfirm"), { danger: true })) return;
@@ -348,6 +357,70 @@ class QueueView {
     document.querySelector("#jobsNext").disabled = !this.nextJobCursor;
     document.querySelector("#jobsPage").textContent = t("pageNumber", { page: this.jobPage + 1 });
     document.querySelector("#jobsCount").textContent = t("visibleJobs", { count: this.jobs.size });
+    this.renderGallery();
+  }
+
+  async loadGallerySummary() {
+    const revision = ++this.galleryRevision;
+    const query = this.batchFilter ? `?${new URLSearchParams({ batchId: this.batchFilter })}` : "";
+    const result = await apiRequest(`/api/gallery/summary${query}`);
+    if (revision !== this.galleryRevision) return;
+    this.gallerySummary = result; this.renderGallerySummary();
+  }
+
+  renderGallerySummary() {
+    const summary = this.gallerySummary;
+    const element = document.querySelector("#gallerySummary");
+    if (!summary) { element.textContent = t("gallerySummaryPending"); return; }
+    const costs = (summary.costs || []).map((cost) => {
+      const perKept = typeof cost.costPerKept === "number" ? { amount: cost.costPerKept, currency: cost.currency } : cost.costPerKept;
+      return t("galleryCost", { total: formatCost(cost), perKept: formatCost(perKept) }) + (cost.unknownCount ? ` · ${t("unknownCosts", { count: cost.unknownCount })}` : "");
+    });
+    element.textContent = [t("galleryCounts", { kept: summary.kept, rejected: summary.rejected, unreviewed: summary.unreviewed }), ...costs].join(" · ");
+  }
+
+  renderGallery() {
+    const container = document.querySelector("#galleryGrid");
+    const jobs = [...this.jobs.values()].filter((job) => job.state === "succeeded" && job.output?.path && (this.gallerySelection === "all" || (job.selection || "unreviewed") === this.gallerySelection));
+    const visible = new Set(jobs.map((job) => job.id));
+    for (const [id, card] of this.galleryCards) if (!visible.has(id)) { card.video.pause(); card.video.removeAttribute("src"); card.element.remove(); this.galleryCards.delete(id); }
+    container.querySelector(".empty-state")?.remove();
+    if (!jobs.length) container.append(viewElement("p", "empty-state", t("galleryEmpty")));
+    for (const job of jobs) {
+      let card = this.galleryCards.get(job.id);
+      if (!card) {
+        const element = viewElement("article", "gallery-card"); element.dataset.jobId = job.id;
+        const video = document.createElement("video"); video.controls = true; video.preload = "none"; video.playsInline = true; video.src = `/api/jobs/${encodeURIComponent(job.id)}/media`;
+        const prompt = viewElement("p", "gallery-prompt"); const meta = viewElement("p", "field-meta");
+        const actions = viewElement("div", "inline-actions");
+        const selections = {};
+        for (const selection of ["keep", "reject", "unreviewed"]) {
+          const button = viewButton("", () => this.run(async () => { await apiRequest(`/api/jobs/${job.id}/curate`, { selection }); await this.refresh(); }, button));
+          selections[selection] = button; actions.append(button);
+        }
+        const regenerate = viewButton("", () => this.run(() => this.regenerateJob(this.jobs.get(job.id)), regenerate));
+        element.append(video, prompt, meta, actions, regenerate); container.append(element);
+        card = { element, video, prompt, meta, selections, regenerate }; this.galleryCards.set(job.id, card);
+      }
+      card.video.setAttribute("aria-label", t("previewVideo", { prompt: job.prompt }));
+      card.prompt.textContent = job.prompt;
+      card.meta.textContent = `${job.model} · ${formatCost(job.costEstimate)}`;
+      card.element.dataset.selection = job.selection || "unreviewed";
+      for (const [selection, button] of Object.entries(card.selections)) {
+        button.textContent = t({ keep: "selectionKeep", reject: "selectionReject", unreviewed: "selectionUnreviewed" }[selection]);
+        button.setAttribute("aria-pressed", String((job.selection || "unreviewed") === selection));
+      }
+      card.regenerate.textContent = t("regenerateOne");
+    }
+    this.renderGallerySummary();
+  }
+
+  async regenerateJob(job) {
+    if (!job) return;
+    const estimate = await apiRequest(`/api/jobs/${job.id}/regenerate/estimate`);
+    if (!await confirmAction(t("confirmRegenerate", { prompt: job.prompt, cost: formatCost(estimate.cost) }), { danger: true })) return;
+    await apiRequest(`/api/jobs/${job.id}/regenerate`, { confirmed: true, confirmationToken: estimate.confirmationToken });
+    await this.refresh(); this.message(t("regenerationQueued"));
   }
 
   openReview(job) {

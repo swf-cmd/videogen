@@ -1,4 +1,5 @@
 const base = require("./base");
+const { validateAssets, frameAssets } = require("./frames");
 
 function validateLane(lane) {
   let url;
@@ -19,27 +20,35 @@ function classifyError(error, phase = "poll") {
   return base.classifyError(error, phase);
 }
 
-function assets(ctx) {
-  if (ctx.assets.length > 1) throw new base.ProviderError("invalidAsset", { code: "invalidAsset", category: "invalid_request", accepted: false });
-  return ctx.assets.map((asset) => {
+function validateLocalAssets(assets) {
+  for (const asset of assets) {
     const { width, height } = asset;
     if (!Buffer.isBuffer(asset.buffer) || !asset.buffer.length || asset.buffer.length > 20 * 1024 * 1024 || !["image/jpeg", "image/png", "image/webp"].includes(asset.mimeType)
       || !Number.isInteger(width) || !Number.isInteger(height) || Math.min(width, height) < 240 || Math.max(width, height) > 8000 || Math.max(width / height, height / width) > 8) {
-      throw new base.ProviderError("invalidAsset", { code: "invalidAsset", category: "invalid_request", accepted: false });
+      return "invalidAsset";
     }
-    return { type: "first_frame", url: `data:${asset.mimeType};base64,${asset.buffer.toString("base64")}` };
+  }
+  return null;
+}
+
+function assets(ctx, job) {
+  const frames = frameAssets(ctx, job);
+  const error = validateLocalAssets(frames);
+  if (error) throw new base.ProviderError(error, { code: error, category: "invalid_request", accepted: false });
+  return frames.map((asset) => {
+    return { type: asset.role, url: `data:${asset.mimeType};base64,${asset.buffer.toString("base64")}` };
   });
 }
 
 module.exports = {
   id: "dashscope", displayNameKey: "providerDashScope", createMode: "async", supportsIdempotencyKey: false,
-  validateKey: (key) => base.validateKey(key), validateLane,
+  validateKey: (key) => base.validateKey(key), validateLane, validateAssets, validateLocalAssets,
   normalizeParams: base.normalizeParams, estimateCost: base.estimateCost, classifyError,
-  async prepareAssets(ctx) { assets(ctx); return []; },
+  async prepareAssets(ctx, job) { assets(ctx, job); return []; },
   async create(ctx, job, { signal } = {}) {
     const invalid = validateLane(ctx.lane);
     if (invalid) throw new base.ProviderError(invalid, { code: invalid, category: "invalid_request", accepted: false });
-    const media = assets(ctx);
+    const media = assets(ctx, job);
     if (job.assets?.length && !media.length) throw new base.ProviderError("invalidAsset", { code: "invalidAsset", category: "invalid_request", accepted: false });
     const input = { prompt: job.prompt, ...(media.length ? { media } : {}) };
     const parameters = { resolution: job.params.resolution.toUpperCase(), ratio: job.params.aspectRatio, duration: job.params.durationSeconds, audio: job.params.audio };

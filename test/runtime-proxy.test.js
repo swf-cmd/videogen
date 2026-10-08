@@ -113,6 +113,9 @@ function launcherDirectory(directory) {
   fs.mkdirSync(directory, { recursive: true });
   fs.copyFileSync(path.join(root, "Start videogen.command"), path.join(directory, "Start videogen.command"));
   fs.copyFileSync(path.join(root, "server.js"), path.join(directory, "server.js"));
+  fs.copyFileSync(path.join(root, "package.json"), path.join(directory, "package.json"));
+  fs.mkdirSync(path.join(directory, "scripts"));
+  fs.copyFileSync(path.join(root, "scripts", "launcher.cjs"), path.join(directory, "scripts", "launcher.cjs"));
   fs.symlinkSync(path.join(root, "src"), path.join(directory, "src"), "dir");
   const node = path.join(directory, "runtime", `node-darwin-${process.arch}`, "node"); fs.mkdirSync(path.dirname(node), { recursive: true });
   fs.writeFileSync(node, `#!/bin/sh\nexec '${process.execPath.replaceAll("'", "'\\''")}' "$@"\n`, { mode: 0o700 });
@@ -126,7 +129,7 @@ async function smoke(t, kind, withProxy) {
   const env = cleanEnv({ PORT: String(port), VIDEOGEN_DATA_DIR: data, OPEN_BROWSER: "0", PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH || ""}`, ...(withProxy ? { HTTP_PROXY: `http://smoke-user:smoke-pass@127.0.0.1:${proxy.address().port}`, HTTPS_PROXY: `http://smoke-user:smoke-pass@127.0.0.1:${proxy.address().port}`, no_proxy: ".aliyuncs.com" } : {}) });
   let command = process.execPath; let args; let cwd = root;
   if (kind === "npm") {
-    const npm = [process.env.npm_execpath, path.resolve(path.dirname(process.execPath), "../lib/node_modules/npm/bin/npm-cli.js"), ...String(process.env.PATH || "").split(path.delimiter).map((directory) => path.join(directory, "npm"))].filter(Boolean).find((filename) => fs.existsSync(filename));
+    const npm = [process.env.npm_execpath, path.join(path.dirname(process.execPath), "node_modules/npm/bin/npm-cli.js"), path.resolve(path.dirname(process.execPath), "../lib/node_modules/npm/bin/npm-cli.js"), ...String(process.env.PATH || "").split(path.delimiter).map((directory) => path.join(directory, "npm"))].filter(Boolean).find((filename) => fs.existsSync(filename));
     assert.ok(npm && fs.existsSync(npm), "npm CLI must accompany the supported runtime"); args = [fs.realpathSync(npm), "start", "--silent"];
   } else { command = "/bin/zsh"; cwd = launcherDirectory(path.join(directory, "app")); args = [path.join(cwd, "Start videogen.command")]; }
   const child = spawn(command, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] }); let output = "";
@@ -161,7 +164,7 @@ test("displayed proxy activation matches native NODE_OPTIONS and ordered CLI fla
   }
 });
 
-for (const guarded of [true, false]) test(`${guarded ? "guarded proxy bootstrap forwards signals" : "unflagged direct startup stays in one process"} and releases the data lock`, async (t) => {
+for (const guarded of [true, false]) test(`${guarded ? "guarded proxy bootstrap forwards signals" : "unflagged direct startup stays in one process"} and releases the data lock`, { skip: process.platform === "win32" }, async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "videogen-runtime-signal-")); const port = await availablePort();
   const child = spawn(process.execPath, [...(guarded ? ["--no-use-env-proxy"] : []), "server.js"], { cwd: root, env: cleanEnv({ PORT: String(port), VIDEOGEN_DATA_DIR: directory, HTTPS_PROXY: "http://127.0.0.1:1" }), stdio: ["ignore", "pipe", "pipe"] });
   let output = ""; let servicePid; child.stdout.on("data", (data) => { output += data; }); child.stderr.on("data", (data) => { output += data; });

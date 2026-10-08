@@ -23,11 +23,17 @@ async function readBody(req, language = "zh", limit = MAX_JSON_BYTES) {
       const form = await new Response(body, { headers: { "content-type": req.headers["content-type"] } }).formData();
       const payload = JSON.parse(String(form.get("payload") || "{}"));
       if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error("invalidJson");
-      return { payload, file: form.get("input_reference") };
+      const files = new Map();
+      for (const [name, value] of form) {
+        if (name === "payload") continue;
+        if (typeof value === "string" || files.has(name)) throw new Error("invalidAsset");
+        files.set(name, value);
+      }
+      return { payload, file: files.get("input_reference"), files };
     }
     const payload = body.length ? JSON.parse(body.toString("utf8")) : {};
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error("invalidJson");
-    return { payload, file: null };
+    return { payload, file: null, files: new Map() };
   } catch { throw new Error(st(language, "invalidJson")); }
 }
 module.exports = { readBody };

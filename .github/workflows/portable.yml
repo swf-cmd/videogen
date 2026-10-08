@@ -1,0 +1,53 @@
+name: Portable bundles
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'scripts/**'
+      - 'test/**'
+      - 'data/catalog/**'
+      - 'package.json'
+      - 'Start videogen.*'
+      - '.github/workflows/portable.yml'
+  push:
+    tags: ['v2.*']
+permissions:
+  contents: read
+jobs:
+  bundle:
+    if: github.event.repository.private == false
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: macos-universal
+          - os: macos-15-intel
+            target: macos-universal
+          - os: windows-latest
+            target: windows-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.21.0'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: node --test test/*.test.js
+      - name: Build verified portable bundle
+        run: python scripts/package-portable.py --target ${{ matrix.target }} --output dist --cache runtime-cache
+      - name: Smoke-test extracted launcher without system Node
+        shell: bash
+        run: python scripts/smoke-portable.py dist/videogen-*-"${{ matrix.target }}".zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: videogen-${{ matrix.target }}-${{ matrix.os }}
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error

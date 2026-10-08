@@ -1,43 +1,45 @@
 # Maintainer launch checklist
 
-Manual publication checklist for **videogen 2.0.0**. Tags, GitHub Releases, packaged binaries and repository settings remain maintainer actions; this file does not publish them.
+Publication checklist for **videogen 2.1.0**, plus the historical v2.0.0 release. No script in this repository automatically publishes tags, Releases, repository metadata or media.
 
 ## Repository metadata
 
-Suggested description:
+Description:
 
 ```text
-Local multi-provider AI video render queue with crash recovery, memory-only keys and automatic downloads.
+Local AI video batch studio: per-shot frames, CSV imports, gallery selection, crash recovery and automatic downloads.
 ```
 
-Suggested topics: `ai-video`, `video-generation`, `render-queue`, `local-first`, `nodejs`, `openrouter`, `gemini`, `macos`.
+Topics: `ai-video`, `video-generation`, `batch-processing`, `local-first`, `openrouter`, `gemini`, `seedance`, `wan`, `nodejs`, `windows`, `macos`, `csv`.
 
-Website: [README](https://github.com/swf-cmd/videogen#readme).
+Website: [README](https://github.com/swf-cmd/videogen#readme). The first screen links a real local-fixture workflow recording and an explicitly labeled offline playback sample. These do not demonstrate paid model output quality. See the [promotion kit](PROMOTION_KIT.md).
 
-## Source and packaging
+## Historical v2.0.0
 
-Include the READMEs, LICENSE, privacy/security/contribution notes, CHANGELOG, `package.json`, `server.js`, `src/`, `public/`, `data/catalog/`, `test/`, `acceptance/`, `docs/` and **Start videogen.command** in the source distribution. No dependency install or frontend build is required.
+- Create the `v2.0.0` tag and Release at **85cb144**, not at the later v2.1 commit.
+- Use [RELEASE-v2.0.0.md](RELEASE-v2.0.0.md). It preserves v2.0's blocking Gemini / disabled OpenRouter local-frame limits.
+- Do not attach current v2.1 ZIPs to v2.0.0 or imply that the historical release contained CSV/gallery features.
 
-Exclude `.astra/`, `.env`, keys, local journals/snapshots/settings, first-frame assets, generated videos, logs, private screenshots and package archives. Include the public bundled catalog, not a user's catalog overrides/cache. Keep `runtime/` out of Git history.
+## v2.1 source and packages
 
-**Maintainers must bundle Node 24 LTS** in macOS release packages for the intended arm64/x64 architecture. Keep the complete application folder with its `runtime/` directory; the launcher does not download a runtime. Validate the packaged launcher separately from a source checkout. Windows/Linux use source startup and manually entered output paths in this iteration.
+- Review the final changes and use [RELEASE-v2.1.0.md](RELEASE-v2.1.0.md) as the release body.
+- Run `npm test` and `npm run test:e2e` with supported Node runtimes. All fixtures are local; do not set real provider keys or call paid APIs for validation.
+- Build with `python3 scripts/package-portable.py --target all --output dist --cache work/runtime-cache`. The allowlist excludes private runtime records and includes the public catalog, approved documentation/demo files and complete runtime licenses.
+- Run `scripts/smoke-portable.py` against each extracted platform bundle. Test Windows x64, Apple Silicon and Intel Mac; record actual results. The CI workflow uses standard public-repository runners and is disabled for private repositories to avoid runner charges.
+- Inspect ZIP contents and generated checksums. Both macOS architectures must be present; runtime URLs and hashes must match the pinned manifest. Check app version, launcher executable permissions, missing-runtime failure, source fallback behavior and writable portable paths.
+- Confirm archives do not include `.git`, `.env`, real keys, personal journals/assets, catalog overrides/caches, private screenshots, generated user media or proxy userinfo. Never package a used portable app folder.
+- The bundles are not signed/notarized installers. First-open OS confirmation may be required. Do not promise bypass of macOS/Windows security prompts or imply paid signing was performed.
 
-The supported engine range is `^22.21.0 || >=24.5.0`: test the 22.x and 24.x lines. Node 23 and Node 24.0–24.4 are unsupported. The old `Start Sora2App.command` name is retired. Name each archive for the architecture it actually contains; call a bundle universal only when both architectures are present and tested.
+## Behavior and safety
 
-## Verify before publication
+- Exercise all four UI languages, per-row first/last frames, unsupported-model errors, CSV quoting, templates, image-folder matching, row estimates and explicit batch confirmation.
+- Preview local outputs in the gallery; verify keep/reject persistence, currency-separated/unknown cost handling and estimated cost per kept clip. Every regeneration must have a separate explicit confirmation.
+- Verify Gemini's interaction ID is durable before polling and restart recovery follows it. Lost creates without a received ID must still stop for review. Keep any compatibility handling for old Files references documented.
+- Verify OpenRouter frame data URLs and model-catalog parsing against offline contracts. Unsupported capabilities stay disabled; missing pricing stays unknown. Do not claim a model is popular or available without a cited, current source.
+- Exercise `npm start` and both launchers with and without proxy variables. Check lowercase precedence, forced loopback bypass, invalid-proxy redaction and signal forwarding / lock cleanup.
+- Check lane concurrency, budgets, throttle/pause/resume, streamed downloads, filename collisions, remote-ID association, history cleanup and crash recovery. Ambiguous creates must never be automatically resubmitted.
+- Record the 100-job acceptance results: zero duplicate creates, untracked accepted jobs, output hash mismatches and leaked secrets; report expected failures/review counts honestly. Mock results do not guarantee provider uptime or invoices.
 
-- Run offline `npm test` within 60 seconds and `npm run test:e2e` on both supported runtime lines. Neither suite may require a key or spend provider credit.
-- Check the 100-job acceptance results: independently counted remote work has no duplicate creates or untracked accepted jobs; output hashes match; secret scans pass; three process kills and five SSE disconnects preserve progress. Record actual results, including expected moderation failures and review items.
-- Verify render concurrency per lane, the global download limit, batch budgets, lane cooldown/pause/resume, and all three review actions. An ambiguous create must never be automatically resubmitted.
-- Exercise `npm start` and the macOS launcher both with and without proxy variables. Verify real native fetch/CONNECT routing, `NO_PROXY`, lowercase precedence and forced loopback bypass on Node 22.x and 24.x. Invalid proxy URLs must fail startup without exposing userinfo; the UI must show only redacted effective settings.
-- Smoke-test all four UI languages, catalog/parameter controls, first-frame fitting, confirmation, progress, paging, refresh/back navigation, SSE reconnect and re-entering keys after service restart. Confirm no key/output-directory preference is left in browser storage.
-- Verify streamed downloads, filename collisions, crash recovery of published files and partial markers, remote-ID association, and history/assets cleanup with temporary directories. Preserve provider bytes and metadata.
-- Keep the READMEs, privacy/security notes, architecture, changelog and provider contracts consistent with the released code. Review dated official links, regions, account terms and prices; unknown pricing must stay unknown. No expired promotion is a default price.
-- Distinguish offline adapter coverage from live provider testing. This implementation includes five provider families; compatible custom endpoints remain experimental, OpenRouter local first frames and Seedance 2.5 seed remain disabled, and Gemini uses blocking create with Files-specific manual recovery. See [provider contracts](providers/).
-- Inspect the staged diff and archive contents for credentials, proxy userinfo, personal paths, private task data and media. Do not publish `.astra/` or raw diagnostics. Confirm the MIT license remains intact and provider terms are documented separately.
+## Publication status
 
-## Artwork and announcement
-
-The obsolete Sora social-preview artwork has been removed. Make a new 1280 × 640 PNG under 1 MB from the current interface with synthetic prompts, empty key fields and shortened output paths. Remove real account/task IDs, media URLs and proxy userinfo. Upload it manually in GitHub's Social preview settings.
-
-Use [the promotion kit](PROMOTION_KIT.md) for release copy. Describe the persistent queue, recovery after key re-entry and conservative handling of ambiguous creates. Do not promise provider uptime, universal account access, accurate billing from estimates or a playable video from the mock fixture. Creating the tag/Release and uploading binaries are separate maintainer steps.
+Check the README, language versions, privacy notes, architecture and provider contracts against the final code. Distinguish checked offline behavior, locally verified platforms, CI-verified platforms and untested live provider behavior. Only publish approved public assets; paid samples, commercial signing and paid provider smoke calls remain deferred unless explicitly authorized.

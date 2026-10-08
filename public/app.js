@@ -54,6 +54,7 @@ const previewCatalog = [{ provider: "openai-compatible", regions: [{ id: "custom
 let providers = previewCatalog;
 let lanes = [];
 let platform = "";
+let defaultOutputDirectory = "";
 let proxyInfo = null;
 let activeLanguage = "zh";
 let connectionStateKey = isFilePreview ? "connectionPreview" : "connectionReconnecting";
@@ -68,6 +69,7 @@ let estimateRevision = 0;
 let busy = false;
 let disabledControls = new Map();
 let queueView;
+let batchEditor;
 
 function normalizeLanguage(language) {
   const base = String(language || "").toLowerCase().split("-")[0];
@@ -197,11 +199,11 @@ async function saveSelectedKey() {
   formMessage(t("keySaved"));
 }
 function parsePromptItems() { return promptInput.value.trim().split(/\n\s*\n+/).map((item) => item.trim()).filter(Boolean); }
-function requestCountForEstimate() { const count = parsePromptItems().length; return count > 1 ? count : Math.max(1, Number(batchCountInput.value) || 1); }
+function requestCountForEstimate() { if (batchEditor?.enabled) return batchEditor.rows.length; const count = parsePromptItems().length; return count > 1 ? count : Math.max(1, Number(batchCountInput.value) || 1); }
 function updatePromptMeta() {
   const count = parsePromptItems().length;
-  batchCountField.hidden = count > 1;
-  batchCountInput.disabled = count > 1 || busy;
+  batchCountField.hidden = count > 1 || Boolean(batchEditor?.enabled);
+  batchCountInput.disabled = count > 1 || Boolean(batchEditor?.enabled) || busy;
   promptMetaText.textContent = t("promptCount", { count: formatInteger(count), chars: formatInteger(promptInput.value.trim().length), action: t("willSubmit", { count: formatInteger(requestCountForEstimate()) }) });
 }
 function selectedImageSize(params = {}) {
@@ -213,7 +215,7 @@ function selectedImageSize(params = {}) {
   const [a, b] = ratio.slice(1).map(Number); const short = Math.min(a, b);
   return `${Math.round(height * a / short / 2) * 2}x${Math.round(height * b / short / 2) * 2}`;
 }
-function estimateText(estimate = lastEstimate) { return { cost: formatCost(estimate?.cost), eta: Number.isFinite(estimate?.etaSeconds) ? t("etaValue", { seconds: formatInteger(Math.ceil(estimate.etaSeconds)) }) : t("unknown") }; }
+function estimateText(estimate = lastEstimate) { return { cost: estimate?.costs?.length > 1 ? estimate.costs.map(formatCost).join(" + ") : formatCost(estimate?.cost), eta: Number.isFinite(estimate?.etaSeconds) ? t("etaValue", { seconds: formatInteger(Math.ceil(estimate.etaSeconds)) }) : t("unknown") }; }
 function updateSummary() {
   const lane = selectedLane(); const estimate = estimateText();
   summaryMode.textContent = lane ? laneLabel(lane) : "—";
@@ -342,7 +344,7 @@ async function handleInputReferenceChange() {
   const file = selectedInputReferenceFile();
   renderInputReferencePreview(file);
   updateInputReferenceMeta();
-  updateSummary();
+  scheduleEstimate();
 
   if (!file || !supportedInputReferenceTypes.has(inputReferenceMimeType(file))) return;
   const key = inputReferenceFileKey(file);
@@ -353,7 +355,7 @@ async function handleInputReferenceChange() {
   }
   if (inputReferenceFileKey(selectedInputReferenceFile()) !== key) return;
   updateInputReferenceMeta();
-  updateSummary();
+  scheduleEstimate();
 }
 
 async function validateInputReferenceSelection(payload) {
@@ -415,7 +417,7 @@ function clearInputReference() {
   inputReferenceFitCache.clear();
   renderInputReferencePreview(null);
   updateInputReferenceMeta();
-  updateSummary();
+  scheduleEstimate();
 }
 
 
@@ -428,13 +430,16 @@ function readForm() {
   if (payload.provider === "openai-compatible") payload.params.requestFormat = requestFormatInput.value;
   if (capabilities.seed && seedInput.value !== "") payload.params.seed = Number(seedInput.value);
   if (isCustomModel()) payload.customCapabilities = customCapabilities();
+  if (typeof selectedInputReferenceFile === "function" && selectedInputReferenceFile()) payload.firstFrame = "input_reference";
+  if (typeof batchEditor !== "undefined" && batchEditor?.enabled) { payload.rows = batchEditor.payloadRows(); payload.batchCount = payload.rows.length; delete payload.firstFrame; }
   if (!budgetInput.disabled && budgetInput.value !== "") payload.budget = { amount: Number(budgetInput.value), currency: lastEstimate?.cost?.currency };
   return payload;
 }
 function validateSelection(payload) {
   if (!normalizedBaseUrl(payload.baseUrl)) throw new Error(t("invalidEndpoint"));
-  if (!payload.model) throw new Error(t("missingModel"));
-  if (!payload.prompt) throw new Error(t("missingPrompt"));
+  if (!payload.model && !payload.rows?.every((row) => row.model)) throw new Error(t("missingModel"));
+  if (payload.rows) batchEditor.validate();
+  else if (!payload.prompt) throw new Error(t("missingPrompt"));
   if (!Number.isSafeInteger(payload.batchCount) || payload.batchCount < 1) throw new Error(t("invalidRepeat"));
   if (payload.budget && (!Number.isFinite(payload.budget.amount) || payload.budget.amount <= 0)) throw new Error(t("invalidBudgetInput"));
   if (isCustomModel()) { const caps = payload.customCapabilities; if (!caps.durations.length || caps.durations.some((duration) => !Number.isInteger(duration) || duration <= 0) || !caps.resolutions.length || !caps.aspectRatios.length) throw new Error(t("invalidCapabilities")); }
@@ -453,11 +458,11 @@ function restoreSettings() {
 }
 function scheduleEstimate() {
   clearTimeout(estimateTimer); const revision = ++estimateRevision;
-  lastEstimate = null; updateSummary();
+  lastEstimate = null; batchEditor?.setEstimates(null); updateSummary();
   if (isFilePreview || busy) return;
   estimateTimer = setTimeout(async () => {
-    const payload = readForm(); if (!payload.model || !payload.prompt) return;
-    try { const result = await apiRequest("/api/estimate", payload); if (revision !== estimateRevision) return; lastEstimate = result; updateSummary(); }
+    const payload = readForm(); if ((!payload.model && !payload.rows?.every((row) => row.model)) || (!payload.prompt && !payload.rows?.length)) return;
+    try { const result = await apiRequest("/api/estimate", payload); if (revision !== estimateRevision) return; lastEstimate = result; batchEditor?.setEstimates(result); updateSummary(); }
     catch { /* Final submission reports validation errors. */ }
   }, 400);
 }
@@ -478,13 +483,17 @@ async function generateVideo(event) {
   const payload = readForm(); setBusy(true); clearTimeout(estimateTimer); estimateRevision += 1;
   try {
     validateSelection(payload);
-    const reference = await validateInputReferenceSelection(payload);
-    lastEstimate = await apiRequest("/api/estimate", payload); updateSummary();
+    const reference = payload.rows ? null : await validateInputReferenceSelection(payload);
+    lastEstimate = await apiRequest("/api/estimate", payload); batchEditor?.setEstimates(lastEstimate); updateSummary();
+    if (lastEstimate.valid === false) throw new Error(t("invalidRows"));
+    const files = payload.rows ? await batchEditor.prepareFiles(payload) : {};
+    if (reference?.file) files.input_reference = reference.file;
+    if (Object.values(files).reduce((total, file) => total + file.size, 0) > 120 * 1024 * 1024) throw new Error(t("batchImagesTooLarge"));
     const estimate = estimateText();
     const budget = payload.budget ? `\n${t("budgetLabel")}: ${formatCost(payload.budget)}` : "";
     if (!await confirmAction(t("confirmGenerate", { count: formatInteger(lastEstimate.count), cost: estimate.cost, eta: estimate.eta }) + budget)) return;
     if (apiKeyInput.value) await saveSelectedKey();
-    const result = await apiRequest("/api/batches", payload, "POST", reference?.file);
+    const result = await apiRequest("/api/batches", payload, "POST", Object.keys(files).length ? files : null);
     persistSettings(); formMessage(t("batchEnqueued", { count: result.count }));
     queueView.batchFilter = result.id; queueView.jobPage = 0; queueView.jobCursors = [null];
     await queueView.refresh();
@@ -498,11 +507,11 @@ function applyTranslations() {
   document.querySelector(".controls-panel").setAttribute("aria-label", t("controlsAria"));
   document.querySelector(".monitor-panel").setAttribute("aria-label", t("queueTitle"));
   document.querySelector(".summary-grid").setAttribute("aria-label", t("summaryAria"));
-  promptInput.placeholder = t("promptPlaceholder"); outputDirInput.placeholder = t("outputDirPlaceholder"); filenameInput.placeholder = t("filenamePlaceholder");
+  promptInput.placeholder = t("promptPlaceholder"); outputDirInput.placeholder = defaultOutputDirectory || t("outputDirPlaceholder"); filenameInput.placeholder = t("filenamePlaceholder");
   inputReferenceInput.setAttribute("aria-label", t("inputReferenceLabel"));
   toggleApiKeyButton.textContent = t(apiKeyInput.type === "password" ? "showApiKey" : "hideApiKey");
   setConnectionState(connectionStateKey); renderProxyInfo(); renderProviders(providerInput.value); renderModels(modelInput.value); syncOptionControls();
-  queueView?.render();
+  batchEditor?.render(); queueView?.render();
 }
 function setLanguage(language) { activeLanguage = normalizeLanguage(language); applyTranslations(); storageSet("videogen.language", activeLanguage); }
 async function refreshCatalog() {
@@ -516,14 +525,14 @@ async function init() {
   const restored = restoreSettings(); activeLanguage = normalizeLanguage(restored.language || "zh");
   let loadError = null;
   if (!isFilePreview) {
-    try { const data = await apiRequest("/api/catalog"); if (!Array.isArray(data.providers) || !data.providers.length) throw new Error(t("noModels")); providers = data.providers; platform = data.platform; proxyInfo = data.proxy || null; }
+    try { const data = await apiRequest("/api/catalog"); if (!Array.isArray(data.providers) || !data.providers.length) throw new Error(t("noModels")); providers = data.providers; platform = data.platform; defaultOutputDirectory = data.defaultOutputDir || ""; proxyInfo = data.proxy || null; }
     catch (error) { loadError = error; }
   }
   renderProviders(restored.provider); chooseLane(); renderModels(restored.model); syncOptionControls();
   for (const [name, input] of [["seconds", secondsInput], ["size", sizeInput], ["aspectRatio", aspectRatioInput]]) if ([...input.options].some((option) => option.value === restored[name])) input.value = restored[name];
   batchCountInput.value = String(Number.isSafeInteger(Number(restored.batchCount)) && Number(restored.batchCount) > 0 ? restored.batchCount : 1);
   selectOutputDirButton.hidden = isFilePreview || platform !== "darwin";
-  queueView = new QueueView(); applyTranslations();
+  batchEditor = new BatchEditor(); queueView = new QueueView(); applyTranslations();
   if (loadError) formMessage(t("loadCatalogError", { message: loadError.message }), true);
   else formMessage(t(isFilePreview ? "previewReadyLog" : "readyLog"));
   await queueView.run(() => queueView.start());

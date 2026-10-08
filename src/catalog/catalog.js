@@ -1,5 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
+const openRouterPricing = require("./openrouter-pricing");
 
 function assert(condition, message) {
   if (!condition) throw new Error(`Invalid catalog: ${message}`);
@@ -125,17 +126,11 @@ function normalizeOpenRouterModels(response, asOf = new Date().toISOString().sli
   assert(Array.isArray(response?.data), "OpenRouter data");
   return response.data.filter((model) => model.supported_durations?.length && model.supported_resolutions?.length && model.supported_aspect_ratios?.length).map((model) => {
     const skus = model.pricing_skus || {};
-    const rates = {};
-    for (const resolution of model.supported_resolutions) {
-      const perSecond = skus[`duration_seconds_${resolution.toLowerCase()}`] ?? skus.duration_seconds;
-      const cents = skus.cents_per_second_output;
-      if (perSecond !== undefined && Number.isFinite(Number(perSecond))) rates[resolution] = Number(perSecond);
-      else if (cents !== undefined && Number.isFinite(Number(cents))) rates[resolution] = Number(cents) / 100;
-    }
+    const frames = Array.isArray(model.supported_frame_images) ? model.supported_frame_images : [];
     return {
       id: model.id, label: model.name || model.id, verified: true, verifiedAt: asOf, sources: ["https://openrouter.ai/api/v1/videos/models"],
-      capabilities: { durations: model.supported_durations, resolutions: model.supported_resolutions, aspectRatios: model.supported_aspect_ratios, firstFrame: false, lastFrame: false, audio: model.generate_audio === true, seed: model.seed === true },
-      pricing: Object.keys(rates).length ? { currency: "USD", unit: "second", rates } : null,
+      capabilities: { durations: model.supported_durations, resolutions: model.supported_resolutions, aspectRatios: model.supported_aspect_ratios, firstFrame: frames.includes("first_frame"), lastFrame: frames.includes("last_frame"), audio: model.generate_audio === true, seed: model.seed === true },
+      pricing: openRouterPricing.pricing(skus, model.supported_resolutions),
       pricingSkus: skus, concurrencyDefault: 2, pollIntervalSec: 30, resultTtlHours: null, typicalRenderSec: 180,
     };
   });

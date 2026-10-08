@@ -51,10 +51,11 @@ class AssetStore {
     return path.join(this.directory, `${asset.sha256}${referenceImageExtension(asset.mime)}`);
   }
 
-  put(image) {
+  put(image, role = "first_frame") {
     if (!image || !Buffer.isBuffer(image.buffer)) throw invalidAsset();
+    if (!["first_frame", "last_frame"].includes(role)) throw invalidAsset();
     const asset = {
-      role: "first_frame",
+      role,
       sha256: crypto.createHash("sha256").update(image.buffer).digest("hex"),
       mime: image.mimeType,
       width: image.width,
@@ -93,7 +94,7 @@ class AssetStore {
   read(asset) {
     const buffer = readBuffer(this.filename(asset));
     verifyBuffer(asset, buffer);
-    return { ...asset, buffer, mimeType: asset.mime, filename: `first-frame${referenceImageExtension(asset.mime)}` };
+    return { ...asset, buffer, mimeType: asset.mime, filename: `${asset.role === "last_frame" ? "last-frame" : "first-frame"}${referenceImageExtension(asset.mime)}` };
   }
 
   collect(jobs) {

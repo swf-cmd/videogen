@@ -39,8 +39,8 @@ for (const mode of ["before-create", "before-id-sync"]) {
     const timeout = setTimeout(() => child.kill("SIGKILL"), 5000);
     const [code, signal] = await once(child, "exit");
     clearTimeout(timeout);
-    assert.equal(code, null, errors);
-    assert.equal(signal, "SIGKILL");
+    if (process.platform === "win32") assert.ok(signal === "SIGKILL" || Number.isInteger(code) && code !== 0, errors);
+    else { assert.equal(code, null, errors); assert.equal(signal, "SIGKILL"); }
     assert.equal(output, `boundary:${mode}`, "the targeted boundary, not the test timeout, killed the process");
     const app = new Application({ directory });
     t.after(() => app.close());

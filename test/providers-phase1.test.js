@@ -30,7 +30,7 @@ test("Gemini Files upload is ephemeral, active before create, and sends bytes wi
   const upload = "https://generativelanguage.googleapis.com/upload/v1beta/files?upload_id=test-upload";
   const { ctx, requests } = context("gemini", [new Response(null, { headers: { "x-goog-upload-url": upload } }), response({ file: { name: "files/input-1", uri: "https://generativelanguage.googleapis.com/v1beta/files/input-1", mimeType: "image/png", state: "ACTIVE", expirationTime: "2099-01-01T00:00:00Z" } }), response({ id: "v1_interaction", status: "completed", steps: [{ type: "model_output", content: [{ type: "video", uri: "https://generativelanguage.googleapis.com/v1beta/files/output-1:download?alt=media" }] }] })], [asset]);
   ctx.remoteAssets = await gemini.prepareAssets(ctx, job);
-  assert.deepEqual(ctx.remoteAssets, [{ uri: "https://generativelanguage.googleapis.com/v1beta/files/input-1", mimeType: "image/png", expiresAt: "2099-01-01T00:00:00Z" }]);
+  assert.deepEqual(ctx.remoteAssets, [{ uri: "https://generativelanguage.googleapis.com/v1beta/files/input-1", mimeType: "image/png", expiresAt: "2099-01-01T00:00:00Z", role: "first_frame" }]);
   const created = await gemini.create(ctx, { ...job, assets: [{ role: "first_frame" }] });
   assert.equal(requests.length, 3, "no await/network request after the returned interaction ID");
   assert.equal(requests[0].url, "https://generativelanguage.googleapis.com/upload/v1beta/files");
@@ -41,7 +41,7 @@ test("Gemini Files upload is ephemeral, active before create, and sends bytes wi
   assert.deepEqual(requests[1].body, asset.buffer);
   assert.equal(requests[1].headers.get("X-Goog-Upload-Command"), "upload, finalize");
   const body = JSON.parse(requests[2].body);
-  assert.deepEqual(body, { model: job.model, input: [{ type: "image", uri: ctx.remoteAssets[0].uri, mime_type: "image/png" }, { type: "text", text: `<FIRST_FRAME>\n${job.prompt}` }], store: true, background: false, stream: false, response_format: { type: "video", delivery: "uri", aspect_ratio: "16:9", duration: "5s", resolution: "720p" } });
+  assert.deepEqual(body, { model: job.model, input: [{ type: "image", uri: ctx.remoteAssets[0].uri, mime_type: "image/png" }, { type: "text", text: `[# Sources <FIRST_FRAME>@Image1]\n${job.prompt}` }], store: true, background: true, stream: false, response_format: { type: "video", delivery: "uri", aspect_ratio: "16:9", duration: "5s", resolution: "720p" } });
   assert.deepEqual(created, { remoteId: "v1_interaction", pollingUrl: "https://generativelanguage.googleapis.com/v1beta/files/output-1", status: "succeeded" });
 });
 
@@ -73,15 +73,14 @@ test("Gemini restart follows persisted Files metadata, never an interaction GET 
   assert.ok(requests.every((request) => !request.url.includes("interactions") && request.headers.get("x-goog-api-key") === keys.gemini && request.headers.get("authorization") === null));
 });
 
-test("Gemini manual recovery needs a same-origin Files resource and preserves a known ID when create URI is unsafe", async () => {
-  for (const id of ["files/output-1", "https://generativelanguage.googleapis.com/v1beta/files/output-1", "https://generativelanguage.googleapis.com/v1beta/files/output-1:download?alt=media"]) assert.equal(gemini.validateRemoteId(id, lanes.gemini), null);
-  for (const id of ["v1_interaction", "output-1", "files/../secret", "https://evil.example/v1beta/files/output-1", "https://generativelanguage.googleapis.com/v1beta/files/output-1?key=secret"]) assert.equal(gemini.validateRemoteId(id, lanes.gemini), "geminiFileIdRequired");
+test("Gemini recovery accepts interaction IDs and safe legacy Files resources, preserving IDs with unsafe create URIs", async () => {
+  for (const id of ["v1_interaction", "files/output-1", "https://generativelanguage.googleapis.com/v1beta/files/output-1", "https://generativelanguage.googleapis.com/v1beta/files/output-1:download?alt=media"]) assert.equal(gemini.validateRemoteId(id, lanes.gemini), null);
+  for (const id of ["v1_bad/path", "output-1", "files/../secret", "https://evil.example/v1beta/files/output-1", "https://generativelanguage.googleapis.com/v1beta/files/output-1?key=secret"]) assert.equal(gemini.validateRemoteId(id, lanes.gemini), "geminiFileIdRequired");
   for (const steps of [{ invalid: true }, [{ content: [null, { type: "video", uri: "https://evil.example/v1beta/files/output-1" }] }], [{ content: [{ type: "video", uri: "https://generativelanguage.googleapis.com/v1beta/files/output-1?key=secret" }] }]]) {
     const { ctx, requests } = context("gemini", [response({ id: "v1_accepted", status: "completed", steps })]);
     const created = await gemini.create(ctx, job);
     assert.equal(created.remoteId, "v1_accepted");
     assert.equal(created.pollingUrl, undefined);
-    await assert.rejects(gemini.poll(ctx, { ...job, remote: { id: created.remoteId } }), { code: "geminiResultUriUnavailable" });
     assert.equal(requests.length, 1);
   }
 });
@@ -96,14 +95,14 @@ test("Gemini Files poll distinguishes processing, failure, expiry and unknown pr
   await assert.rejects(gemini.poll(context("gemini", [response({ state: "NEW_ENUM" })]).ctx, { ...job, remote: { id: "files/output-1" } }), { category: "transient" });
 });
 
-test("Gemini uses resolution-specific blocking timeouts and no create idempotency claim", async () => {
-  for (const [resolution, timeout] of [["720p", 600000], ["4k", 1200000]]) {
+test("Gemini background create returns promptly with no create idempotency claim", async () => {
+  for (const [resolution, timeout] of [["720p", 60000], ["4k", 60000]]) {
     const { ctx } = context("gemini", [response({ id: "v1_accepted" })]);
     const fetch = ctx.fetch;
     ctx.fetch = (url, options) => { assert.equal(options.timeoutMs, timeout); assert.equal(options.phase, "create"); return fetch(url, options); };
     await gemini.create(ctx, { ...job, params: { ...job.params, resolution } });
   }
-  assert.equal(gemini.createMode, "blocking");
+  assert.equal(gemini.createMode, "async");
   assert.equal(gemini.supportsIdempotencyKey, false);
 });
 
