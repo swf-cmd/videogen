@@ -1,4 +1,4 @@
-const { redact } = require("../queue/keys");
+const { sanitizeRecord } = require("../queue/keys");
 const { redactLocalPaths } = require("./errors");
 
 function sendJson(res, status, data) {
@@ -6,7 +6,7 @@ function sendJson(res, status, data) {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
   });
-  res.end(JSON.stringify(redactLocalPaths(redact(data))));
+  res.end(JSON.stringify(redactLocalPaths(sanitizeRecord(data))));
 }
 
 function sendText(res, status, message) {

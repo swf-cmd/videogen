@@ -8,8 +8,21 @@ function actionError(code) { return Object.assign(new Error(code), { code }); }
 function number(value, fallback) { return Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : fallback; }
 function time(value) { const parsed = Date.parse(value); return Number.isFinite(parsed) ? parsed : Infinity; }
 
+// Only failures known to happen before a connection is established make a
+// create safe to retry. A reset or response timeout can still mean acceptance.
+const LOCAL_OFFLINE_CODES = new Set(["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "ENETUNREACH", "EHOSTUNREACH", "ENETDOWN", "EHOSTDOWN", "EADDRNOTAVAIL", "UND_ERR_CONNECT_TIMEOUT"]);
+const FILESYSTEM_CODES = new Set(["ENOSPC", "EDQUOT", "EACCES", "EPERM", "EROFS", "EMFILE", "ENFILE", "EIO", "ENAMETOOLONG", "ENOTDIR", "EISDIR", "ENOTSUP", "EOPNOTSUPP", "ENOENT", "EEXIST", "EXDEV", "EBADF"]);
+function errorCode(error) { return String(error?.code || error?.cause?.code || ""); }
+function diagnostics(error) {
+  const details = {};
+  if (errorCode(error)) details.providerCode = redact(errorCode(error)).slice(0, 256);
+  if (typeof error?.message === "string" && error.message) details.providerMessage = redact(error.message).slice(0, 2048);
+  if (Number.isInteger(Number(error?.status)) && Number(error.status) > 0) details.status = Number(error.status);
+  return redact(details);
+}
+
 class Scheduler extends EventEmitter {
-  constructor({ store, keys, adapters, context, settings = { lanes: {} }, onSettings = () => {}, writeOutput = defaultWriteOutput, now = Date.now, random = Math.random, setTimer = setTimeout, clearTimer = clearTimeout, downloadConcurrency = 3, circuitThreshold = 3 } = {}) {
+  constructor({ store, keys, adapters, context, settings = { lanes: {} }, onSettings = () => {}, writeOutput = defaultWriteOutput, now = Date.now, random = Math.random, setTimer = setTimeout, clearTimer = clearTimeout, downloadConcurrency = 3, circuitThreshold = 3, circuitCooldownMs = 30000, logger = console } = {}) {
     super();
     this.store = store;
     this.keys = keys;
@@ -24,6 +37,8 @@ class Scheduler extends EventEmitter {
     this.clearTimer = clearTimer;
     this.downloadConcurrency = downloadConcurrency;
     this.circuitThreshold = circuitThreshold;
+    this.circuitCooldownMs = number(circuitCooldownMs, 30000);
+    this.logger = logger;
     this.lanes = new Map();
     this.index = new Map();
     this.work = new Map();
@@ -49,6 +64,8 @@ class Scheduler extends EventEmitter {
     for (const entry of Object.values(this.settings.lanes)) if (entry?.lane) this.ensureLane(entry.lane);
     for (const job of this.store.jobs.values()) this.indexJob(job.id);
     this.store.on("event", this.onStoreEvent);
+    this.onStoreFailure = (error) => this.fatal(error);
+    this.store.on("failure", this.onStoreFailure);
   }
 
   ensureLane(value) {
@@ -127,11 +144,15 @@ class Scheduler extends EventEmitter {
     if (TERMINAL_STATES.has(job.state)) { this.due.delete(id); this.assetCache.delete(id); }
   }
 
-  laneState(lane) {
-    if (this.fatalError) return "paused";
+  credentialsReady(lane) {
     const adapter = this.adapters[lane.lane.provider];
     const key = this.keys.get(lane.lane);
-    if (!adapter || lane.needsKey || (lane.requiresKey && !key) || adapter.validateKey(key || "") !== null) return "needs_key";
+    return Boolean(adapter && !lane.needsKey && !(lane.requiresKey && !key) && adapter.validateKey(key || "") === null);
+  }
+
+  laneState(lane) {
+    if (this.fatalError) return "paused";
+    if (!this.credentialsReady(lane)) return "needs_key";
     if (lane.paused) return "paused";
     if (lane.cooldownUntil > this.now()) return "cooldown";
     return "active";
@@ -154,6 +175,7 @@ class Scheduler extends EventEmitter {
   }
 
   setLane(value, patch = {}) {
+    if (patch.action === "resume") this.assertHealthy();
     const lane = this.ensureLane(value);
     if (patch.concurrency !== undefined) {
       if (!Number.isInteger(patch.concurrency) || patch.concurrency < 1 || patch.concurrency > 1000) throw actionError("invalidParams");
@@ -162,7 +184,7 @@ class Scheduler extends EventEmitter {
     }
     if (patch.action !== undefined && !["pause", "resume"].includes(patch.action)) throw actionError("invalidParams");
     if (patch.action === "pause") { lane.paused = true; lane.reason = "manual_pause"; }
-    if (patch.action === "resume") { lane.paused = false; lane.reason = null; lane.errorCount = 0; lane.cooldownUntil = 0; }
+    if (patch.action === "resume") { lane.paused = false; lane.reason = null; lane.errorCount = 0; lane.errorCategory = null; lane.cooldownUntil = 0; }
     this.saveSettings(lane);
     this.kick();
     return this.laneList().find((item) => item.id === lane.lane.id);
@@ -248,8 +270,10 @@ class Scheduler extends EventEmitter {
     this.nextWake = Infinity;
     for (const lane of this.lanes.values()) {
       const state = this.laneState(lane);
-      if (state === "cooldown") { this.consider(lane.cooldownUntil); continue; }
-      if (state === "needs_key" || state === "paused" && lane.reason !== "manual_pause") continue;
+      if (state === "cooldown") this.consider(lane.cooldownUntil);
+      if (!this.credentialsReady(lane)) continue;
+      // Submission stops never abandon a paid render. Polls retain their own
+      // backoff and RPM limit even during a pause or circuit cooldown.
       for (const id of lane.running) {
         if (this.work.has(id) || this.cancelling.has(id)) continue;
         const due = this.due.get(id) || 0;
@@ -257,13 +281,16 @@ class Scheduler extends EventEmitter {
         if (!this.takeToken(lane)) break;
         this.launch(this.store.get(id), "poll", lane);
       }
-      if (state !== "active") continue;
+      if (state !== "active" || lane.circuitProbe) continue;
+      const probing = lane.reason === "circuit_open";
       while (lane.inFlight.size + lane.preparing.size < lane.concurrency) {
         const job = this.nextQueued(lane);
         if (!job || !this.takeToken(lane)) break;
         lane.preparing.add(job.id);
         this.reservations.set(job.id, { batchId: job.batchId, currency: job.costEstimate?.currency, amount: job.createAuthorization?.kind === "idempotent" ? 0 : job.costEstimate?.amount || 0 });
+        if (probing) lane.circuitProbe = job.id;
         this.launch(job, "create", lane);
+        if (probing) break;
       }
     }
     let activeDownloads = [...this.work.values()].filter((entry) => entry.phase === "download").length;
@@ -273,7 +300,7 @@ class Scheduler extends EventEmitter {
         if (this.work.has(id) || this.cancelling.has(id)) continue;
         const job = this.store.get(id);
         const lane = this.ensureLane(job);
-        if (job.result?.needsAuth !== false && this.laneState(lane) !== "active" && !(this.laneState(lane) === "paused" && lane.reason === "manual_pause")) continue;
+        if (job.result?.needsAuth !== false && !this.credentialsReady(lane)) continue;
         const due = this.due.get(id) || 0;
         if (due > this.now()) { this.consider(due); continue; }
         if (!selected || time(job.resultExpiresAt) < time(selected.resultExpiresAt)) selected = job;
@@ -295,6 +322,7 @@ class Scheduler extends EventEmitter {
     entry.promise = Promise.resolve().then(() => this[phase](job.id, lane, controller.signal)).catch((error) => this.fatal(error)).finally(() => {
       this.work.delete(job.id);
       lane.preparing.delete(job.id);
+      if (lane.circuitProbe === job.id) lane.circuitProbe = null;
       this.reservations.delete(job.id);
       this.kick();
     });
@@ -306,12 +334,16 @@ class Scheduler extends EventEmitter {
   }
 
   error(job, category, extra = {}) {
-    return { category, code: category, message: st(job.language || "zh", category), ...redact(extra) };
+    const details = redact(extra);
+    const summary = st(job.language || "zh", category);
+    const detail = [details.providerCode, details.providerMessage].filter((value) => value && value !== category).join(": ");
+    return { category, code: category, message: detail ? `${summary} (${detail})` : summary, ...details };
   }
 
   successful(lane, id, phase) {
     lane.errorCount = 0;
     lane.errorCategory = null;
+    if (lane.reason === "local_offline" || lane.reason === "circuit_open" && lane.cooldownUntil <= this.now()) { lane.reason = null; lane.cooldownUntil = 0; }
     this.failures.delete(`${phase}:${id}`);
   }
 
@@ -380,7 +412,7 @@ class Scheduler extends EventEmitter {
       if (Number.isFinite(elapsed) && elapsed > 0) lane.typicalSeconds = Math.round((lane.typicalSeconds * 0.8 + elapsed * 0.2) * 1000) / 1000;
     } else if (["failed", "cancelled", "expired"].includes(polled.status)) {
       const category = polled.status === "expired" ? "result_expired" : polled.error?.category || "invalid_request";
-      this.update(job.id, { state: polled.status === "expired" ? "result_expired" : polled.status, remote, error: this.error(job, category, { phase: "poll", definitelyNotAccepted: false }), completedAt: new Date(this.now()).toISOString() }, { sync: true });
+      this.update(job.id, { state: polled.status === "expired" ? "result_expired" : polled.status, remote, error: this.error(job, category, { ...diagnostics(polled.error), phase: "poll", definitelyNotAccepted: false }), completedAt: new Date(this.now()).toISOString() }, { sync: true });
     } else {
       this.update(job.id, { remote, progress: Number.isFinite(polled.progress) ? polled.progress : job.progress || 0, error: null });
       const base = number(job.modelConfig?.pollIntervalSec, 10) * 1000;
@@ -419,18 +451,24 @@ class Scheduler extends EventEmitter {
     if (!job || TERMINAL_STATES.has(job.state)) return;
     if (this.stopping && phase !== "create") return;
     const adapter = this.adapters[job.provider];
+    const sourceCode = errorCode(error);
     let category = error.category || adapter.classifyError(error, phase === "prepare" ? "poll" : phase);
+    const localOffline = !Number(error.status) && LOCAL_OFFLINE_CODES.has(sourceCode);
+    if (localOffline) category = "local_offline";
+    if (!Number(error.status) && FILESYSTEM_CODES.has(sourceCode)) category = "output_write_failed";
     if (phase === "prepare" && ["invalidAsset", "corruptAsset", "ENOENT"].includes(error.code)) category = "invalid_request";
     if (phase === "download" && time(job.resultExpiresAt) <= this.now() && [403, 404].includes(Number(error.status))) category = "result_expired";
-    const definite = phase === "prepare" || error.accepted === false || ["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN"].includes(error.code) || ["rate_limited", "auth", "quota", "model_unavailable", "invalid_request", "moderation"].includes(category);
+    const definite = phase === "prepare" || error.accepted === false || localOffline || ["rate_limited", "auth", "quota", "model_unavailable", "invalid_request", "moderation"].includes(category);
     if (phase === "create" && !definite && !adapter.supportsIdempotencyKey) {
-      this.update(id, { state: "needs_review", error: this.error(job, "unknown_outcome", { phase, definitelyNotAccepted: false, reason: this.stopping ? "shutdown_during_create" : "unknown_create_response" }) }, { sync: true });
+      this.log("warn", "create_needs_review", { jobId: id, phase, category, ...diagnostics(error) });
+      this.update(id, { state: "needs_review", error: this.error(job, "unknown_outcome", { ...diagnostics(error), phase, definitelyNotAccepted: false, reason: this.stopping ? "shutdown_during_create" : "unknown_create_response" }) }, { sync: true });
       return;
     }
     const count = (this.failures.get(`${phase}:${id}`) || 0) + 1;
     this.failures.set(`${phase}:${id}`, count);
     const delay = Number.isFinite(error.retryAfterMs) && error.retryAfterMs >= 0 ? error.retryAfterMs : Math.min(30000, 1000 * 2 ** Math.min(10, count - 1)) * (1 + this.random() * 0.2);
-    const failure = this.error(job, category, { phase, definitelyNotAccepted: phase === "create" || phase === "prepare" ? definite : false });
+    const failure = this.error(job, category, { ...diagnostics(error), phase, definitelyNotAccepted: phase === "create" || phase === "prepare" ? definite : false });
+    if (count === 1 || (count & (count - 1)) === 0) this.log("warn", "job_retry", { jobId: id, phase, category, attempt: count, ...diagnostics(error) });
     if (phase === "create" && (category === "unknown_outcome" || category === "transient" && !definite) && adapter.supportsIdempotencyKey) {
       this.update(id, { state: "queued", error: failure }, { sync: true, idempotentRetry: true });
       this.due.set(id, this.now() + delay);
@@ -446,11 +484,19 @@ class Scheduler extends EventEmitter {
     this.due.set(id, this.now() + delay);
     if (category === "auth") { lane.needsKey = true; lane.reason = "auth"; }
     else if (["quota", "model_unavailable"].includes(category)) { lane.paused = true; lane.reason = category; this.saveSettings(lane); }
-    else if (category === "rate_limited") { lane.cooldownUntil = Math.max(lane.cooldownUntil, this.now() + delay); lane.reason = "rate_limited"; }
+    else if (category === "output_write_failed") {
+      // The paid result stays downloadable. A full or unwritable local disk is
+      // not a provider outage and must not suspend unrelated rendering.
+    }
+    else if (category === "local_offline") { lane.cooldownUntil = Math.max(lane.cooldownUntil, this.now() + delay); if (!lane.paused) lane.reason = "local_offline"; }
+    else if (category === "rate_limited") { lane.cooldownUntil = Math.max(lane.cooldownUntil, this.now() + delay); if (!lane.paused) lane.reason = "rate_limited"; }
     else {
       lane.errorCount = lane.errorCategory === category ? lane.errorCount + 1 : 1;
       lane.errorCategory = category;
-      if (lane.errorCount >= this.circuitThreshold) { lane.paused = true; lane.reason = "circuit_open"; this.saveSettings(lane); }
+      if (lane.errorCount >= this.circuitThreshold) {
+        lane.cooldownUntil = Math.max(lane.cooldownUntil, this.now() + this.circuitCooldownMs);
+        if (!lane.paused) lane.reason = "circuit_open";
+      }
     }
   }
 
@@ -485,6 +531,8 @@ class Scheduler extends EventEmitter {
   async jobAction(id, action, payload = {}) {
     const job = this.store.get(id);
     if (!job) throw actionError("jobNotFound");
+    if (this.store.batches.get(job.batchId)?.state === "preparing") throw actionError("batchPreparing");
+    if (action === "retry" || action === "resolve" && payload.action === "resubmit") this.assertHealthy();
     if (action === "cancel") return this.cancelJob(id);
     if (action === "retry") {
       if (job.state !== "failed" || !job.error?.definitelyNotAccepted || job.remote?.id) throw actionError("unsafeCreateRetry");
@@ -510,6 +558,8 @@ class Scheduler extends EventEmitter {
   async batchAction(id, action) {
     const batch = this.store.batches.get(id);
     if (!batch) throw actionError("batchNotFound");
+    if (batch.state === "preparing") throw actionError("batchPreparing");
+    if (action === "resume") this.assertHealthy();
     if (!["pause", "resume", "cancel"].includes(action)) throw actionError("invalidParams");
     this.store.updateBatch(id, { state: action === "pause" ? "paused" : action === "resume" ? "active" : "cancelled", pauseReason: action === "pause" ? "manual_pause" : null });
     if (action === "cancel") {
@@ -519,10 +569,26 @@ class Scheduler extends EventEmitter {
     return this.store.batches.get(id);
   }
 
+  log(level, event, details) {
+    try { this.logger?.[level]?.(JSON.stringify({ time: new Date(this.now()).toISOString(), event, ...redact(details) })); }
+    catch { /* A diagnostic sink must never interrupt paid work. */ }
+  }
+
+  health() {
+    return { healthy: !this.fatalError && !this.stopping && !this.closed && !this.store.failed && this.store.fd !== undefined,
+      state: this.fatalError ? "failed" : this.closed ? "closed" : this.stopping ? "stopping" : this.started ? "running" : "idle",
+      ...(this.fatalError ? { error: { ...this.fatalError } } : {}) };
+  }
+
+  assertHealthy() {
+    if (!this.health().healthy) throw Object.assign(actionError(this.fatalError?.code || (this.store.failed || this.store.fd === undefined ? "storeClosed" : "serviceStopping")), { status: 503 });
+  }
+
   fatal(error) {
     if (this.fatalError) return;
-    const code = ["storeClosed", "invalidStore"].includes(error.code) ? error.code : "storeWriteFailed";
-    this.fatalError = { code, message: st("zh", code) };
+    const code = ["storeClosed", "invalidStore", "storeWriteFailed"].includes(error?.code) ? error.code : this.store.failed || FILESYSTEM_CODES.has(errorCode(error)) ? "storeWriteFailed" : "schedulerFailed";
+    this.fatalError = { code, message: st("zh", code), ...diagnostics(error) };
+    this.log("error", "scheduler_fatal", { ...this.fatalError, name: error?.name, stack: error?.stack });
     this.stopping = true;
     if (this.timer !== null) { this.clearTimer(this.timer); this.timer = null; }
     this.emit("fatal", this.fatalError);
@@ -549,6 +615,7 @@ class Scheduler extends EventEmitter {
     }
     this.closed = true;
     this.store.off("event", this.onStoreEvent);
+    this.store.off("failure", this.onStoreFailure);
     this.store.flush();
   }
 }

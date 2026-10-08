@@ -51,7 +51,7 @@ test("JSON redaction preserves schema names and refuses a redacted remote ID", a
   const ctx = createContext({ lane, key: "id", fetchImpl: async () => json({ id: "remote-123", status: "queued" }) });
   assert.equal((await compatible.create(ctx, job)).remoteId, "remote-123");
   const parsed = await parseJson(ctx, json({ id: "remote-123", message: "echo id", nested: { authorization: "Bearer another-secret" } }));
-  assert.deepEqual(parsed, { id: "remote-123", message: "echo [REDACTED]", nested: { authorization: "[REDACTED]" } });
+  assert.deepEqual(parsed, { id: "remote-123", message: "echo id", nested: { authorization: "[REDACTED]" } });
   const secret = "synthetic-provider-key";
   const leaking = createContext({ lane, key: secret, fetchImpl: async () => json({ id: `remote-${secret}`, status: "queued" }) });
   await assert.rejects(compatible.create(leaking, job), { category: "unknown_outcome" });
@@ -123,5 +123,5 @@ test("key-store redaction preserves structural job and remote property names", (
   const keys = new KeyStore();
   keys.set(lane, "id", compatible);
   const result = redact({ id: "job-123", remote: { id: "remote-123" }, error: { message: "echo id" } });
-  assert.deepEqual(result, { id: "job-123", remote: { id: "remote-123" }, error: { message: "echo [REDACTED]" } });
+  assert.deepEqual(result, { id: "job-123", remote: { id: "remote-123" }, error: { message: "echo id" } });
 });

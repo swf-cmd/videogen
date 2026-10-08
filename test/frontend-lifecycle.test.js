@@ -112,3 +112,32 @@ test("file preview never installs network or lifecycle activity", async () => {
   assert.equal(app.intervals.size, 0);
   assert.equal(app.listeners.size, 0);
 });
+
+test("dense events coalesce behind a slow snapshot without starving its result", async () => {
+  const app = harness(); let resolveJobs, snapshots = 0;
+  app.view.loadJobs = async () => { snapshots += 1; await new Promise((resolve) => { resolveJobs = resolve; }); app.view.jobs.set("one", { state: "downloading" }); };
+  app.view.loadBatches = app.view.loadLanes = app.view.loadGallerySummary = async () => {};
+  const first = app.view.refresh();
+  for (let wave = 0; wave < 5; wave += 1) {
+    for (let event = 0; event < 100; event += 1) app.view.scheduleRefresh(true);
+    await app.tick();
+    assert.equal(snapshots, 1, "events cannot invalidate the snapshot by starting overlapping requests");
+    assert.equal(app.timeouts.size, 1, "only one follow-up refresh is queued");
+  }
+  resolveJobs(); await first;
+  assert.equal(app.view.jobs.get("one").state, "downloading");
+  await app.tick(); assert.equal(snapshots, 2);
+  resolveJobs(); await app.view.snapshotPromise;
+});
+
+test("SSE reconnection refreshes full job details even after the server resets its sequence", async () => {
+  const app = harness({ request: async () => ({ jobs: [{ id: "one", state: "downloading", remote: { id: "paid" } }], seq: 1, nextCursor: null }) });
+  app.view.refresh = async () => {};
+  await app.view.start();
+  app.view.jobs.set("one", { id: "one", state: "running", _seq: 900 });
+  app.sources[0].onerror(); app.sources[0].onopen();
+  await app.view.loadJobs();
+  assert.equal(app.view.jobs.get("one").state, "downloading");
+  assert.equal(app.view.jobs.get("one").remote.id, "paid");
+  app.dispatch("pagehide");
+});

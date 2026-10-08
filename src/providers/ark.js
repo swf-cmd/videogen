@@ -53,7 +53,7 @@ module.exports = {
     catch (error) { error.category = classifyError(error); throw error; }
     const status = base.normalizeStatus(data.status);
     if (status === "succeeded" && !data.content?.video_url) throw new base.ProviderError("invalidProviderResponse", { category: "transient" });
-    const error = data.error ? { category: classifyError(data.error), code: data.error.code || "providerFailed" } : undefined;
+    const error = data.error ? { category: classifyError(data.error), code: ctx.redact(data.error.code || "providerFailed"), message: ctx.redact(data.error.message || "providerFailed") } : undefined;
     return { status, error, ...(status === "succeeded" ? { result: { url: data.content.video_url, needsAuth: false, contentType: "video/mp4" } } : {}) };
   },
   async download(ctx, job, result, { signal } = {}) { return ctx.fetch(result.url, { needsAuth: false, signal, phase: "download", timeoutMs: 300000 }); },

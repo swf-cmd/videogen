@@ -42,21 +42,7 @@ function filesUnder(directory) {
   });
 }
 
-// Read without instantiating the store: observing a crash must not repair its log.
-function durableJobs(directory) {
-  const snapshot = path.join(directory, "jobs.snapshot.json");
-  const saved = fs.existsSync(snapshot) ? JSON.parse(fs.readFileSync(snapshot, "utf8")) : { jobs: [], seq: 0 };
-  const jobs = new Map(saved.jobs.map((job) => [job.id, job]));
-  const log = fs.readFileSync(path.join(directory, "jobs.ndjson"));
-  for (const line of log.subarray(0, log.lastIndexOf(10) + 1).toString("utf8").split("\n")) {
-    if (!line) continue;
-    const { v, seq, at, jobId, type, ...patch } = JSON.parse(line);
-    if (seq <= saved.seq) continue;
-    if (type === "job") jobs.set(jobId, { ...jobs.get(jobId), ...patch, id: jobId });
-    if (type === "delete") jobs.delete(jobId);
-  }
-  return [...jobs.values()];
-}
+const { durableJobs } = require("./durable-jobs.cjs");
 
 test("100 jobs survive three process crashes without duplicate paid creates or lost outputs", { timeout: 75000 }, async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "videogen-crash-queue-"));

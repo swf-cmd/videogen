@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import shutil
 import stat
+import subprocess
 import tarfile
 import tempfile
 import urllib.request
@@ -77,31 +78,55 @@ def install_runtime(target, cache, app):
             "licenseSha256": sha256(destination / "LICENSE")}
 
 
+def tracked_sources(root=ROOT):
+    # Never recurse the working directory: ignored credentials, scratch models
+    # and additional catalog JSON must not become part of a release.
+    result = subprocess.run(["git", "ls-files", "--cached", "-z"], cwd=root,
+                            check=True, capture_output=True)
+    tracked = set(result.stdout.decode("utf-8").split("\0")) - {""}
+    missing = set(FILES) - tracked
+    if missing:
+        raise ValueError("Required release files are not tracked: " + ", ".join(sorted(missing)))
+    selected = [name for name in tracked if name in FILES or
+                any(name.startswith(tree + "/") for tree in TREES)]
+    return sorted(selected, key=lambda name: name.encode("utf-8"))
+
+
+def normalized_source_bytes(source):
+    data = source.read_bytes()
+    text_types = {".js", ".cjs", ".mjs", ".json", ".css", ".html", ".md",
+                  ".py", ".cmd", ".command", ".txt", ".svg"}
+    if source.suffix in text_types or source.name == "LICENSE":
+        text = data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+        if source.suffix == ".cmd":
+            text = text.replace("\n", "\r\n")
+        data = text.encode("utf-8")
+    return data
+
+
 def copy_source(app):
-    candidates = [ROOT / name for name in FILES]
-    for tree in TREES:
-        candidates.extend(sorted((ROOT / tree).rglob("*")))
-    for source in candidates:
+    for name in tracked_sources():
+        source = ROOT / name
         if source.is_symlink():
             raise ValueError("Refusing source symlink: " + str(source))
-        if source.is_dir():
-            continue
-        if source.name.startswith(".") or "__pycache__" in source.parts or source.suffix in {".pyc", ".log", ".zip"}:
-            continue
         if not source.is_file():
             raise ValueError("Required release file missing: " + str(source))
-        relative = source.relative_to(ROOT)
-        destination = app / relative
+        destination = app / name
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, destination)
+        destination.write_bytes(normalized_source_bytes(source))
         destination.chmod(0o755 if source.name.endswith(".command") else 0o644)
+
+
+def write_utf8(destination, text):
+    # Path.write_text uses the platform newline convention on Windows.
+    destination.write_bytes(text.encode("utf-8"))
 
 
 def zip_tree(app, output):
     # Fixed timestamps, modes, sorted paths and compression yield stable archives
     # for identical application bytes and Python/zlib versions, regardless of OS.
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-        for file in sorted(app.rglob("*")):
+        for file in sorted(app.rglob("*"), key=lambda item: item.relative_to(app).as_posix().encode("utf-8")):
             if not file.is_file():
                 continue
             member = zipfile.ZipInfo(file.relative_to(app.parent).as_posix(), (2000, 1, 1, 0, 0, 0))
@@ -124,9 +149,9 @@ def build(target, cache, output):
                     "officialChecksums": PIN["source"], "runtimes": []}
         for runtime in TARGETS[target]:
             manifest["runtimes"].append(install_runtime(runtime, cache, app))
-        (app / "RUNTIME-MANIFEST.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-        (app / ".portable").write_text("videogen portable layout v1\n", encoding="utf-8")
-        (app / "START-HERE.txt").write_text(
+        write_utf8(app / "RUNTIME-MANIFEST.json", json.dumps(manifest, indent=2) + "\n")
+        write_utf8(app / ".portable", "videogen portable layout v1\n")
+        write_utf8(app / "START-HERE.txt",
             "videogen " + version + "\n\n"
             "Extract the whole ZIP into a writable folder.\n"
             "Windows: double-click Start videogen.cmd.\n"
@@ -141,8 +166,7 @@ def build(target, cache, output):
             "No provider API is called until you choose and confirm an operation.\n\n"
             "macOS may require Privacy & Security > Open Anyway for a downloaded app.\n"
             "The bundle is not notarized. See docs/PORTABLE.md before first use.\n"
-            "Runtime source, SHA-256 hashes and licenses: RUNTIME-MANIFEST.json, runtime/.\n",
-            encoding="utf-8")
+            "Runtime source, SHA-256 hashes and licenses: RUNTIME-MANIFEST.json, runtime/.\n")
         destination = output / (name + ".zip")
         partial = destination.with_suffix(".zip.part")
         try:
@@ -151,7 +175,7 @@ def build(target, cache, output):
         finally:
             partial.unlink(missing_ok=True)
     digest = sha256(destination)
-    destination.with_suffix(".zip.sha256").write_text(digest + "  " + destination.name + "\n", encoding="utf-8")
+    write_utf8(destination.with_suffix(".zip.sha256"), digest + "  " + destination.name + "\n")
     print(str(destination) + "  " + digest, flush=True)
     return destination
 

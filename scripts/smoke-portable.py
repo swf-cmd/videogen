@@ -15,6 +15,31 @@ import urllib.request
 import zipfile
 
 
+def stop_windows_launcher(service, env):
+    try:
+        service.send_signal(signal.CTRL_BREAK_EVENT)
+        return
+    except OSError:
+        if service.poll() is not None:
+            return
+    # Headless Windows runners may not have an attached console, in which case
+    # GenerateConsoleCtrlEvent fails. Terminate only cmd's Node launcher, never
+    # its detached service: the closed IPC pipe must let that service drain.
+    powershell = Path(env.get("SystemRoot", "C:\\Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+    query = '(Get-CimInstance Win32_Process -Filter "ParentProcessId=%d" | Where-Object {$_.Name -eq "node.exe"}).ProcessId' % service.pid
+    result = subprocess.run([str(powershell), "-NoProfile", "-NonInteractive", "-Command", query],
+                            capture_output=True, text=True, check=True, timeout=15, env=env)
+    launchers = [int(value) for value in result.stdout.split() if value.isdecimal()]
+    if not launchers:
+        if service.poll() is not None:
+            return
+        raise AssertionError("Cannot locate the launcher for the IPC disconnect check")
+    for pid in launchers:
+        subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True,
+                       check=True, timeout=10, env=env)
+    print("Console signal unavailable; checking shutdown through launcher IPC disconnect.")
+
+
 def smoke(archive):
     with tempfile.TemporaryDirectory(prefix="videogen portable smoke ") as temporary:
         root = Path(temporary)
@@ -55,7 +80,8 @@ def smoke(archive):
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         with (root / "launcher.log").open("w+") as log:
             service = subprocess.Popen(command, cwd=app, env=env, stdout=log, stderr=subprocess.STDOUT,
-                                       start_new_session=not windows)
+                                       start_new_session=not windows,
+                                       creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if windows else 0)
             try:
                 catalog = None
                 for _ in range(100):
@@ -74,22 +100,33 @@ def smoke(archive):
                 with opener.open("http://127.0.0.1:%d/api/jobs" % port, timeout=2) as response:
                     jobs = json.load(response)
                 assert not jobs.get("jobs", []), "Release contains private jobs"
-                print("PASS portable launcher, clean data, bundled runtime, default outputs:", archive.name)
             except BaseException:
                 log.flush()
                 log.seek(0)
                 print(log.read())
                 raise
             finally:
-                if windows:
-                    subprocess.run(["taskkill", "/PID", str(service.pid), "/T", "/F"], capture_output=True, env=env)
-                else:
-                    os.killpg(service.pid, signal.SIGTERM)
+                if service.poll() is None:
+                    if windows:
+                        stop_windows_launcher(service, env)
+                    else:
+                        os.killpg(service.pid, signal.SIGTERM)
                 try:
-                    service.wait(timeout=10)
+                    service.wait(timeout=20)
                 except subprocess.TimeoutExpired:
-                    service.kill()
+                    if windows:
+                        subprocess.run(["taskkill", "/PID", str(service.pid), "/T", "/F"], capture_output=True, env=env)
+                    else:
+                        os.killpg(service.pid, signal.SIGKILL)
                     service.wait()
+                    raise AssertionError("Launcher did not finish graceful shutdown")
+                # cmd.exe can finish before its service receives CTRL_BREAK.
+                for _ in range(200):
+                    if not (app / "portable-data/lock").exists():
+                        break
+                    time.sleep(.1)
+                assert not (app / "portable-data/lock").exists(), "Graceful shutdown left the data lock"
+            print("PASS portable launcher, clean data, bundled runtime, outputs and graceful shutdown:", archive.name)
 
 
 if __name__ == "__main__":

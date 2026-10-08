@@ -1,9 +1,9 @@
-const { redact } = require("../../queue/keys");
+const { sanitizeRecord } = require("../../queue/keys");
 const { redactLocalPaths } = require("../errors");
 
 function serializeEvent(event, type = "change") {
   if (!Number.isSafeInteger(event.seq) || event.seq < 0) throw new Error("invalidEvent");
-  return `id: ${event.seq}\nevent: ${type}\ndata: ${JSON.stringify(redactLocalPaths(redact(event)))}\n\n`;
+  return `id: ${event.seq}\nevent: ${type}\ndata: ${JSON.stringify(redactLocalPaths(sanitizeRecord(event)))}\n\n`;
 }
 
 class EventStream {

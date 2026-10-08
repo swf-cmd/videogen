@@ -22,7 +22,6 @@ const ROOT = path.resolve(__dirname, "..");
 module.exports = {
   readPort, dataDirectory, ROOT, PORT: readPort(), PUBLIC_DIR: path.join(ROOT, "public"),
   HOME_DIR: os.homedir(), DEFAULT_OUTPUT_DIR: process.env.VIDEOGEN_OUTPUT_DIR ? path.resolve(process.env.VIDEOGEN_OUTPUT_DIR) : path.join(os.homedir(), "Downloads", "videogen"),
-  IDEMPOTENT_RETRY_LIMIT: 4, RETRY_BASE_DELAY_MS: 1000, RETRY_MAX_DELAY_MS: 30000,
   MAX_JSON_BYTES: 1024 * 1024, MAX_BATCH_BYTES: 16 * 1024 * 1024,
   MAX_BATCH_UPLOAD_BYTES: 128 * 1024 * 1024,
   MAX_IMAGE_REFERENCE_BYTES: 25 * 1024 * 1024,

@@ -2,22 +2,33 @@ name: Portable bundles
 on:
   workflow_dispatch:
   pull_request:
-    paths:
-      - 'src/**'
-      - 'public/**'
-      - 'scripts/**'
-      - 'test/**'
-      - 'data/catalog/**'
-      - 'package.json'
-      - 'Start videogen.*'
-      - '.github/workflows/portable.yml'
   push:
+    branches: [main]
     tags: ['v2.*']
 permissions:
   contents: read
 jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: ['22.21.0', '24.21.0']
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm test
+      - run: npm run test:e2e
+      - run: python -m unittest discover -s test -p "test_package_portable.py"
   bundle:
-    if: github.event.repository.private == false
+    needs: test
     strategy:
       fail-fast: false
       matrix:
@@ -38,10 +49,47 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: node --test test/*.test.js
+      - run: npm test
       - name: Build verified portable bundle
         run: python scripts/package-portable.py --target ${{ matrix.target }} --output dist --cache runtime-cache
       - name: Smoke-test extracted launcher without system Node
         shell: bash
         run: python scripts/smoke-portable.py dist/videogen-*-"${{ matrix.target }}".zip
-      # Release ZIPs are published separately; avoid billable Actions artifact storage.
+      - name: Retain the exact tested release files
+        if: startsWith(github.ref, 'refs/tags/') && matrix.os != 'macos-15-intel'
+        uses: actions/upload-artifact@v4
+        with:
+          name: portable-${{ matrix.target }}
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          retention-days: 3
+          compression-level: 0
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: portable-*
+          path: dist
+          merge-multiple: true
+      - name: Verify and publish tested bundles as a draft release
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          sha256sum --check *.sha256
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --draft --verify-tag --title "$RELEASE_TAG" --generate-notes
+          fi
+          if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" != "true" ]; then
+            echo "Refusing to replace files in an already published release."
+            exit 1
+          fi
+          gh release upload "$RELEASE_TAG" *.zip *.sha256 --clobber

@@ -1,6 +1,6 @@
 # Security policy
 
-Security fixes target the latest maintained videogen release. Version 2.0.0 is a local persistent queue; the former Sora integration is retired. Use a supported, patched Node release: `^22.21.0 || >=24.5.0`; Node 23 is unsupported. Maintainer release bundles should include Node 24 LTS.
+Security fixes target the latest maintained videogen release. Version 2.1.0 is a local persistent queue; the former Sora integration is retired. Use a supported, patched Node release: `^22.21.0 || >=24.5.0`; Node 23 is unsupported. Maintainer release bundles should include Node 24 LTS.
 
 ## Report privately
 
@@ -10,14 +10,14 @@ Include the videogen/Node versions, operating system, provider/region, affected 
 
 ## Local boundaries
 
-- The service binds to `127.0.0.1`, validates Host, and requires a matching Origin for state-changing API calls, including DELETE. API and SSE responses do not enable CORS.
+- The service binds to `127.0.0.1`, validates Host, and requires a matching Origin for state-changing API calls, including DELETE. API and SSE responses do not enable CORS. Responses set `X-Frame-Options: DENY` and CSP `frame-ancestors 'none'` to prevent framing.
 - Static paths stay within `public/`; request bodies are bounded, including chunked uploads. SSE sends incremental events and bounded replay, not the complete queue at connection time.
 - This is a local single-user application, not a hosted multi-user service. Other processes with access under the same operating-system account are outside its isolation boundary. Do not expose the service through a public interface or reverse proxy.
 - Journals, images, lane settings and caches use private permissions where supported, but are not encrypted at rest. The task store contains prompts, paths and potentially sensitive media URLs. See [Privacy notes](PRIVACY.md).
 
 ## Credentials and network requests
 
-Keys are memory-only and scoped to provider + region + base URL. They are excluded from browser storage, files, URLs, logs and API/SSE responses. Validation rejects whitespace/control characters; provider-specific formats apply. Known keys and sensitive headers are redacted while preserving structured-data field names.
+Keys are memory-only and scoped to provider + region + base URL. They are excluded from browser storage, files, URLs, logs and API/SSE responses. Validation rejects whitespace/control characters; provider-specific formats apply. Only validated keys of at least 16 characters are registered for provider-response substring redaction; sensitive headers are redacted as fields. Short compatible-server placeholders and rejected keys cannot rewrite prompts, endpoints, paths or IDs.
 
 Authenticated requests must start at the selected lane origin. External presigned downloads carry no provider credentials. Redirects remove authorization/API-key headers and cookies; credential-bearing or known-secret URLs are rejected. A create redirect does not trigger another automatic submission. Gemini uses `x-goog-api-key`, never a query key.
 
@@ -27,7 +27,7 @@ Use HTTPS for remote endpoints. Native environment proxy support honors effectiv
 
 A single-instance lock protects each data directory. The store flushes both the transition to `submitting` and the returned remote ID before the scheduler can continue. On restart, an ambiguous create from the shipped non-idempotent providers becomes `needs_review`; it is never automatically sent again. Poll/download retries cannot call create. Only an explicit review decision can authorize another ambiguous job submission, and the UI warns about possible duplicate charges.
 
-Definite pre-acceptance failures can be retried according to their category. An accepted task's terminal parameter/content error is not permission to recreate it. Disk-write failures stop dispatch; corrupted records do not silently become new jobs. Gemini captures the initial Files recovery address with its interaction ID because later interaction GET may contain inline video instead of that URI.
+Definite pre-acceptance failures can be retried according to their category. An accepted task's terminal parameter/content error is not permission to recreate it. Disk-write failures stop dispatch; corrupted records do not silently become new jobs. Gemini persists the interaction ID and any initial Files recovery address; bounded SSE replay recovers later Files references without buffering inline video.
 
 Downloads stream to private partial files, sync before acknowledging publication, and publish without replacing existing files. Name collisions select an unused filename. Recovery verifies known published-file markers without deleting unrelated files. Provider media bytes and implicit labels are preserved.
 

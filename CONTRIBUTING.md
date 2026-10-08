@@ -36,7 +36,7 @@ Definite nonacceptance retries are distinct from duplicate paid creates. Do not 
 
 Provider fields, model IDs, prices and limits need dated official sources. Mark unverified capabilities experimental; unknown prices must not become zero. Use mock servers for tests. A test suite must never need real credentials or spend provider credit.
 
-The included provider families are OpenAI-compatible servers, OpenRouter, Gemini, DashScope and Ark. Keep regional model/key boundaries and documented exceptions intact: Gemini Omni uses blocking create, OpenRouter local first frames remain disabled, and the included Seedance 2.5 models do not expose seed. Changes to these decisions require new official evidence and contract tests.
+The included provider families are OpenAI-compatible servers, OpenRouter, Gemini, DashScope and Ark. Keep regional model/key boundaries and documented exceptions intact: Gemini Omni uses stored background interactions and bounded SSE recovery, OpenRouter local first frames use the adapter’s supported image encoding, and the included Seedance 2.5 models do not expose seed. Changes to these decisions require new official evidence and contract tests.
 
 All user-visible strings need Chinese, Japanese, English and Korean translations. Keep both READMEs and privacy notes synchronized. Preserve `file://` preview and first-frame fitting. Check the browser workflow when changing the UI; static ID and localization tests complement the browser check.
 

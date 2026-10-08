@@ -4,7 +4,7 @@ Select the shared provider, region, model and defaults first. The task editor su
 
 ## CSV columns
 
-UTF-8 CSV may have a BOM, quoted commas, escaped double quotes, and multiline quoted prompts. Download an example from the app or use [batch-example.csv](batch-example.csv).
+UTF-8 CSV may have a BOM, quoted commas, escaped double quotes, and multiline quoted prompts. Invalid UTF-8 is rejected rather than imported as replacement characters. If Excel exported GBK, Shift_JIS or CP949, use its **CSV UTF-8** format or convert the file to UTF-8 before importing. Download an example from the app or use [batch-example.csv](batch-example.csv).
 
 | Column | Behavior |
 | --- | --- |

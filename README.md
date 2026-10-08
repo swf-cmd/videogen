@@ -24,7 +24,7 @@ cd videogen
 npm start
 ```
 
-Open the printed address, normally `http://127.0.0.1:5177`. `PORT` changes the port; the service binds only to `127.0.0.1`. The launchers choose another local port when the default is busy. Keep the launcher, runtime and application files together. The former `Start Sora2App.command` name is retired. Linux runs from source; Windows and Linux use a manually entered output directory. Opening `public/index.html` directly provides a preview without generation. Only one service may use a data directory, even on different ports.
+Open the printed address, normally `http://127.0.0.1:5177`. `PORT` changes the port; the service binds only to `127.0.0.1`. The launchers choose another local port when the default is busy. Keep the launcher, runtime and application files together. The former `Start Sora2App.command` name is retired. Linux runs from source; Windows and Linux use a manually entered output directory. Opening `public/index.html` directly provides a preview without generation. Only one service may use a data directory, even on different ports. Ctrl+C allows up to 15 seconds to record in-flight work before exit. Data and output folders must support hard links; use a local system disk instead of exFAT.
 
 ## Submit a batch
 
@@ -32,7 +32,7 @@ See the [CSV columns, templates and folder-matching guide](docs/BATCH_IMPORT.md)
 
 1. Select **provider · region** and a model. For a compatible server, enter its base URL, model ID and documented capabilities. Choose JSON or multipart before submission; the app never retries a create with another request format.
 2. Enter and save the lane's key. A lane is provider + region + base URL. Keys stay in service memory; changing lane or URL clears the input. A local endpoint may allow an empty key. You may queue work before supplying a required key.
-3. Separate prompts with blank lines, repeat a single prompt, or import a CSV/template and image folder. Give each row its own first frame and, when supported, last frame. Row validation checks the selected model before submission; templates expand variables into prompts. Choose output directory and filename.
+3. Separate prompts with blank lines, repeat a single prompt, or import a UTF-8 CSV/template and image folder. Give each row its own first frame and, when supported, last frame. Row validation checks the selected model before submission; templates expand variables into prompts. Choose output directory and filename.
 4. Review the estimated cost and ETA, optionally set a batch budget, then confirm. Missing prices show **Unknown**. Currency totals remain separate; estimates are not provider billing guarantees.
 5. Preview completed videos in the gallery, mark takes **Keep** or **Reject**, and inspect the estimated cost per kept clip. Every regeneration requires a fresh explicit confirmation and can incur a new charge. Watch lanes, batches and the paginated job table. Default render concurrency is 1 for compatible endpoints, 2 for OpenRouter and Model Studio, and 3 for Gemini and Ark. You can adjust each lane. A separate pool downloads up to 3 results at once.
 
@@ -50,7 +50,7 @@ An interrupted or ambiguous create becomes **Needs review** (`needs_review`). Th
 - **Abandon.** Stop local tracking of that review item; this does not cancel or refund work at the provider.
 - **Attach a remote ID.** Associate the provider's existing task and resume polling/download without a new create.
 
-A failed job can be retried only when the app has evidence that create was not accepted. A timeout, connection reset, malformed response or create 5xx is not such evidence. Rate limits cool the lane; authentication waits for a replacement key; balance/model-access problems pause the lane. Moderation failures affect only their own jobs.
+A failed job can be retried only when the app has evidence that create was not accepted. A timeout, connection reset, malformed response or create 5xx is not such evidence. Rate limits cool the lane; authentication waits for a replacement key; balance/model-access problems pause new submissions while accepted jobs keep polling and downloading. Moderation failures affect only their own jobs.
 
 **Gemini uses background interactions.** The create request sets `background: true`; the interaction ID is saved before polling. A restart resumes that ID after key re-entry, and successful results retain their Files address. A create response lost before the ID is received can still require review; background mode cannot guarantee recovery across every network failure. Existing Files references remain usable for manual recovery. See the [Gemini contract](docs/providers/gemini.md).
 
@@ -111,7 +111,7 @@ On PowerShell, set the same names with `$env:HTTPS_PROXY`, `$env:HTTP_PROXY` and
 | Linux | `${XDG_DATA_HOME:-~/.local/share}/videogen/` |
 | Windows | `%APPDATA%\videogen\` |
 
-Portable bundles instead use `portable-data/` beside the launcher. `VIDEOGEN_DATA_DIR` overrides the location. Files include `jobs.ndjson`, `jobs.snapshot.json`, `assets/`, nonsecret lane `settings.json`, optional `catalog.local.json`, OpenRouter's catalog cache and the instance lock. Directories/files use 0700/0600 where supported; they are not encrypted by the app.
+Portable bundles instead use `portable-data/` beside the launcher. `VIDEOGEN_DATA_DIR` overrides the location. Files include `jobs.ndjson`, `jobs.snapshot.ndjson`, `assets/`, nonsecret lane `settings.json`, optional `catalog.local.json`, OpenRouter's catalog cache and the instance lock. Directories/files use 0700/0600 where supported; they are not encrypted by the app.
 
 **Clear history and assets** removes finished records and unused images. Unfinished and `needs_review` items remain, as do downloaded videos; delete videos separately. It does not delete provider data or backups. Nonsecret `videogen.*` browser preferences persist; API keys and output-directory preferences do not. Job records still contain their output paths.
 

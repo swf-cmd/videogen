@@ -18,5 +18,6 @@ if [[ ! -x "$NODE_BIN" || ! -f "$APP_DIR/server.js" ]]; then
   [[ -t 0 ]] && read -r "?Press Return to close."
   exit 1
 fi
+"$NODE_BIN" "$APP_DIR/scripts/check-runtime.cjs" || exit 1
 # Replace the shell so stop signals reach the supervising Node process.
 exec "$NODE_BIN" --no-use-env-proxy "$APP_DIR/scripts/launcher.cjs"

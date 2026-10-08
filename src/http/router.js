@@ -65,6 +65,9 @@ function requestOriginAllowed(req) {
 }
 
 async function handleRequest(req, res) {
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Content-Security-Policy", "frame-ancestors 'none'");
+  res.setHeader("X-Content-Type-Options", "nosniff");
   try {
     if (!requestHostAllowed(req)) {
       sendText(res, 403, "Forbidden");
@@ -87,6 +90,10 @@ async function handleRequest(req, res) {
     }
     if (req.method === "GET" && url.pathname === "/api/jobs") return sendJson(res, 200, application.store.list(Object.fromEntries(url.searchParams)));
     if (req.method === "GET" && url.pathname === "/api/events") return application.events.connect(req, res);
+    if (req.method === "GET" && url.pathname === "/api/health") {
+      const health = application.scheduler.health();
+      return sendJson(res, health.ok ? 200 : 503, health);
+    }
     if (req.method === "GET" && url.pathname === "/api/keys") return sendJson(res, 200, application.keys.list());
     if (req.method === "GET" && url.pathname === "/api/lanes") return sendJson(res, 200, { lanes: application.scheduler.laneList() });
     if (req.method === "GET" && url.pathname === "/api/batches") return sendJson(res, 200, application.batches(Object.fromEntries(url.searchParams)));

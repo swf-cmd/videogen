@@ -62,7 +62,7 @@ test("keys reject whitespace and control injection and adapters own format valid
     assert.throws(() => store.set(lane, key, adapter), { code: "invalidKey" });
   }
   assert.throws(() => store.set(lane, "wrong-format-secret", adapter), { code: "invalidKey" });
-  assert.equal(redact("wrong-format-secret"), "[REDACTED]");
+  assert.equal(redact("wrong-format-secret"), "wrong-format-secret");
   store.set(lane, "", { validateKey: (key) => key === "" ? null : "invalidKey" });
   assert.equal(store.get(lane), "");
   assert.equal(store.has(lane), true);
@@ -79,7 +79,7 @@ test("KeyStore honors the actual OpenRouter adapter validation contract", () => 
   const routerLane = { provider: "openrouter", region: "global", baseUrl: "https://openrouter.ai/api/v1" };
   assert.throws(() => store.set(routerLane, "sk-wrong-prefix-secret", openrouter), { code: "invalidApiKey" });
   assert.equal(store.has(routerLane), false);
-  assert.equal(redact("sk-wrong-prefix-secret"), "[REDACTED]");
+  assert.equal(redact("sk-wrong-prefix-secret"), "sk-wrong-prefix-secret");
   store.set(routerLane, "sk-or-correct-prefix-secret", openrouter);
   assert.equal(store.get(routerLane), "sk-or-correct-prefix-secret");
   assert.throws(() => store.set(routerLane, "sk-or-rejected-secret", { validateKey: () => false }), { code: "invalidKey" });

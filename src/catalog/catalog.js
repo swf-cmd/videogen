@@ -96,7 +96,7 @@ function mergeCatalog(catalog, overrides) {
 }
 
 function loadCatalog(dataDir, { directory = path.join(__dirname, "../../data/catalog"), includeMock = process.env.VIDEOGEN_DEV === "1" } = {}) {
-  const providers = fs.readdirSync(directory).filter((file) => file.endsWith(".json")).sort().map((file) => validateCatalog(JSON.parse(fs.readFileSync(path.join(directory, file), "utf8"))));
+  const providers = ["ark", "dashscope", "gemini", "mock", "openai-compatible", "openrouter"].map(id => `${id}.json`).filter(file => fs.existsSync(path.join(directory, file))).map((file) => validateCatalog(JSON.parse(fs.readFileSync(path.join(directory, file), "utf8"))));
   const cached = dataDir && path.join(dataDir, "openrouter-models.cache.json");
   if (cached && fs.existsSync(cached)) {
     try {
@@ -124,7 +124,9 @@ function findModel(catalog, providerId, modelId, region) {
 
 function normalizeOpenRouterModels(response, asOf = new Date().toISOString().slice(0, 10)) {
   assert(Array.isArray(response?.data), "OpenRouter data");
-  return response.data.filter((model) => model.supported_durations?.length && model.supported_resolutions?.length && model.supported_aspect_ratios?.length).map((model) => {
+  const models = response.data.flatMap((model) => {
+    try {
+    if (![model?.supported_durations, model?.supported_resolutions, model?.supported_aspect_ratios].every(value => Array.isArray(value) && value.length)) return [];
     const skus = model.pricing_skus || {};
     const frames = Array.isArray(model.supported_frame_images) ? model.supported_frame_images : [];
     return {
@@ -133,6 +135,16 @@ function normalizeOpenRouterModels(response, asOf = new Date().toISOString().sli
       pricing: openRouterPricing.pricing(skus, model.supported_resolutions),
       pricingSkus: skus, concurrencyDefault: 2, pollIntervalSec: 30, resultTtlHours: null, typicalRenderSec: 180,
     };
+    } catch { return []; }
+  });
+  const ids = new Set();
+  return models.filter(model => {
+    try {
+      validateCatalog({ schemaVersion: 1, provider: "openrouter", asOf, sources: [], regions: [{ id: "global", baseUrl: "https://openrouter.ai/api/v1" }], models: [model] });
+      if (ids.has(model.id)) return false;
+      ids.add(model.id);
+      return true;
+    } catch { return false; }
   });
 }
 

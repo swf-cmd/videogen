@@ -1,7 +1,7 @@
 const crypto = require('node:crypto');
 const { MAX_BATCH_BYTES } = require('../config');
 const { normalizeInputReference } = require('../media/image');
-const { resolveBatchOutputPath } = require('../files/output');
+const { resolveBatchOutputPath, preflightOutputDirectory } = require('../files/output');
 
 function failure(code) { return Object.assign(new Error(code), { code }); }
 function frameRef(row, payload, key) {
@@ -46,12 +46,23 @@ function summarizeCosts(costs) {
   }
   return [...currencies.values()].map(item => ({ ...item, amount: item.unknownCount ? null : Math.round(item.amount * 1e6) / 1e6 }));
 }
-function planBatch(app, payload) {
+function planBatch(app, payload, { summaryOnly = false } = {}) {
   const inputs = sourceRows(app, payload);
+  // A normal batch shares all settings. Validate/price the model once, even
+  // for 50,000 repeated prompts; row mode still validates every override.
+  const common = payload.rows === undefined ? selectRow(app, payload, inputs[0]) : null;
+  if (summaryOnly && common) {
+    const count = inputs.length;
+    const amount = Number.isFinite(common.cost.amount) ? Math.round(common.cost.amount * count * 1e6) / 1e6 : null;
+    const cost = { ...common.cost, amount, unknownCount: amount === null ? count : 0 };
+    const concurrency = app.settings.lanes[common.lane.id]?.concurrency || common.model.concurrencyDefault;
+    const typical = app.scheduler.lanes.get(common.lane.id)?.typicalSeconds || common.model.typicalRenderSec;
+    return { estimate: { valid: true, cost, costs: [{ currency: cost.currency, amount, unknownCount: cost.unknownCount }], count, concurrency, etaSeconds: Math.ceil(count / concurrency) * typical } };
+  }
   const selected = [];
   const rows = inputs.map((row, index) => {
     try {
-      const value = selectRow(app, payload, row); selected.push(value);
+      const value = common ? { ...common, prompt: row.prompt.trim() } : selectRow(app, payload, row); selected.push(value);
       return { index, valid: true, errors: [], cost: value.cost, model: value.model.id, params: value.params };
     } catch (error) {
       selected.push(null);
@@ -75,6 +86,7 @@ function planBatch(app, payload) {
 }
 async function prepareBatch(app, payload, file, files = new Map(), pixelSize) {
   if (app.stopping) throw failure('serviceStopping');
+  app.scheduler.assertHealthy();
   const references = new Map(files);
   if (file?.size) references.set('input_reference', file);
   const input = { ...payload };
@@ -93,6 +105,8 @@ async function prepareBatch(app, payload, file, files = new Map(), pixelSize) {
   const jobs = [];
   // Validate every upload before persisting any batch/job or dispatching paid work.
   for (const [index, row] of selected.entries()) {
+    if (index && index % 128 === 0) await new Promise(resolve => setImmediate(resolve));
+    if (app.stopping) throw failure('serviceStopping');
     const images = [];
     for (const [role, name] of [['first_frame', row.firstFrame], ['last_frame', row.lastFrame]]) {
       if (!name) continue;
@@ -115,13 +129,27 @@ async function prepareBatch(app, payload, file, files = new Map(), pixelSize) {
       createdAt: new Date().toISOString(), language: payload.language || 'zh', requiresKey: Boolean(app.keys.get(row.lane)) || row.adapter.validateKey('') !== null,
     });
   }
+  await preflightOutputDirectory(require('node:path').dirname(jobs[0].targetPath));
+  app.scheduler.assertHealthy();
+  if (app.stopping) throw failure('serviceStopping');
   for (const job of jobs) {
     job.assets = job.images.map(({ role, image }) => app.assets.put(image, role));
     delete job.images;
   }
   const laneIds = [...new Set(selected.map(row => row.lane.id))];
-  app.store.updateBatch(batchId, { state: 'active', laneId: laneIds.length === 1 ? laneIds[0] : null, laneIds, budget, total: jobs.length, createdAt: new Date().toISOString() });
-  app.store.addMany(jobs);
+  app.store.updateBatch(batchId, { state: 'preparing', laneId: laneIds.length === 1 ? laneIds[0] : null, laneIds, budget, total: jobs.length, createdAt: new Date().toISOString() });
+  try {
+    await app.store.addManyAsync(jobs, { shouldStop: () => app.stopping });
+    app.scheduler.assertHealthy();
+    if (app.stopping) throw failure('serviceStopping');
+    app.store.updateBatch(batchId, { state: 'active' });
+  } catch (error) {
+    if (!app.store.failed && app.store.fd !== undefined) {
+      const total = jobs.reduce((count, job) => count + Number(Boolean(app.store.get(job.id))), 0);
+      app.store.updateBatch(batchId, { state: 'paused', pauseReason: 'interrupted_enqueue', total });
+    }
+    throw error;
+  }
   app.scheduler.kick();
   return { ...selected[0], jobs, id: batchId, count: jobs.length };
 }

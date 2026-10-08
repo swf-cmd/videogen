@@ -117,8 +117,11 @@ function customCapabilities() { return { durations: splitValues(customDurationsI
 function selectedCapabilities() { return selectedModelConfig()?.capabilities || customCapabilities(); }
 function formLane() { const lane = selectedLane(); return { provider: lane?.provider.provider, region: lane?.region.id, baseUrl: baseUrlInput.value.trim() }; }
 function fillSelect(select, values, selected, label = (value) => value) {
-  select.textContent = "";
-  for (const item of values) { const option = document.createElement("option"); option.value = String(item); option.textContent = label(String(item)); select.append(option); }
+  const choices = values.map((item) => ({ value: String(item), text: label(String(item)) }));
+  if (select.options.length !== choices.length || choices.some((choice, index) => select.options[index]?.value !== choice.value || select.options[index]?.textContent !== choice.text)) {
+    select.textContent = "";
+    for (const choice of choices) { const option = document.createElement("option"); option.value = choice.value; option.textContent = choice.text; select.append(option); }
+  }
   select.value = [...select.options].some((option) => option.value === String(selected)) ? String(selected) : select.options[0]?.value || "";
 }
 function renderProviders(selected) {
@@ -207,13 +210,7 @@ function updatePromptMeta() {
   promptMetaText.textContent = t("promptCount", { count: formatInteger(count), chars: formatInteger(promptInput.value.trim().length), action: t("willSubmit", { count: formatInteger(requestCountForEstimate()) }) });
 }
 function selectedImageSize(params = {}) {
-  const resolution = params.resolution || sizeInput.value;
-  if (parseSizeValue(resolution)) return resolution;
-  const height = /^4k$/i.test(resolution) ? 2160 : Number(/^(\d+)p$/i.exec(resolution)?.[1]);
-  const ratio = /^(\d+):(\d+)$/.exec(params.aspectRatio || aspectRatioInput.value);
-  if (!height || !ratio) return "";
-  const [a, b] = ratio.slice(1).map(Number); const short = Math.min(a, b);
-  return `${Math.round(height * a / short / 2) * 2}x${Math.round(height * b / short / 2) * 2}`;
+  return VideoDimensions.pixelSize({ resolution: params.resolution || sizeInput.value, aspectRatio: params.aspectRatio || aspectRatioInput.value });
 }
 function estimateText(estimate = lastEstimate) { return { cost: estimate?.costs?.length > 1 ? estimate.costs.map(formatCost).join(" + ") : formatCost(estimate?.cost), eta: Number.isFinite(estimate?.etaSeconds) ? t("etaValue", { seconds: formatInteger(Math.ceil(estimate.etaSeconds)) }) : t("unknown") }; }
 function updateSummary() {
@@ -225,7 +222,7 @@ function updateSummary() {
   summaryBatchCount.textContent = `${formatInteger(requestCountForEstimate())} ${t("requestUnit")}`;
   summarySize.textContent = [sizeInput.value, aspectRatioInput.value].filter(Boolean).join(" · ") || "—";
   const priced = Number.isFinite(lastEstimate?.cost?.amount);
-  budgetInput.disabled = busy || !priced;
+  budgetInput.disabled = busy;
   document.querySelector("#budgetNote").textContent = priced ? t("budgetCurrency", { currency: lastEstimate.cost.currency }) : t("budgetUnknown");
   updateInputReferenceSummary();
 }
@@ -432,7 +429,7 @@ function readForm() {
   if (isCustomModel()) payload.customCapabilities = customCapabilities();
   if (typeof selectedInputReferenceFile === "function" && selectedInputReferenceFile()) payload.firstFrame = "input_reference";
   if (typeof batchEditor !== "undefined" && batchEditor?.enabled) { payload.rows = batchEditor.payloadRows(); payload.batchCount = payload.rows.length; delete payload.firstFrame; }
-  if (!budgetInput.disabled && budgetInput.value !== "") payload.budget = { amount: Number(budgetInput.value), currency: lastEstimate?.cost?.currency };
+  if (String(budgetInput.value ?? "").trim() !== "") payload.budget = { amount: Number(budgetInput.value) };
   return payload;
 }
 function validateSelection(payload) {
@@ -462,7 +459,7 @@ function scheduleEstimate() {
   if (isFilePreview || busy) return;
   estimateTimer = setTimeout(async () => {
     const payload = readForm(); if ((!payload.model && !payload.rows?.every((row) => row.model)) || (!payload.prompt && !payload.rows?.length)) return;
-    try { const result = await apiRequest("/api/estimate", payload); if (revision !== estimateRevision) return; lastEstimate = result; batchEditor?.setEstimates(result); updateSummary(); }
+    try { const result = await apiRequest("/api/estimate", { ...payload, summaryOnly: !payload.rows }); if (revision !== estimateRevision) return; lastEstimate = result; batchEditor?.setEstimates(result); updateSummary(); }
     catch { /* Final submission reports validation errors. */ }
   }, 400);
 }
@@ -480,12 +477,17 @@ function setBusy(value) {
 }
 async function generateVideo(event) {
   event.preventDefault(); if (busy) return;
+  const previousFocus = document.activeElement;
   const payload = readForm(); setBusy(true); clearTimeout(estimateTimer); estimateRevision += 1;
   try {
     validateSelection(payload);
     const reference = payload.rows ? null : await validateInputReferenceSelection(payload);
-    lastEstimate = await apiRequest("/api/estimate", payload); batchEditor?.setEstimates(lastEstimate); updateSummary();
+    lastEstimate = await apiRequest("/api/estimate", { ...payload, summaryOnly: !payload.rows }); batchEditor?.setEstimates(lastEstimate); updateSummary();
     if (lastEstimate.valid === false) throw new Error(t("invalidRows"));
+    if (payload.budget) {
+      if (!Number.isFinite(lastEstimate.cost?.amount) || !lastEstimate.cost?.currency || lastEstimate.costs?.length > 1) throw new Error(t("budgetUnknown"));
+      payload.budget.currency = lastEstimate.cost.currency;
+    }
     const files = payload.rows ? await batchEditor.prepareFiles(payload) : {};
     if (reference?.file) files.input_reference = reference.file;
     if (Object.values(files).reduce((total, file) => total + file.size, 0) > 120 * 1024 * 1024) throw new Error(t("batchImagesTooLarge"));
@@ -498,7 +500,7 @@ async function generateVideo(event) {
     queueView.batchFilter = result.id; queueView.jobPage = 0; queueView.jobCursors = [null];
     await queueView.refresh();
   } catch (error) { formMessage(error.message, true); }
-  finally { setBusy(false); }
+  finally { setBusy(false); if (previousFocus?.isConnected) previousFocus.focus(); }
 }
 function applyTranslations() {
   document.documentElement.lang = t("htmlLang"); document.title = t("documentTitle");

@@ -72,13 +72,13 @@ test("keys validate per provider and reject whitespace/header injection", () => 
 
 test("authenticated cross-origin requests are rejected; redirects drop credentials", async () => {
   const observed = [];
-  const ctx = createContext({ lane: { provider: "openrouter", baseUrl: "https://openrouter.ai/api/v1" }, key: "sk-or-secret", fetchImpl: async (url, options) => {
+  const ctx = createContext({ lane: { provider: "openrouter", baseUrl: "https://openrouter.ai/api/v1" }, key: "sk-or-test-secret-long", fetchImpl: async (url, options) => {
     observed.push({ url: String(url), auth: options.headers.get("authorization") });
     return observed.length === 1 ? new Response(null, { status: 302, headers: { location: "https://cdn.example/video.mp4" } }) : new Response("bytes");
   } });
   await assert.rejects(ctx.fetch("https://evil.example/video"), { category: "invalid_request" });
   await ctx.fetch("videos/id/content");
-  assert.deepEqual(observed, [{ url: "https://openrouter.ai/api/v1/videos/id/content", auth: "Bearer sk-or-secret" }, { url: "https://cdn.example/video.mp4", auth: null }]);
+  assert.deepEqual(observed, [{ url: "https://openrouter.ai/api/v1/videos/id/content", auth: "Bearer sk-or-test-secret-long" }, { url: "https://cdn.example/video.mp4", auth: null }]);
   observed.length = 0;
   await assert.rejects(ctx.fetch("videos", { method: "POST", phase: "create" }), { category: "unknown_outcome" });
 });
@@ -86,8 +86,8 @@ test("authenticated cross-origin requests are rejected; redirects drop credentia
 test("HTTP error classes preserve uncertain create outcomes and redact secrets", async () => {
   const cases = [[400, "invalid_request"], [401, "auth"], [402, "quota"], [403, "auth"], [404, "model_unavailable"], [429, "rate_limited"], [500, "unknown_outcome"], [502, "unknown_outcome"]];
   for (const [status, category] of cases) {
-    const ctx = createContext({ lane: { provider: "openrouter", baseUrl: "https://openrouter.ai/api/v1" }, key: "sk-or-secret", fetchImpl: async () => response({ error: { message: "echo sk-or-secret", code: status } }, status, { "retry-after": "2" }) });
-    await assert.rejects(ctx.fetch("videos", { method: "POST", phase: "create" }), (error) => { assert.equal(error.category, category); assert.ok(!error.message.includes("sk-or-secret")); assert.equal(error.retryAfterMs, 2000); return true; });
+    const ctx = createContext({ lane: { provider: "openrouter", baseUrl: "https://openrouter.ai/api/v1" }, key: "sk-or-test-secret-long", fetchImpl: async () => response({ error: { message: "echo sk-or-test-secret-long", code: status } }, status, { "retry-after": "2" }) });
+    await assert.rejects(ctx.fetch("videos", { method: "POST", phase: "create" }), (error) => { assert.equal(error.category, category); assert.ok(!error.message.includes("sk-or-test-secret-long")); assert.equal(error.retryAfterMs, 2000); return true; });
   }
   assert.equal(classifyError({ code: "moderation" }, "poll"), "moderation");
   assert.equal(classifyError({ status: 500, code: "moderation" }, "create"), "unknown_outcome");
@@ -95,7 +95,7 @@ test("HTTP error classes preserve uncertain create outcomes and redact secrets",
 });
 
 test("pre-send network failure is distinguished from ambiguous timeout/reset", async () => {
-  for (const [code, accepted, category] of [["ECONNREFUSED", false, "transient"], ["ENOTFOUND", false, "transient"], ["ECONNRESET", undefined, "unknown_outcome"], ["UND_ERR_HEADERS_TIMEOUT", undefined, "unknown_outcome"]]) {
+  for (const [code, accepted, category] of [["ECONNREFUSED", false, "local_offline"], ["ENOTFOUND", false, "local_offline"], ["ENETUNREACH", false, "local_offline"], ["ECONNRESET", undefined, "unknown_outcome"], ["UND_ERR_HEADERS_TIMEOUT", undefined, "unknown_outcome"]]) {
     const ctx = createContext({ lane: { provider: "openai-compatible", baseUrl: "http://127.0.0.1:1/v1" }, fetchImpl: async () => { throw Object.assign(new TypeError("network"), { cause: { code } }); } });
     await assert.rejects(ctx.fetch("videos", { phase: "create" }), (error) => { assert.equal(error.accepted, accepted); assert.equal(error.category, category); assert.equal(error.code, code); return true; });
   }

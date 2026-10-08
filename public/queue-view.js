@@ -12,9 +12,9 @@ function viewButton(text, action, className = "secondary") {
   return button;
 }
 
-const queueStateKeys = { queued: "statusQueued", submitting: "statusSubmitting", running: "statusInProgress", downloading: "statusDownloading", succeeded: "statusCompleted", failed: "statusFailed", cancelled: "statusCancelled", needs_review: "needsReviewShort", result_expired: "statusExpired", active: "laneActive", paused: "lanePaused", cooldown: "laneCooldown", needs_key: "laneNeedsKey" };
-const queueReasonKeys = { manual_pause: "reasonManual", rate_limited: "reasonRateLimit", auth: "reasonAuth", quota: "reasonQuota", model_unavailable: "reasonModel", circuit_open: "reasonCircuit", budget: "reasonBudget", budget_unknown: "reasonUnknownBudget", storeWriteFailed: "reasonStore", storeClosed: "reasonStore" };
-const queueErrorKeys = { moderation: "errorModeration", invalid_request: "errorInvalidRequest", unknown_outcome: "reviewExplanation", transient: "errorTransient", auth: "reasonAuth", quota: "reasonQuota", rate_limited: "reasonRateLimit", result_expired: "errorExpired", model_unavailable: "reasonModel" };
+const queueStateKeys = { queued: "statusQueued", submitting: "statusSubmitting", running: "statusInProgress", downloading: "statusDownloading", succeeded: "statusCompleted", failed: "statusFailed", cancelled: "statusCancelled", needs_review: "needsReviewShort", result_expired: "statusExpired", active: "laneActive", preparing: "statusPreparing", paused: "lanePaused", cooldown: "laneCooldown", needs_key: "laneNeedsKey" };
+const queueReasonKeys = { manual_pause: "reasonManual", rate_limited: "reasonRateLimit", auth: "reasonAuth", quota: "reasonQuota", model_unavailable: "reasonModel", circuit_open: "reasonCircuit", budget: "reasonBudget", budget_unknown: "reasonUnknownBudget", storeWriteFailed: "reasonStore", storeClosed: "reasonStore", schedulerFailed: "reasonScheduler", local_offline: "reasonOffline", interrupted_enqueue: "reasonInterruptedEnqueue" };
+const queueErrorKeys = { moderation: "errorModeration", invalid_request: "errorInvalidRequest", unknown_outcome: "reviewExplanation", transient: "errorTransient", auth: "reasonAuth", quota: "reasonQuota", rate_limited: "reasonRateLimit", result_expired: "errorExpired", model_unavailable: "reasonModel", output_write_failed: "errorOutputWrite", local_offline: "reasonOffline" };
 
 class QueueView {
   constructor() {
@@ -23,6 +23,8 @@ class QueueView {
     this.lanes = [];
     this.keys = [];
     this.laneCards = new Map();
+    this.batchCards = new Map();
+    this.jobRows = new Map();
     this.galleryCards = new Map();
     this.gallerySummary = null;
     this.galleryRevision = 0;
@@ -64,6 +66,10 @@ class QueueView {
     document.querySelector("#batchFilter").addEventListener("change", (event) => { this.batchFilter = event.target.value; this.resetJobs(); });
     document.querySelector("#stateFilter").addEventListener("change", (event) => { this.stateFilter = event.target.value; this.resetJobs(); });
     document.querySelector("#gallerySelection").addEventListener("change", (event) => { this.gallerySelection = event.target.value; this.renderGallery(); });
+    document.querySelector("#reviewDialog").addEventListener("close", () => {
+      if (this.reviewPreviousFocus?.isConnected) this.reviewPreviousFocus.focus();
+      this.reviewPreviousFocus = null;
+    });
     document.querySelector("#closeReview").addEventListener("click", () => document.querySelector("#reviewDialog").close());
     document.querySelector("#attachRemoteButton").addEventListener("click", () => this.resolveReview("attach_remote_id"));
     document.querySelector("#resubmitReviewButton").addEventListener("click", () => this.resolveReview("resubmit"));
@@ -77,10 +83,11 @@ class QueueView {
   }
 
   async run(action, button) {
-    if (button) button.disabled = true;
+    if (button?._pending) return;
+    if (button) { button._pending = true; button.disabled = true; }
     try { return await action(); }
     catch (error) { this.message(error.message, true); }
-    finally { if (button) button.disabled = false; }
+    finally { if (button) { button._pending = false; button.disabled = false; } }
   }
 
   async start() {
@@ -100,12 +107,17 @@ class QueueView {
     // Connect before taking snapshots so changes during the requests are replayed.
     const events = this.events = new EventSource("/api/events");
     const active = (action) => (event) => { if (this.events === events) action(event); };
-    events.addEventListener("ready", active(() => { setConnectionState("ready"); this.scheduleRefresh(true); }));
-    events.addEventListener("resync", active(() => this.scheduleRefresh(true)));
+    events.addEventListener("ready", active(() => { setConnectionState("ready"); this.scheduleRefresh(); }));
+    events.addEventListener("resync", active(() => this.scheduleRefresh()));
     events.addEventListener("change", active((event) => this.applyEvent(JSON.parse(event.data))));
-    events.onopen = active(() => { setConnectionState("ready"); this.scheduleRefresh(true); });
+    events.onopen = active(() => {
+      // A restarted service can begin a new event sequence at zero.
+      for (const job of this.jobs.values()) delete job._seq;
+      this.jobRevision += 1;
+      setConnectionState("ready"); this.scheduleRefresh();
+    });
     events.onerror = active(() => setConnectionState("connectionReconnecting"));
-    this.statusTimer = setInterval(() => { this.run(() => this.loadLanes()); this.updateCooldowns(); }, 2000);
+    this.statusTimer = setInterval(() => { this.scheduleRefresh(); this.updateCooldowns(); }, 2000);
     this.countdownTimer = setInterval(() => this.updateCooldowns(), 1000);
     // Install cleanup and timers before a snapshot can fail.
     await this.refresh();
@@ -115,36 +127,46 @@ class QueueView {
     const events = this.events;
     this.events = null;
     events?.close();
-    clearInterval(this.statusTimer); clearInterval(this.countdownTimer); clearTimeout(this.refreshTimer);
-    this.statusTimer = this.countdownTimer = this.refreshTimer = null;
-    this.refreshJobs = false;
+    clearInterval(this.statusTimer); clearInterval(this.countdownTimer); clearTimeout(this.refreshTimer); clearTimeout(this.renderTimer);
+    this.statusTimer = this.countdownTimer = this.refreshTimer = this.renderTimer = null;
+    this.snapshotPromise = null;
     // Discard snapshots started before the page was suspended.
     this.jobRevision += 1; this.batchRevision += 1; this.laneRevision += 1; this.galleryRevision += 1;
   }
 
-  scheduleRefresh(includeJobs = false) {
-    this.refreshJobs = this.refreshJobs || includeJobs;
+  scheduleRefresh() {
     if (this.refreshTimer) return;
     this.refreshTimer = setTimeout(() => {
       this.refreshTimer = null;
-      const all = this.refreshJobs;
-      this.refreshJobs = false;
-      this.run(() => all ? this.refresh() : Promise.all([this.loadBatches(), this.loadLanes(), this.loadGallerySummary()]));
-    }, 180);
+      this.run(() => this.refresh());
+    }, 750);
   }
 
   applyEvent(event) {
     const current = this.jobs.get(event.jobId);
     if (event.type === "job" && current) {
       if ((current._seq || 0) < event.seq) this.jobs.set(event.jobId, { ...current, ...event, id: event.jobId, _seq: event.seq });
-      this.renderJobs();
-    } else if (event.type === "delete") { this.jobs.delete(event.jobId); this.renderJobs(); }
-    this.scheduleRefresh(event.type === "delete" || event.type === "job" && (!current || Boolean(this.stateFilter)));
+      this.scheduleJobRender();
+    } else if (event.type === "delete") { this.jobs.delete(event.jobId); this.scheduleJobRender(); }
+    this.scheduleRefresh();
+  }
+
+  scheduleJobRender() {
+    if (this.renderTimer) return;
+    this.renderTimer = setTimeout(() => { this.renderTimer = null; this.renderJobs(); }, 80);
   }
 
   async refresh() {
     if (isFilePreview) return;
-    await Promise.all([this.loadJobs(), this.loadBatches(), this.loadLanes(), this.loadGallerySummary()]);
+    // Slow snapshots are allowed to finish. New events request one later refresh
+    // instead of starting requests that invalidate every response in flight.
+    if (this.snapshotPromise) { this.scheduleRefresh(); return this.snapshotPromise; }
+    const snapshot = this.snapshotPromise = Promise.allSettled([this.loadJobs(), this.loadBatches(), this.loadLanes(), this.loadGallerySummary()]).then((results) => {
+      const failure = results.find((result) => result.status === "rejected");
+      if (failure) throw failure.reason;
+    });
+    try { await snapshot; }
+    finally { if (this.snapshotPromise === snapshot) this.snapshotPromise = null; }
   }
 
   async loadJobs() {
@@ -250,7 +272,7 @@ class QueueView {
       card.keyInput.placeholder = t("replacementKey");
       card.keyNote.textContent = t("trustNote");
       card.keyStatus.textContent = t(this.keyPresent(lane) ? "keyPresent" : "keyAbsent");
-      card.save.textContent = t("saveKey"); card.remove.textContent = t("deleteKey"); card.remove.disabled = !this.keyPresent(lane);
+      card.save.textContent = t("saveKey"); card.remove.textContent = t("deleteKey"); card.remove.disabled = Boolean(card.remove._pending) || !this.keyPresent(lane);
       card.concurrencyTitle.textContent = t("concurrency");
       if (document.activeElement !== card.concurrency) card.concurrency.value = lane.concurrency;
       card.configure.textContent = t("applyConcurrency");
@@ -269,32 +291,43 @@ class QueueView {
 
   renderBatches() {
     const container = document.querySelector("#batchList");
-    container.textContent = "";
+    const visible = new Set(this.batches.map((batch) => batch.id));
+    for (const [id, card] of this.batchCards) if (!visible.has(id)) { card.element.remove(); this.batchCards.delete(id); }
+    container.querySelector(".empty-state")?.remove();
     if (!this.batches.length) container.append(viewElement("p", "empty-state", t("noBatches")));
-    for (const batch of this.batches) {
-      const card = viewElement("article", "batch-card");
-      const title = viewButton(`${t("batch")} ${batch.id.slice(0, 8)}`, () => this.showBatch(batch.id), "text-button");
-      title.title = batch.id;
-      const lane = this.lanes.find((item) => item.id === batch.laneId);
-      const createdAt = Date.parse(batch.createdAt);
-      const meta = viewElement("small", "field-meta", [lane ? laneName(lane) : "", Number.isFinite(createdAt) ? new Date(createdAt).toLocaleString(currentLocale()) : ""].filter(Boolean).join(" · "));
-      const counts = Object.entries(batch.counts || {}).filter(([, count]) => count).map(([state, count]) => `${t(queueStateKeys[state] || "unknown")} ${formatInteger(count)}`).join(" · ");
-      const summary = viewElement("p", "field-meta", `${t("batchTotal", { count: batch.total })} · ${counts}`);
-      const finished = batch.total > 0 && Object.entries(batch.counts || {}).every(([state, count]) => !count || ["succeeded", "failed", "cancelled", "result_expired"].includes(state));
-      const status = viewElement("p", "field-meta", `${t(finished ? "batchFinished" : queueStateKeys[batch.state] || "unknown")}${!finished && batch.pauseReason ? ` · ${t(queueReasonKeys[batch.pauseReason] || "lanePaused")}` : ""}`);
-      const controls = viewElement("div", "inline-actions");
-      for (const action of [batch.state === "paused" ? "resume" : "pause", "cancel"]) {
-        if (batch.state === "cancelled" || finished) continue;
-        const button = viewButton(t(action === "cancel" ? "cancelBatch" : action), () => this.run(async () => {
-          if (action === "cancel" && !await confirmAction(t("cancelBatchConfirm"), { danger: true })) return;
-          await apiRequest(`/api/batches/${batch.id}/${action}`, {}); await this.refresh();
-        }, button));
-        controls.append(button);
+    this.batches.forEach((batch, index) => {
+      let card = this.batchCards.get(batch.id);
+      if (!card) {
+        const element = viewElement("article", "batch-card");
+        const title = viewButton("", () => this.showBatch(batch.id), "text-button"); title.title = batch.id;
+        const meta = viewElement("small", "field-meta"), summary = viewElement("p", "field-meta"), status = viewElement("p", "field-meta"), budget = viewElement("p", "field-meta");
+        const controls = viewElement("div", "inline-actions");
+        const toggle = viewButton("", () => this.run(async () => {
+          const current = this.batches.find((item) => item.id === batch.id);
+          if (!current) return;
+          await apiRequest(`/api/batches/${batch.id}/${current.state === "paused" ? "resume" : "pause"}`, {}); await this.refresh();
+        }, toggle));
+        const cancel = viewButton("", () => this.run(async () => {
+          if (!await confirmAction(t("cancelBatchConfirm"), { danger: true })) return;
+          await apiRequest(`/api/batches/${batch.id}/cancel`, {}); await this.refresh();
+        }, cancel));
+        controls.append(toggle, cancel); element.append(title, meta, summary, status, budget, controls);
+        card = { element, title, meta, summary, status, budget, controls, toggle, cancel }; this.batchCards.set(batch.id, card);
       }
-      card.append(title, meta, summary, status);
-      if (batch.budget) card.append(viewElement("p", "field-meta", `${t("budgetLabel")}: ${formatCost(batch.budget)}`));
-      card.append(controls); container.append(card);
-    }
+      if (container.children[index] !== card.element) container.insertBefore(card.element, container.children[index] || null);
+      card.title.textContent = `${t("batch")} ${batch.id.slice(0, 8)}`;
+      const lane = this.lanes.find((item) => item.id === batch.laneId), createdAt = Date.parse(batch.createdAt);
+      card.meta.textContent = [lane ? laneName(lane) : "", Number.isFinite(createdAt) ? new Date(createdAt).toLocaleString(currentLocale()) : ""].filter(Boolean).join(" · ");
+      const counts = Object.entries(batch.counts || {}).filter(([, count]) => count).map(([state, count]) => `${t(queueStateKeys[state] || "unknown")} ${formatInteger(count)}`).join(" · ");
+      card.summary.textContent = `${t("batchTotal", { count: batch.total })} · ${counts}`;
+      const finished = batch.total > 0 && Object.entries(batch.counts || {}).every(([state, count]) => !count || ["succeeded", "failed", "cancelled", "result_expired"].includes(state));
+      card.status.textContent = `${t(finished ? "batchFinished" : queueStateKeys[batch.state] || "unknown")}${!finished && batch.pauseReason ? ` · ${t(queueReasonKeys[batch.pauseReason] || "lanePaused")}` : ""}`;
+      card.budget.hidden = !batch.budget; card.budget.textContent = batch.budget ? `${t("budgetLabel")}: ${formatCost(batch.budget)}` : "";
+      card.controls.hidden = batch.state === "cancelled" || finished;
+      card.toggle.disabled = Boolean(card.toggle._pending) || batch.state === "preparing";
+      card.cancel.disabled = Boolean(card.cancel._pending) || batch.state === "preparing";
+      card.toggle.textContent = t(batch.state === "paused" ? "resume" : "pause"); card.cancel.textContent = t("cancelBatch");
+    });
     document.querySelector("#batchPrevious").disabled = this.batchPage === 0;
     document.querySelector("#batchNext").disabled = !this.nextBatchCursor;
     document.querySelector("#batchPage").textContent = t("pageNumber", { page: this.batchPage + 1 });
@@ -311,47 +344,56 @@ class QueueView {
 
   renderJobs() {
     const body = document.querySelector("#jobsBody");
-    const expanded = new Set([...body.querySelectorAll("tr")].filter((row) => row.querySelector("details")?.open).map((row) => row.dataset.jobId));
-    body.textContent = "";
-    if (!this.jobs.size) { const row = viewElement("tr"); const cell = viewElement("td", "empty-state", t("noJobs")); cell.colSpan = 5; row.append(cell); body.append(row); }
+    for (const [id, card] of this.jobRows) if (!this.jobs.has(id)) { card.element.remove(); this.jobRows.delete(id); }
+    body.querySelector(".empty-row")?.remove();
+    if (!this.jobs.size) { const row = viewElement("tr", "empty-row"), cell = viewElement("td", "empty-state", t("noJobs")); cell.colSpan = 5; row.append(cell); body.append(row); }
+    let index = 0;
     for (const job of this.jobs.values()) {
-      const row = viewElement("tr"); row.dataset.jobId = job.id;
-      const identity = viewElement("td");
-      identity.append(viewElement("strong", "job-prompt", job.prompt || t("emptyPrompt")), viewElement("small", "field-meta", `${job.model} · #${(job.index || 0) + 1}`));
-      const details = viewElement("details", "job-details");
-      details.open = expanded.has(job.id);
-      details.append(viewElement("summary", "", t("jobDetails")), viewElement("p", "", `${t("localId")}: ${job.id}`), viewElement("p", "", `${t("remoteId")}: ${job.remote?.id || "—"}`), viewElement("p", "", job.prompt || ""));
-      identity.append(details);
-      const state = viewElement("td");
-      state.append(viewElement("span", `state-label state-${job.state}`, t(queueStateKeys[job.state] || "unknown")));
-      const progress = document.createElement("progress"); progress.max = 100; progress.value = job.state === "succeeded" ? 100 : Math.max(0, Math.min(100, Number(job.progress) || 0)); progress.setAttribute("aria-label", t("jobProgress"));
-      state.append(progress, viewElement("small", "field-meta", `${Math.round(progress.value)}%`));
-      if (job.cancelRequested && canCancelJob({ ...job, cancelRequested: false })) state.append(viewElement("small", "field-meta", t("cancelPending")));
-      const cost = viewElement("td", "job-cost", formatCost(job.costEstimate));
-      const result = viewElement("td", "job-result");
-      if (job.output?.path) {
-        result.append(viewElement("span", "output-path", job.output.path));
-        const copy = viewButton(t("copyPath"), () => this.run(async () => {
-          try { await navigator.clipboard.writeText(job.output.path); } catch { throw new Error(t("copyPathFailed")); }
+      let card = this.jobRows.get(job.id);
+      if (!card) {
+        const element = viewElement("tr"); element.dataset.jobId = job.id;
+        const identity = viewElement("td"), prompt = viewElement("strong", "job-prompt"), model = viewElement("small", "field-meta");
+        const details = viewElement("details", "job-details"), detailsTitle = viewElement("summary"), local = viewElement("p"), remote = viewElement("p"), fullPrompt = viewElement("p");
+        details.append(detailsTitle, local, remote, fullPrompt); identity.append(prompt, model, details);
+        const state = viewElement("td"), stateLabel = viewElement("span"), progress = document.createElement("progress"), percent = viewElement("small", "field-meta"), cancelPending = viewElement("small", "field-meta");
+        progress.max = 100; state.append(stateLabel, progress, percent, cancelPending);
+        const cost = viewElement("td", "job-cost"), result = viewElement("td", "job-result"), output = viewElement("span", "output-path"), error = viewElement("span", "job-error"), expiry = viewElement("strong", "expiry-warning");
+        const copy = viewButton("", () => this.run(async () => {
+          const path = this.jobs.get(job.id)?.output?.path;
+          if (!path) return;
+          try { await navigator.clipboard.writeText(path); } catch { throw new Error(t("copyPathFailed")); }
           this.message(t("pathCopied"));
-        }, copy), "text-button"); result.append(copy);
+        }, copy), "text-button"); result.append(output, copy, error, expiry);
+        const actions = viewElement("td", "job-actions");
+        const review = viewButton("", () => this.openReview(this.jobs.get(job.id)), "secondary review-action");
+        const regenerate = viewButton("", () => this.run(() => this.regenerateJob(this.jobs.get(job.id)), regenerate));
+        const retry = viewButton("", () => this.run(() => this.retryJob(this.jobs.get(job.id)), retry));
+        const cancel = viewButton("", () => this.run(async () => {
+          if (!await confirmAction(t("cancelJobConfirm"), { danger: true })) return;
+          await apiRequest(`/api/jobs/${job.id}/cancel`, {}); await this.refresh();
+        }, cancel));
+        actions.append(review, regenerate, retry, cancel); element.append(identity, state, cost, result, actions);
+        card = { element, prompt, model, detailsTitle, local, remote, fullPrompt, stateLabel, progress, percent, cancelPending, cost, output, copy, error, expiry, review, regenerate, retry, cancel };
+        this.jobRows.set(job.id, card);
       }
-      if (job.error) result.append(viewElement("span", "job-error", queueErrorKeys[job.error.category] ? t(queueErrorKeys[job.error.category]) : job.error.message || t("unknown")));
+      if (body.children[index] !== card.element) body.insertBefore(card.element, body.children[index] || null);
+      index += 1;
+      card.prompt.textContent = job.prompt || t("emptyPrompt"); card.model.textContent = `${job.model} · #${(job.index || 0) + 1}`;
+      card.detailsTitle.textContent = t("jobDetails"); card.local.textContent = `${t("localId")}: ${job.id}`; card.remote.textContent = `${t("remoteId")}: ${job.remote?.id || "—"}`; card.fullPrompt.textContent = job.prompt || "";
+      card.stateLabel.className = `state-label state-${job.state}`; card.stateLabel.textContent = t(queueStateKeys[job.state] || "unknown");
+      card.progress.value = job.state === "succeeded" ? 100 : Math.max(0, Math.min(100, Number(job.progress) || 0)); card.progress.setAttribute("aria-label", t("jobProgress")); card.percent.textContent = `${Math.round(card.progress.value)}%`;
+      card.cancelPending.hidden = !job.cancelRequested || !canCancelJob({ ...job, cancelRequested: false }); card.cancelPending.textContent = t("cancelPending");
+      card.cost.textContent = formatCost(job.costEstimate); card.output.textContent = job.output?.path || ""; card.output.hidden = card.copy.hidden = !job.output?.path; card.copy.textContent = t("copyPath");
+      const errorKey = queueErrorKeys[job.error?.code || job.error?.category];
+      card.error.hidden = !job.error;
+      card.error.textContent = job.error ? [errorKey ? t(errorKey) : job.error.message || t("unknown"), job.error.providerCode, job.error.providerMessage || (errorKey && !job.error.code ? job.error.message : "")].filter(Boolean).join(" · ") : "";
       const expires = Date.parse(job.resultExpiresAt);
-      if (Number.isFinite(expires) && expires - Date.now() < 3600000 && !["succeeded", "cancelled", "failed"].includes(job.state)) result.append(viewElement("strong", "expiry-warning", t(expires < Date.now() ? "resultExpiredWarning" : "resultExpiring", { at: new Date(expires).toLocaleString(currentLocale()) })));
-      const actions = viewElement("td", "job-actions");
-      if (job.state === "needs_review") actions.append(viewButton(t("reviewAction"), () => this.openReview(job), "secondary review-action"));
-      if (["succeeded", "failed", "cancelled", "result_expired"].includes(job.state)) {
-        const regenerate = viewButton(t("regenerateOne"), () => this.run(() => this.regenerateJob(this.jobs.get(job.id)), regenerate));
-        actions.append(regenerate);
-      }
-      for (const action of [canRetryJob(job) && "retry", canCancelJob(job) && "cancel"].filter(Boolean)) {
-        const button = viewButton(t(action), () => this.run(async () => {
-          if (action === "cancel" && !await confirmAction(t("cancelJobConfirm"), { danger: true })) return;
-          await apiRequest(`/api/jobs/${job.id}/${action}`, {}); await this.refresh();
-        }, button)); actions.append(button);
-      }
-      row.append(identity, state, cost, result, actions); body.append(row);
+      card.expiry.hidden = !Number.isFinite(expires) || expires - Date.now() >= 3600000 || ["succeeded", "cancelled", "failed"].includes(job.state);
+      card.expiry.textContent = card.expiry.hidden ? "" : t(expires < Date.now() ? "resultExpiredWarning" : "resultExpiring", { at: new Date(expires).toLocaleString(currentLocale()) });
+      card.review.hidden = job.state !== "needs_review"; card.review.textContent = t("reviewAction");
+      card.regenerate.hidden = !["succeeded", "failed", "cancelled", "result_expired"].includes(job.state); card.regenerate.textContent = t("regenerateOne");
+      card.retry.hidden = !canRetryJob(job); card.retry.textContent = t("retry");
+      card.cancel.hidden = !canCancelJob(job); card.cancel.textContent = t(job.state === "queued" ? "cancel" : "requestCancel");
     }
     document.querySelector("#jobsPrevious").disabled = this.jobPage === 0;
     document.querySelector("#jobsNext").disabled = !this.nextJobCursor;
@@ -423,7 +465,17 @@ class QueueView {
     await this.refresh(); this.message(t("regenerationQueued"));
   }
 
+  async retryJob(job) {
+    if (!job || !canRetryJob(job)) return;
+    const estimate = await apiRequest(`/api/jobs/${job.id}/regenerate/estimate`);
+    if (!await confirmAction(t("confirmRetry", { prompt: job.prompt, cost: formatCost(estimate.cost) }), { danger: true })) return;
+    await apiRequest(`/api/jobs/${job.id}/retry`, { confirmed: true });
+    await this.refresh();
+  }
+
   openReview(job) {
+    if (!job) return;
+    this.reviewPreviousFocus = document.activeElement;
     this.reviewId = job.id;
     document.querySelector("#reviewJob").textContent = `${laneName(job)} · ${job.model}\n${job.prompt}\n${job.id}`;
     document.querySelector("#reviewRemoteId").value = "";
@@ -433,6 +485,7 @@ class QueueView {
     note.hidden = !model?.manualRecoveryNoteKey;
     note.textContent = model?.manualRecoveryNoteKey ? t(model.manualRecoveryNoteKey) : "";
     document.querySelector("#reviewDialog").showModal();
+    document.querySelector("#closeReview").focus();
   }
 
   async resolveReview(action) {
@@ -450,6 +503,7 @@ class QueueView {
       await apiRequest(`/api/jobs/${this.reviewId}/resolve`, payload);
       document.querySelector("#reviewDialog").close();
       await this.refresh();
+      if (!document.activeElement?.isConnected || document.activeElement.hidden) document.querySelector("#refreshQueueButton").focus();
     } catch (error) { document.querySelector("#reviewMessage").textContent = error.message; }
     finally { buttons.forEach((button) => { button.disabled = false; }); }
   }

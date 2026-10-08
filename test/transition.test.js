@@ -46,7 +46,7 @@ test("persistent compatible queue records every create, streams exact bytes and 
   assert.equal(mock.stats.accepted.length, before, "restart cannot recreate paid jobs");
   assert.equal(app.clearHistory().count, 3);
   assert.equal(app.store.jobs.size, 0);
-  assert.ok(!fs.readFileSync(path.join(directory, "jobs.snapshot.json"), "utf8").includes("test-one"));
+  assert.ok(!fs.readFileSync(path.join(directory, "jobs.snapshot.ndjson"), "utf8").includes("test-one"));
   assert.equal(fs.readFileSync(path.join(directory, "jobs.ndjson"), "utf8"), "");
   assert.equal(fs.readdirSync(payload.outputDir).length, 3, "history cleanup preserves videos");
 });

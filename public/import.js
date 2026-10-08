@@ -2,6 +2,13 @@
 (function (root) {
   "use strict";
   function failure(code, values = {}) { return Object.assign(new Error(code), { code, values }); }
+  function decodeCSV(bytes) {
+    try {
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      if (text.includes("\0")) throw new Error("Unsupported encoding");
+      return text;
+    } catch { throw failure("csvEncoding"); }
+  }
   function parseCSV(source) {
     const text = String(source).replace(/^\uFEFF/, "");
     const records = []; let record = [], field = "", quoted = false, closed = false;
@@ -79,7 +86,7 @@
     const invalid = row.errors?.some((error) => error.code === "csvBoolean" && error.values?.name === "audio");
     return { values: [...(invalid ? ["__invalid__"] : []), "", "true", "false"], selected: invalid ? "__invalid__" : row.params.audio === undefined ? "" : String(row.params.audio) };
   }
-  const api = { parseCSV, renderTemplate, rowsFromCSV, findImageFile, imageVariables, promptErrors, audioChoices };
+  const api = { decodeCSV, parseCSV, renderTemplate, rowsFromCSV, findImageFile, imageVariables, promptErrors, audioChoices };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.BatchImport = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);

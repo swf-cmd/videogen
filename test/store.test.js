@@ -37,7 +37,7 @@ test("job log and batch records replay with private permissions and immutable da
   original.params.durationSeconds = 99;
   assert.equal(saved.params.durationSeconds, 5);
   assert.equal(Object.isFrozen(saved.params), true);
-  assert.equal(saved.prompt, "never store [REDACTED]");
+  assert.equal(saved.prompt, "never store test-store-secret-8877");
   const batch = store.updateBatch("batch-a", { state: "paused", budget: { amount: 4, currency: "USD" } });
   assert.equal(batch.state, "paused");
   store.close();
@@ -45,8 +45,8 @@ test("job log and batch records replay with private permissions and immutable da
   assert.deepEqual(store.get("job-a"), saved);
   assert.deepEqual(store.batches.get("batch-a"), batch);
   assert.equal(store.seq, 2);
-  assert.equal(fs.readFileSync(path.join(dir, "jobs.ndjson"), "utf8").includes("test-store-secret-8877"), false);
-  assert.equal(JSON.stringify(events).includes("test-store-secret-8877"), false);
+  assert.equal(fs.readFileSync(path.join(dir, "jobs.ndjson"), "utf8").includes("test-store-secret-8877"), true);
+  assert.equal(JSON.stringify(events).includes("test-store-secret-8877"), true);
   if (process.platform !== "win32") {
     assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
     assert.equal(fs.statSync(path.join(dir, "jobs.ndjson")).mode & 0o777, 0o600);
@@ -394,4 +394,139 @@ test("compaction disk failures at snapshot sync, directory sync and truncation f
     assert.throws(() => submit(store, "preserved"), { code: "storeClosed" }); store.close();
     const recovered = new JobStore(dir); assert.equal(recovered.get("preserved").state, "queued"); recovered.close();
   }
+});
+
+test('automatic compaction keeps concurrent appends and interns model configuration across restart', async t => {
+  const dir = directory(t);
+  let store = new JobStore(dir, { compactEvents: 2 });
+  const model = { id: 'shared', capabilities: { durations: [5] }, sources: ['source'] };
+  store.add(job('one', { modelConfig: model }));
+  store.add(job('two', { modelConfig: structuredClone(model) }));
+  assert.equal(store.get('one').modelConfig, store.get('two').modelConfig);
+  const compacting = store.compactAsync();
+  store.add(job('during', { modelConfig: model }));
+  store.update('one', { progress: 7 });
+  await compacting;
+  const log = fs.readFileSync(path.join(dir, 'jobs.ndjson'), 'utf8');
+  assert.doesNotMatch(log, /"jobId":"two"/);
+  assert.match(log, /"jobId":"during"/);
+  store.close();
+  store = new JobStore(dir);
+  t.after(() => store.close());
+  assert.equal(store.jobs.size, 3);
+  assert.equal(store.get('one').progress, 7);
+  assert.equal(store.get('during').modelConfig, store.get('one').modelConfig);
+  store.add(job('later', { modelConfig: model }));
+  await store.compactAsync();
+  store.close();
+  store = new JobStore(dir);
+  assert.equal(store.jobs.size, 4);
+});
+
+test('bulk append yields to requests and threshold compacts without clearing history', async t => {
+  const store = new JobStore(directory(t), { compactEvents: 2 });
+  t.after(() => store.close());
+  let responsive = false;
+  setImmediate(() => { responsive = true; });
+  await store.addManyAsync(Array.from({ length: 512 }, (_, i) => job(`yield-${i}`, { prompt: '日本語🦊' })));
+  assert.equal(responsive, true);
+  await new Promise(resolve => setTimeout(resolve, 150));
+  if (store.compacting) await store.compacting;
+  assert.equal(store.jobs.size, 512);
+  assert.ok(fs.existsSync(path.join(store.directory, 'jobs.snapshot.ndjson')));
+});
+
+test('streamed journal reads split UTF-8 and truncates torn final records', t => {
+  const dir = directory(t);
+  let store = new JobStore(dir);
+  const prompt = '日'.repeat(30000) + '🦊';
+  store.add(job('unicode', { prompt })); store.close();
+  fs.appendFileSync(path.join(dir, 'jobs.ndjson'), Buffer.from([0xe6, 0x97]));
+  store = new JobStore(dir); t.after(() => store.close());
+  assert.equal(store.get('unicode').prompt, prompt);
+});
+
+test('a closing compactor cannot overwrite the next instance snapshot through a shared temporary inode', async t => {
+  const dir = directory(t);
+  const old = new JobStore(dir);
+  old.add(job('old-job'));
+  const open = fs.promises.open;
+  let entered, release;
+  const writing = new Promise(resolve => { entered = resolve; });
+  const barrier = new Promise(resolve => { release = resolve; });
+  let intercept = true;
+  fs.promises.open = async (...args) => {
+    const handle = await open(...args);
+    if (intercept && String(args[0]).includes('jobs.snapshot.ndjson.') && String(args[0]).endsWith('.tmp')) {
+      intercept = false;
+      const writeFile = handle.writeFile.bind(handle);
+      handle.writeFile = async data => { entered(); await barrier; return writeFile(data); };
+    }
+    return handle;
+  };
+  let current;
+  try {
+    const pending = old.compactAsync();
+    await writing;
+    old.close();
+    current = new JobStore(dir);
+    current.add(job('new-job'));
+    await current.compactAsync();
+    release(); await pending;
+    current.close();
+    current = new JobStore(dir);
+    assert.deepEqual([...current.jobs.keys()], ['old-job', 'new-job']);
+  } finally { release(); fs.promises.open = open; old.close(); current?.close(); }
+});
+
+test('clearing history during background compaction fsyncs deletion records before success', async t => {
+  const store = new JobStore(directory(t)); t.after(() => store.close());
+  store.add(job('delete-me')); store.update('delete-me', { state: 'cancelled' });
+  const pending = store.compactAsync();
+  let flushed = false;
+  const original = store.flush.bind(store);
+  store.flush = () => { flushed = true; return original(); };
+  assert.equal(store.clearHistory(), 1);
+  assert.equal(flushed, true);
+  await pending;
+  assert.equal(store.jobs.size, 0);
+});
+
+test('restart pauses an interrupted partial enqueue with its actual persisted count', t => {
+  const dir = directory(t);
+  let store = new JobStore(dir);
+  store.updateBatch('batch-a', { state: 'preparing', total: 50000 });
+  store.add(job('only-saved-job')); store.close();
+  store = new JobStore(dir); t.after(() => store.close());
+  assert.equal(store.batches.get('batch-a').state, 'paused');
+  assert.equal(store.batches.get('batch-a').pauseReason, 'interrupted_enqueue');
+  assert.equal(store.batches.get('batch-a').total, 1);
+});
+
+test('a deleted pagination cursor still advances after restart', t => {
+  const dir = directory(t);
+  let store = new JobStore(dir);
+  store.addMany([job('first'), job('second'), job('third')]);
+  const cursor = store.list({ limit: 1 }).nextCursor;
+  store.update('first', { state: 'cancelled' }); store.clearHistory(); store.close();
+  store = new JobStore(dir); t.after(() => store.close());
+  assert.deepEqual(store.list({ cursor }).jobs.map(job => job.id), ['second', 'third']);
+});
+
+test('a complete record with corrupt UTF-8 fails closed without extending the journal', t => {
+  const dir = directory(t), log = path.join(dir, 'jobs.ndjson');
+  const store = new JobStore(dir); store.close();
+  fs.writeFileSync(log, Buffer.concat([Buffer.from('{"prompt":"'), Buffer.from([0xff]), Buffer.from('"}\n')]));
+  const before = fs.readFileSync(log);
+  assert.throws(() => new JobStore(dir), { code: 'invalidStore' });
+  assert.deepEqual(fs.readFileSync(log), before);
+});
+
+test('copying a job or updating it cannot override store-owned pagination order', t => {
+  const store = new JobStore(directory(t)); t.after(() => store.close());
+  const old = store.add(job('source'));
+  store.add({ ...old, id: 'copy' });
+  store.update('copy', { queueOrder: old.queueOrder });
+  const first = store.list({ limit: 1 });
+  assert.deepEqual(store.list({ cursor: first.nextCursor }).jobs.map(job => job.id), ['copy']);
 });

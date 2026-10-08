@@ -22,7 +22,7 @@
     "openrouter"
   ],
   "scripts": {
-    "start": "node --no-use-env-proxy server.js",
+    "start": "node scripts/check-runtime.cjs && node --no-use-env-proxy server.js",
     "test": "node --test test/*.test.js",
     "test:e2e": "node --test acceptance/crash-queue.cjs",
     "package:portable": "python3 scripts/package-portable.py",

@@ -22,6 +22,7 @@ function fixture(t, overrides = {}, options = {}) {
   const store = new JobStore(directory);
   const keys = new KeyStore();
   const calls = { create: [], poll: [], download: [] };
+  const logs = [];
   const forever = deferred();
   const adapter = {
     validateKey: () => null,
@@ -33,7 +34,7 @@ function fixture(t, overrides = {}, options = {}) {
     ...overrides,
   };
   const settings = { lanes: {} };
-  const scheduler = new Scheduler({ store, keys, adapters: { mock: adapter }, context: (job) => ({ lane: normalizeLane(job), key: keys.get(job) }), settings, onSettings: () => {}, now: clock.now, random: () => 0.5, setTimer: clock.setTimer, clearTimer: clock.clearTimer, writeOutput: async (response, targetPath, { onPublished }) => { const output = { path: targetPath, bytes: 12, sha256: "a".repeat(64) }; onPublished(output); return output; }, ...options });
+  const scheduler = new Scheduler({ store, keys, adapters: { mock: adapter }, context: (job) => ({ lane: normalizeLane(job), key: keys.get(job) }), settings, onSettings: () => {}, now: clock.now, random: () => 0.5, setTimer: clock.setTimer, clearTimer: clock.clearTimer, logger: { warn: (line) => logs.push(JSON.parse(line)), error: (line) => logs.push(JSON.parse(line)) }, writeOutput: async (response, targetPath, { onPublished }) => { const output = { path: targetPath, bytes: 12, sha256: "a".repeat(64) }; onPublished(output); return output; }, ...options });
   function add(id, laneName = "a", patch = {}) {
     const lane = normalizeLane({ provider: "mock", region: laneName, baseUrl: `https://${laneName}.example/v1` });
     const batchId = patch.batchId || `batch-${laneName}`;
@@ -42,7 +43,7 @@ function fixture(t, overrides = {}, options = {}) {
     return store.add(job);
   }
   t.after(async () => { await scheduler.close(0); store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
-  return { directory, clock, store, keys, adapter, scheduler, calls, add, forever };
+  return { directory, clock, store, keys, adapter, scheduler, calls, logs, add, forever };
 }
 const success = { status: "succeeded", result: { url: "https://cdn.example/output.mp4", needsAuth: false } };
 
@@ -247,7 +248,7 @@ test("a failed batch flush never dispatches a paid create even if the disk immed
   fs.fsyncSync = (fd) => { if (fd === f.store.fd && failures++ === 0) throw Object.assign(new Error("one-shot fsync failure"), { code: "EIO" }); return sync(fd); };
   try { assert.throws(() => f.store.addMany([{ ...first, id: "batch-one" }, { ...first, id: "batch-two" }]), { code: "EIO" }); }
   finally { fs.fsyncSync = sync; }
-  f.scheduler.setLane(first.laneId, { action: "resume" }); await settle();
+  assert.throws(() => f.scheduler.setLane(first.laneId, { action: "resume" }), { code: "storeClosed", status: 503 }); await settle();
   assert.equal(f.calls.create.length, 0); assert.equal(f.scheduler.laneList()[0].reason, "storeClosed");
 });
 
@@ -258,4 +259,178 @@ test("a failed settings resume stops the scheduler so later events cannot activa
   fail = true; assert.throws(() => f.scheduler.setLane(job.laneId, { action: "resume" }), { code: "ENOSPC" });
   f.add("two"); await settle(); await f.clock.advance(60000);
   assert.equal(f.calls.create.length, 0); assert.equal(f.scheduler.laneList()[0].state, "paused"); assert.equal(f.scheduler.laneList()[0].reason, "storeWriteFailed");
+});
+
+test("a circuit cooldown automatically permits one probe before reopening submissions", async (t) => {
+  const probe = deferred();
+  const f = fixture(t, { async create(ctx, job) {
+    f.calls.create.push(job.id);
+    if (f.calls.create.length <= 3) throw Object.assign(new Error("upstream unavailable"), { category: "transient", accepted: false, retryAfterMs: 1 });
+    if (f.calls.create.length === 4) await probe.promise;
+    return { remoteId: `paid-${job.id}` };
+  } }, { circuitCooldownMs: 10000 });
+  for (let i = 0; i < 5; i += 1) f.add(`job-${i}`, "a", { modelConfig: { concurrencyDefault: 3 } });
+  f.scheduler.start(); await settle();
+  assert.equal(f.calls.create.length, 3);
+  assert.equal(f.scheduler.laneList()[0].state, "cooldown");
+  assert.equal(f.scheduler.laneList()[0].reason, "circuit_open");
+  assert.equal(f.scheduler.ensureLane(f.scheduler.laneList()[0].id).paused, false);
+  await f.clock.advance(9999); assert.equal(f.calls.create.length, 3);
+  await f.clock.advance(1); assert.equal(f.calls.create.length, 4, "only one create probes recovery");
+  f.scheduler.kick(); await settle(); assert.equal(f.calls.create.length, 4);
+  probe.resolve(); await settle();
+  assert.equal(f.calls.create.length, 6);
+  assert.equal(f.scheduler.laneList()[0].state, "active");
+  assert.equal(f.scheduler.laneList()[0].reason, null);
+});
+
+test("a minute offline recovers automatically and never abandons a paid render", async (t) => {
+  let offline = true;
+  const f = fixture(t, { async poll(ctx, job) {
+    f.calls.poll.push(job.id);
+    if (offline) throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ENETUNREACH" } });
+    return success;
+  } });
+  f.add("paid", "a", { state: "running", remote: { id: "already-paid" }, attempts: { create: 1, poll: 0, download: 0 } });
+  f.add("waiting"); f.scheduler.start(); await settle();
+  for (let i = 0; i < 12; i += 1) await f.clock.advance(5000);
+  assert.equal(f.store.get("paid").state, "running");
+  assert.equal(f.store.get("paid").error.category, "local_offline");
+  assert.equal(f.scheduler.ensureLane(f.scheduler.laneList()[0].id).errorCount, 0);
+  assert.equal(f.calls.create.length, 0);
+  offline = false; await f.clock.advance(33000);
+  assert.equal(f.store.get("paid").state, "succeeded");
+  assert.equal(f.store.get("waiting").state, "succeeded");
+  assert.deepEqual(f.calls.create, ["waiting"]);
+});
+
+test("quota, unavailable models, and manual pause allow paid polls and authenticated downloads", async (t) => {
+  for (const reason of ["quota", "model_unavailable", "manual_pause", "circuit_open"]) {
+    let complete = false;
+    const f = fixture(t, { async poll(ctx, job) { f.calls.poll.push(job.id); return complete ? { ...success, result: { ...success.result, needsAuth: true } } : { status: "running" }; } });
+    const paid = f.add("paid", "a", { state: "running", remote: { id: "already-paid" }, modelConfig: { concurrencyDefault: 2, pollIntervalSec: 0.01 } });
+    f.add("queued");
+    const lane = f.scheduler.ensureLane(paid);
+    if (reason === "circuit_open") { lane.reason = reason; lane.cooldownUntil = f.clock.now() + 60000; }
+    else { lane.paused = true; lane.reason = reason; }
+    f.scheduler.start(); await settle();
+    assert.deepEqual(f.calls.poll, ["paid"]);
+    complete = true; await f.clock.advance(10);
+    assert.equal(f.store.get("paid").state, "succeeded", reason);
+    if (reason !== "circuit_open") assert.equal(f.calls.create.length, 0, reason);
+    assert.ok(f.calls.download.includes("paid"), reason);
+  }
+});
+
+test("an actual 402 on a new create stops future charges while paid work completes", async (t) => {
+  let complete = false;
+  const f = fixture(t, {
+    async create(ctx, job) { f.calls.create.push(job.id); throw Object.assign(new Error("Balance is below minimum"), { category: "quota", status: 402, code: "InsufficientBalance" }); },
+    async poll() { return complete ? { ...success, result: { ...success.result, needsAuth: true } } : { status: "running" }; },
+  });
+  f.add("paid", "a", { state: "running", remote: { id: "already-paid" }, modelConfig: { concurrencyDefault: 2, pollIntervalSec: 0.01 } });
+  f.add("unaccepted"); f.add("waiting"); f.scheduler.start(); await settle();
+  assert.equal(f.scheduler.laneList()[0].reason, "quota");
+  complete = true; await f.clock.advance(10);
+  assert.equal(f.store.get("paid").state, "succeeded");
+  assert.deepEqual(f.calls.create, ["unaccepted"]);
+  assert.equal(f.store.get("unaccepted").estimatedCharges, 0);
+});
+
+test("disk failures retain downloadable results and do not trip the provider circuit", async (t) => {
+  let writes = 0;
+  const f = fixture(t, { async poll() { return success; } }, { writeOutput: async (response, targetPath, { onPublished }) => {
+    writes += 1;
+    if (writes <= 4) throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+    onPublished({ path: targetPath, bytes: 1, sha256: "a".repeat(64) });
+  } });
+  f.add("one"); f.scheduler.start(); await settle();
+  for (const delay of [1100, 2200, 4400]) await f.clock.advance(delay);
+  assert.equal(writes, 4);
+  assert.equal(f.store.get("one").state, "downloading");
+  assert.equal(f.store.get("one").error.category, "output_write_failed");
+  assert.equal(f.store.get("one").error.providerCode, "ENOSPC");
+  assert.equal(f.scheduler.laneList()[0].state, "active");
+  await f.clock.advance(8800);
+  assert.equal(f.store.get("one").state, "succeeded");
+  assert.deepEqual(f.calls.create, ["one"]);
+});
+
+test("provider codes and messages survive both thrown errors and terminal poll errors, with secret redaction", async (t) => {
+  const secret = "scheduler-private-api-key-value";
+  for (const phase of ["create", "poll"]) {
+    const f = fixture(t, {
+      async create() { if (phase === "create") throw Object.assign(new Error(`bad duration; key ${secret}`), { code: "UnsupportedDuration", category: "invalid_request", status: 422 }); return { remoteId: "paid" }; },
+      async poll() { return { status: "failed", error: { category: "invalid_request", code: "UnsupportedDuration", message: `bad duration; key ${secret}` } }; },
+    });
+    const job = f.add(phase); f.keys.set(job, secret, f.adapter); f.scheduler.start(); await settle();
+    const error = f.store.get(phase).error;
+    assert.equal(error.code, "invalid_request");
+    assert.equal(error.providerCode, "UnsupportedDuration");
+    assert.match(error.providerMessage, /bad duration; key \[REDACTED\]/);
+    assert.match(error.message, /UnsupportedDuration/);
+    assert.equal(fs.readFileSync(path.join(f.directory, "jobs.ndjson"), "utf8").includes(secret), false);
+  }
+});
+
+test("fatal programming errors log the real exception and reject new work as unhealthy", async (t) => {
+  const f = fixture(t); f.add("waiting");
+  f.scheduler.fatal(Object.assign(new TypeError("unexpected scheduler invariant"), { code: "badInvariant" }));
+  assert.equal(f.scheduler.health().healthy, false);
+  assert.equal(f.scheduler.health().state, "failed");
+  assert.equal(f.scheduler.fatalError.code, "schedulerFailed");
+  assert.equal(f.logs[0].name, "TypeError");
+  assert.match(f.logs[0].stack, /unexpected scheduler invariant/);
+  assert.throws(() => f.scheduler.assertHealthy(), { code: "schedulerFailed", status: 503 });
+  f.scheduler.start(); await settle(); assert.equal(f.calls.create.length, 0);
+});
+
+test("background store failures stop the scheduler immediately and make health unavailable", async (t) => {
+  const f = fixture(t); f.add("waiting");
+  f.store.failed = true;
+  f.store.emit("failure", Object.assign(new Error("background compaction failed"), { code: "ENOSPC" }));
+  assert.equal(f.scheduler.health().healthy, false);
+  assert.equal(f.scheduler.fatalError.code, "storeWriteFailed");
+  assert.equal(f.logs[0].providerMessage, "background compaction failed");
+  assert.throws(() => f.scheduler.assertHealthy(), { code: "storeWriteFailed", status: 503 });
+});
+
+test("an HTTP create failure with a transport-like provider code remains ambiguous", async (t) => {
+  const f = fixture(t, { async create() { throw Object.assign(new Error("provider internal DNS failed"), { status: 500, code: "ENOTFOUND", category: "unknown_outcome" }); } });
+  f.add("maybe-paid"); f.scheduler.start(); await settle();
+  assert.equal(f.store.get("maybe-paid").state, "needs_review");
+  assert.equal(f.store.get("maybe-paid").error.definitelyNotAccepted, false);
+});
+
+test("batch and job actions cannot activate or mutate a batch while its rows are still being enqueued", async (t) => {
+  const f = fixture(t); f.add("first-row");
+  f.store.updateBatch("batch-a", { state: "preparing" });
+  f.scheduler.start(); await settle();
+  for (const action of ["pause", "resume", "cancel"]) await assert.rejects(f.scheduler.batchAction("batch-a", action), { code: "batchPreparing" });
+  for (const action of ["retry", "resolve", "cancel"]) await assert.rejects(f.scheduler.jobAction("first-row", action, { action: "resubmit" }), { code: "batchPreparing" });
+  assert.equal(f.store.batches.get("batch-a").state, "preparing");
+  assert.equal(f.store.get("first-row").state, "queued");
+  assert.equal(f.calls.create.length, 0);
+  f.store.updateBatch("batch-a", { state: "active" }); await settle();
+  assert.deepEqual(f.calls.create, ["first-row"]);
+});
+
+test("fatal health blocks retry and resume authorizations while allowing review abandonment", async (t) => {
+  const f = fixture(t);
+  const retry = f.add("retry");
+  f.store.update(retry.id, { state: "failed", error: { definitelyNotAccepted: true } });
+  f.add("review");
+  f.store.update("review", { state: "submitting", attempts: { create: 1, poll: 0, download: 0 } });
+  f.store.update("review", { state: "needs_review" });
+  f.scheduler.fatal(new Error("unexpected invariant"));
+  for (const action of [
+    () => f.scheduler.jobAction("retry", "retry"),
+    () => f.scheduler.jobAction("review", "resolve", { action: "resubmit" }),
+    () => f.scheduler.batchAction("batch-a", "resume"),
+  ]) await assert.rejects(action(), { code: "schedulerFailed", status: 503 });
+  assert.throws(() => f.scheduler.setLane(f.scheduler.laneList()[0].id, { action: "resume" }), { code: "schedulerFailed", status: 503 });
+  assert.equal(f.store.get("retry").state, "failed");
+  assert.equal(f.store.get("review").state, "needs_review");
+  await f.scheduler.jobAction("review", "resolve", { action: "abandon" });
+  assert.equal(f.store.get("review").state, "cancelled");
 });

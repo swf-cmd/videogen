@@ -2,7 +2,7 @@
 
 ## Current and target system
 
-Version 2.0.0 is a local, zero-dependency, multi-provider render queue. The browser
+Version 2.1.0 is a local, zero-dependency, multi-provider render queue. The browser
 observes work owned by the service process. It replaces v1.0.2's monolithic
 OpenAI Videos/Batch server, where jobs lived only inside request handlers.
 
@@ -39,7 +39,7 @@ Lane states: `active`, `cooldown`, `needs_key`, `paused`.
 
 ## Durability and security
 
-Use a versioned, monotonic NDJSON event log and atomic snapshot. Submitting and
+Use a versioned, monotonic NDJSON event log and atomic, streaming NDJSON snapshot. Submitting and
 remote-ID events are durability barriers. A process lock protects all ports
 sharing a data directory. Assets are content-addressed; keys remain only in
 memory, scoped to provider + region + base URL. Persist only explicit task fields.
@@ -49,11 +49,10 @@ SSE is incremental with bounded replay; list endpoints are paginated.
 
 ## Delivery
 
-M0 establishes regression tests. M1 moves unchanged helpers. M2 adds adapters,
-catalog and a durable transitional sequential executor. M3 ships v1.1.0.
-M4 adds recovery, assets and compaction; M5 adds scheduling and crash acceptance;
-M6 replaces the UI; M7 adds documented provider contracts; M8 validates Node,
-proxy behavior and v2.0.0. Stage 2 is outside this implementation.
+The current release includes per-shot first and last frames, CSV/template batch
+imports, gallery Keep/Reject decisions, confirmed regeneration, and Windows/macOS
+portable bundles. Offline unit, crash-acceptance and extracted-launcher tests
+cover the durable queue and release artifacts.
 
 ## Decisions
 
@@ -62,11 +61,15 @@ proxy behavior and v2.0.0. Stage 2 is outside this implementation.
 - I7 refers to accepted or ambiguous creates. I4 explicitly permits retry after
   definite rejection (e.g. 429); HTTP attempts and accepted remote jobs are
   counted separately in acceptance tests.
-- Never expose raw upstream response bodies. Preserve useful classified errors
-  while redacting every known key, sensitive header and proxy credential.
+- Never expose raw upstream response bodies. Preserve classified provider errors
+  while redacting validated long keys, sensitive headers and proxy credentials.
+  Invalid keys are never registered as secrets; short local placeholders are not
+  used for substring redaction. User prompts, paths, lane URLs and local IDs are
+  persisted unchanged.
 - Phase 0 and phase 1 use the same data directory and event schema.
-- No telemetry, update checks, package dependencies, tags, Releases or repository
-  settings changes. All implementation commits target main.
+- No telemetry, automatic update checks or runtime package dependencies. Release
+  bundles are built and smoke-tested on their target operating systems; tagged
+  builds retain those exact artifacts for a draft GitHub Release.
 
 - Output publication uses an atomic exclusive hard link from the fsynced partial,
   followed by unlinking the partial. Node's portable rename replaces existing
@@ -77,7 +80,7 @@ proxy behavior and v2.0.0. Stage 2 is outside this implementation.
   the former 30-second cap. Pure relocation was committed before this change.
 - Custom compatible endpoints select JSON or multipart before create; vLLM-Omni
   documents multipart even for text-only requests. No fallback encoding retry.
-- Store records and nested fields are frozen after redaction. Reserved event
+- Store records and nested fields are frozen after field allowlisting. Reserved event
   fields cannot be overridden by patches. Every entering-submitting record must
   increment the create counter exactly once, and submitting/remote-ID writes
   force fsync even when the caller requests an unsynced append. Queued batch
@@ -92,12 +95,23 @@ proxy behavior and v2.0.0. Stage 2 is outside this implementation.
   while eliminating the empty-lock crash window. Stale-lock takeover claims an
   immutable generation before deletion. Dead reclaimers have successor claims;
   contenders never race to unlink a shared claim. Release checks ownership.
-  Malformed or externally altered owner metadata fails closed.
-- Snapshots retain jobs and batch controls in the existing schema. The snapshot
-  is fsynced, atomically renamed, and its directory fsynced before log truncation.
+  Malformed or externally altered owner metadata fails closed. Data directories
+  must support hard links; unsupported filesystems fail with an actionable startup
+  message instead of weakening exclusive locking.
+- Journals compact automatically after bounded growth. Version 2 snapshots use
+  `jobs.snapshot.ndjson`, retaining jobs and batch controls without building one
+  giant JSON string. Immutable model configurations are interned in memory and
+  represented once by references in the journal and streaming snapshot. Startup
+  streams journal and version 2 snapshot records; legacy `jobs.snapshot.json`
+  snapshots remain compatible but require the old whole-file parse until the
+  next compaction writes version 2. The snapshot is fsynced, atomically
+  renamed, and its directory fsynced before log truncation.
   Tests kill real processes at each compaction boundary. An incomplete final log
   line is truncated and fsynced before new appends; complete corrupt records or
-  sequence gaps stop startup instead of silently discarding work.
+  sequence gaps stop startup instead of silently discarding work. This does not
+  reconstruct strings damaged by older substring redaction; existing corrupted
+  prompts, endpoints or IDs require a known-good backup or explicit repair after
+  checking provider records. Paid work must not be silently requeued.
 - Assets are validated and fsynced in unique private partials before publication.
   Existing content is checked by digest, MIME and dimensions. A corrupt regular
   file is repaired only from known incoming bytes with its expected hash; reads
@@ -120,10 +134,12 @@ proxy behavior and v2.0.0. Stage 2 is outside this implementation.
   a fully occupied uncertain lane needs human reconciliation before more work
   can dispatch. Downloads use a separate global pool of three. Pausing a batch
   or lane stops new creates but continues tracking already paid work.
-- Rate-limit responses cool the whole lane and honor Retry-After. Poll and
-  download failures retry only their own phase with jittered backoff. Repeated
-  transient failures open a circuit requiring explicit resume. Missing keys
-  block authenticated work while unauthenticated result downloads may finish.
+- Rate-limit responses honor Retry-After. Poll and download failures retry only
+  their own phase with jittered backoff. Repeated provider failures stop new
+  submissions temporarily, then allow a probe after cooldown. Local DNS and
+  connection failures retry as offline conditions. Circuits, depleted quota and
+  unavailable models never stop tracking or downloading already paid work.
+  Missing keys block authenticated work while unauthenticated downloads may finish.
 - Budgets reserve estimated cost before dispatch and include uncertain charges.
   Different currencies are never combined. A batch pauses before its next
   reservation would exceed the cap; this is an estimate, not a billing limit.
@@ -143,12 +159,12 @@ proxy behavior and v2.0.0. Stage 2 is outside this implementation.
   payloads, cleared from input fields and never included in native form fields.
   HTML confirmation dialogs preserve cost and duplicate-charge warnings without
   relying on browser-native modal behavior. Preview scripts never call the API.
-- Gemini uses blocking URI delivery because Omni background support was not
-  established. Its returned Files metadata URL is persisted with the interaction
-  ID in the same fsync barrier; subsequent requests poll Files, avoiding the
-  interaction GET's inline video response. Manual recovery requires a Files
-  resource, not an interaction ID. Upload references are cached only in memory.
-  An interrupted create remains uncertain and can have incurred a charge.
+- Gemini creates stored background interactions with URI video delivery. The
+  interaction ID and any returned Files metadata URL are persisted together.
+  Polling uses a bounded interaction SSE replay until a Files resource is known,
+  then polls Files; it does not buffer inline base64 video. Manual recovery accepts
+  validated interaction IDs or Files resources. Upload references are cached only
+  in memory. An interrupted create remains uncertain and can have incurred a charge.
 - DashScope Wan 3.0 uses the verified regional workspace-specific endpoints.
   Placeholder and mismatched-region hosts are rejected before queuing. Its
   documented RPS ceiling is not converted into an equivalent bursty RPM bucket;
@@ -164,9 +180,12 @@ proxy behavior and v2.0.0. Stage 2 is outside this implementation.
   while already accepted requests remain tracked through download.
 - Native environment proxy support is enabled by the npm start command and
   macOS launcher. Node 22.21 initializes its proxy agents even before preloads.
-  The npm entry therefore starts with `--no-use-env-proxy`, validates settings
-  without active proxy agents, then starts the service with `--use-env-proxy`
-  and forwards termination signals and exit status. The launcher validates in
+  The npm entry checks the Node version before using `--no-use-env-proxy`, validates
+  settings without active proxy agents, then starts the service with
+  `--use-env-proxy`. Supervisors request graceful shutdown through IPC on Ctrl+C,
+  SIGTERM and SIGHUP; loss of the parent IPC channel also shuts the service down.
+  Windows does not rely on `child.kill()` for graceful termination. The application
+  has 15 seconds to drain, with a 20-second supervisor termination fallback. The launcher validates in
   its unproxied helper before spawning the same service. Bootstrap validates effective
   proxy URLs, normalizes uppercase/lowercase settings and appends loopback
   bypasses. This ordering also prevents Node's invalid-proxy errors from echoing
@@ -187,7 +206,8 @@ routes are removed.
 | `/api/keys` | GET lane presence only; POST `{lane,key}` sets an in-memory key; DELETE `/api/keys/:laneId` forgets it. |
 | `/api/estimate` | POST computes count, currency-specific cost and approximate ETA without creating records. |
 | `/api/batches` | POST enqueues JSON or multipart with one `input_reference`; GET paginates; GET `/:id` reads summary; POST `/:id/pause`, `/resume`, `/cancel` controls work. |
-| `/api/jobs` | GET paginates and filters; GET `/:id` reads details; POST `/:id/cancel`, `/retry`, `/resolve` applies guarded actions. |
+| `/api/jobs` | GET paginates and filters; GET `/:id` reads details; POST `/:id/cancel`, `/retry`, `/resolve` applies guarded actions; GET `/:id/regenerate/estimate` and POST `/:id/regenerate` estimate and confirm a new paid take; POST `/:id/curate` stores Keep/Reject decisions. |
+| `/api/gallery/summary` | GET summarizes local gallery results and curation. |
 | `/api/lanes` | GET reads state; POST `/:id` sets concurrency or pause/resume. |
 | `/api/events` | GET incremental SSE with sequence replay, resync and heartbeat. |
 | `/api/history/clear` | POST removes finished records and unused assets, preserving unresolved/active jobs and outputs. |
@@ -199,3 +219,7 @@ create, poll and download, disconnects SSE, restores keys and verifies original
 file bytes. Separate process tests cover the two create durability barriers and
 every snapshot compaction boundary. These are offline contracts, not a claim of
 paid production validation against each provider.
+
+### Existing damaged records
+
+The redaction fix preserves new user data. Text already replaced with `[REDACTED]` by an older version cannot be reconstructed automatically. Restore affected prompts/endpoints from a known-good backup before reusing them; never blindly resubmit an ambiguous paid create. Version 1 JSON snapshots remain readable and are removed only after a durable version 2 snapshot replaces them.

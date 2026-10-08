@@ -169,5 +169,77 @@ test("HTML confirmations require an explicit click, preserve risk text and defau
   assert.equal(await fourth, false);
   const queue = fs.readFileSync(path.join(publicDir, "queue-view.js"), "utf8");
   assert.doesNotMatch(`${appSource}\n${queue}`, /window\.confirm\s*\(/);
-  assert.equal((`${appSource}\n${queue}`.match(/await confirmAction\(/g) || []).length, 7);
+  assert.equal((`${appSource}\n${queue}`.match(/await confirmAction\(/g) || []).length, 8);
+});
+
+test("budget values survive disabled controls and bind to the fresh estimate before confirmation", async () => {
+  const read = appSource.slice(appSource.indexOf("function readForm()"), appSource.indexOf("function validateSelection("));
+  const field = (value) => ({ value });
+  const payload = vm.runInNewContext(`${read}\nreadForm()`, {
+    selectedCapabilities: () => ({ audio: false, seed: false }), formLane: () => ({ provider: "mock", region: "local", baseUrl: "http://localhost/v1" }), activeLanguage: "en", isCustomModel: () => false,
+    modelInput: field("example"), secondsInput: field("5"), sizeInput: field("720p"), aspectRatioInput: field("16:9"), audioInput: { checked: false }, promptInput: field("A fox"), requestCountForEstimate: () => 1, outputDirInput: field("/tmp/output"), filenameInput: field("test"), budgetInput: { disabled: true, value: "12.5" }, lastEstimate: null,
+  });
+  assert.equal(payload.budget.amount, 12.5);
+  const generate = appSource.slice(appSource.indexOf("async function generateVideo("), appSource.indexOf("function applyTranslations()"));
+  for (const cost of [{ amount: 2, currency: "CNY" }, { amount: null, currency: "CNY" }]) {
+    const calls = [], messages = [], confirmations = [];
+    const context = { document: { activeElement: null }, busy: false, readForm: () => structuredClone(payload), setBusy() {}, clearTimeout() {}, estimateTimer: null, estimateRevision: 0, validateSelection() {}, validateInputReferenceSelection: async () => null, batchEditor: { setEstimates() {} }, updateSummary() {}, lastEstimate: null,
+      apiRequest: async (endpoint, value) => { calls.push({ endpoint, value }); return endpoint === "/api/estimate" ? { cost, count: 1, valid: true } : { id: "batch", count: 1 }; },
+      estimateText: () => ({ cost: "cost", eta: "eta" }), t: (key) => key, formatCost: (value) => `${value.amount} ${value.currency}`, formatInteger: String, confirmAction: async (text) => { confirmations.push(text); return true; }, apiKeyInput: { value: "" }, persistSettings() {}, formMessage: (text) => messages.push(text), queueView: { refresh: async () => {} },
+    };
+    await vm.runInNewContext(`${generate}\ngenerateVideo`, context)({ preventDefault() {} });
+    assert.equal(calls[0].value.summaryOnly, true);
+    if (cost.amount === null) { assert.equal(calls.length, 1); assert.deepEqual(confirmations, []); assert.deepEqual(messages, ["budgetUnknown"]); }
+    else { assert.equal(calls[1].value.budget.amount, 12.5); assert.equal(calls[1].value.budget.currency, "CNY"); assert.match(confirmations[0], /12.5 CNY/); }
+  }
+});
+
+test("queue updates preserve job controls, keyboard focus, expanded details and pending actions", async () => {
+  const document = { activeElement: null };
+  class Element {
+    constructor(tag) { this.tag = tag; this.children = []; this.dataset = {}; this.events = {}; this.hidden = false; this.disabled = false; this.isConnected = true; this.className = ""; }
+    set textContent(value) { this.text = String(value); this.children.forEach((child) => { child.parent = null; }); this.children = []; }
+    get textContent() { return this.text || ""; }
+    append(...elements) { for (const element of elements) this.insertBefore(element, null); }
+    insertBefore(element, before) { element.remove(); const index = before ? this.children.indexOf(before) : this.children.length; this.children.splice(index, 0, element); element.parent = this; }
+    remove() { if (this.parent) { const index = this.parent.children.indexOf(this); this.parent.children.splice(index, 1); this.parent = null; } }
+    querySelector(selector) { return this.children.find((child) => selector.startsWith(".") ? child.className.split(" ").includes(selector.slice(1)) : child.tag === selector) || this.children.map((child) => child.querySelector(selector)).find(Boolean) || null; }
+    setAttribute() {} addEventListener(event, callback) { this.events[event] = callback; } focus() { document.activeElement = this; }
+  }
+  const ids = Object.fromEntries(["jobsBody", "jobsPrevious", "jobsNext", "jobsPage", "jobsCount", "batchList", "batchPrevious", "batchNext", "batchPage"].map((id) => [`#${id}`, new Element("div")]));
+  document.querySelector = (id) => ids[id]; document.createElement = (tag) => new Element(tag);
+  const source = fs.readFileSync(path.join(publicDir, "queue-view.js"), "utf8");
+  const QueueView = vm.runInNewContext(`${source}\nQueueView`, { document, t: (key) => key, formatCost: () => "1 USD", canCancelJob: (job) => job.state === "running" && !job.cancelRequested, canRetryJob: () => false, currentLocale: () => "en", formatInteger: String });
+  const view = Object.create(QueueView.prototype); Object.assign(view, { jobs: new Map([["job", { id: "job", state: "running", prompt: "Scene", model: "demo", progress: 10 }]]), jobRows: new Map(), jobPage: 0, renderGallery() {} });
+  view.renderJobs();
+  const row = view.jobRows.get("job"), details = row.element.querySelector("details");
+  row.cancel.focus(); details.open = true;
+  let finish; const pending = view.run(() => new Promise((resolve) => { finish = resolve; }), row.cancel);
+  view.jobs.set("job", { ...view.jobs.get("job"), progress: 50 }); view.renderJobs();
+  assert.equal(view.jobRows.get("job"), row); assert.equal(ids["#jobsBody"].children[0], row.element);
+  assert.equal(document.activeElement, row.cancel); assert.equal(details.open, true); assert.equal(row.cancel.disabled, true); assert.equal(row.progress.value, 50);
+  finish(); await pending; assert.equal(row.cancel.disabled, false);
+  view.jobs.set("job", { ...view.jobs.get("job"), error: { code: "invalid_request", category: "invalid_request", message: "Old localized summary", providerCode: "BadSeed", providerMessage: "seed must be non-negative" } });
+  view.renderJobs();
+  assert.equal(row.error.textContent, "errorInvalidRequest · BadSeed · seed must be non-negative");
+  Object.assign(view, { batches: [{ id: "batch", state: "preparing", total: 50000, counts: { queued: 1000 } }], batchCards: new Map(), batchPage: 0, lanes: [], renderFilters() {} });
+  view.renderBatches();
+  const batch = view.batchCards.get("batch");
+  assert.equal(batch.status.textContent, "statusPreparing"); assert.equal(batch.toggle.disabled, true); assert.equal(batch.cancel.disabled, true);
+  view.batches[0] = { ...view.batches[0], state: "paused", pauseReason: "interrupted_enqueue", total: 1000 }; view.renderBatches();
+  assert.equal(view.batchCards.get("batch"), batch); assert.match(batch.status.textContent, /reasonInterruptedEnqueue/); assert.equal(batch.toggle.disabled, false);
+});
+
+test("browser image fitting and backend requests share dimensions including 4K portrait output", () => {
+  const dimensionsSource = fs.readFileSync(path.join(publicDir, "pixel-size.js"), "utf8");
+  const browser = vm.runInNewContext(`${dimensionsSource}\nVideoDimensions`);
+  const backend = require("../src/pixel-size");
+  const adapter = require("../src/providers/openai-compatible");
+  const selectionSource = appSource.slice(appSource.indexOf("function selectedImageSize("), appSource.indexOf("function estimateText("));
+  const selected = vm.runInNewContext(`${selectionSource}\nselectedImageSize`, { VideoDimensions: browser, sizeInput: { value: "4K" }, aspectRatioInput: { value: "16:9" } });
+  assert.equal(selected(), "3840x2160");
+  for (const [params, expected] of [[{ resolution: "4K", aspectRatio: "16:9" }, "3840x2160"], [{ resolution: "4k", aspectRatio: "9:16" }, "2160x3840"], [{ resolution: "4K", aspectRatio: "1:1" }, "2160x2160"], [{ resolution: "720P", aspectRatio: "4:3" }, "960x720"], [{ resolution: "1280x720" }, "1280x720"]]) {
+    assert.equal(browser.pixelSize(params), expected); assert.equal(backend.pixelSize(params), expected); assert.equal(adapter.pixelSize(params), expected); assert.equal(selected(params), expected);
+  }
+  for (const params of [{ resolution: "nonsense", aspectRatio: "16:9" }, { resolution: "4K", aspectRatio: "0:1" }, { resolution: "0x720" }]) { assert.equal(browser.pixelSize(params), ""); assert.throws(() => adapter.pixelSize(params), /invalidParameter/); }
 });
