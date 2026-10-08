@@ -19,6 +19,9 @@ Describe the problem briefly.
 - Provider and region:
 - Model:
 - Operation: create / poll / download / recovery
+- Job and lane states (no real IDs):
+- Did it follow browser refresh, service restart, or key re-entry?
+- Environment proxy enabled? Share only redacted settings:
 
 ## Steps to Reproduce
 
@@ -36,7 +39,7 @@ What happened instead?
 
 ## Logs or Screenshots
 
-Before posting, remove API keys, full local paths, private prompts, remote task IDs, and generated files that should not be public.
+Before posting, remove API keys, proxy usernames/passwords, full personal paths, private prompts, remote task IDs, signed result URLs and private media. Do not attach a real task data directory. Use synthetic examples; report possible credential exposure privately as described in SECURITY.md.
 
 ```text
 Paste redacted logs here.

@@ -2,10 +2,9 @@
 
 ## Current and target system
 
-The v1.0.2 server combines HTTP, OpenAI Videos/Batch, image validation,
-filesystem operations and rendering orchestration. Jobs exist only inside request
-handlers. The target is a local, zero-dependency, multi-provider render queue.
-The browser observes work owned by the service process.
+Version 2.0.0 is a local, zero-dependency, multi-provider render queue. The browser
+observes work owned by the service process. It replaces v1.0.2's monolithic
+OpenAI Videos/Batch server, where jobs lived only inside request handlers.
 
 ```text
 classic-script browser → HTTP router → catalog / keys / batches / jobs / SSE
@@ -135,3 +134,68 @@ proxy behavior and v2.0.0. Stage 2 is outside this implementation.
 - The expanded prompt text is bounded by the batch request byte budget to avoid
   unbounded allocation through a huge repeat count. There is no 50,000-job cap.
   Catalog refresh is an explicit POST; GET endpoints never contact providers.
+- Any failed journal flush, snapshot publication or settings write stops new
+  dispatch. A later successful disk call cannot make an uncertain in-memory
+  record safe to submit; the service must restart and replay durable state.
+- The browser connects SSE before fetching paginated snapshots. Durable sequence
+  numbers preserve newer events over stale snapshots; request revisions discard
+  outdated pages and lane responses. Secrets are submitted separately from batch
+  payloads, cleared from input fields and never included in native form fields.
+  HTML confirmation dialogs preserve cost and duplicate-charge warnings without
+  relying on browser-native modal behavior. Preview scripts never call the API.
+- Gemini uses blocking URI delivery because Omni background support was not
+  established. Its returned Files metadata URL is persisted with the interaction
+  ID in the same fsync barrier; subsequent requests poll Files, avoiding the
+  interaction GET's inline video response. Manual recovery requires a Files
+  resource, not an interaction ID. Upload references are cached only in memory.
+  An interrupted create remains uncertain and can have incurred a charge.
+- DashScope Wan 3.0 uses the verified regional workspace-specific endpoints.
+  Placeholder and mismatched-region hosts are rejected before queuing. Its
+  documented RPS ceiling is not converted into an equivalent bursty RPM bucket;
+  default concurrency 2 is a conservative application policy.
+- ModelArk Seedance 2.5 first frames are fitted locally, then submitted using the
+  required adaptive ratio. Unverified seed support is disabled for both regions.
+  China pricing remains unknown; BytePlus uses the documented output dimensions
+  and token formula. Gemini estimates only verified 720p video-output tokens;
+  input/thinking costs and unverified resolution factors are not invented.
+- No adapter currently claims verified create idempotency. Optional remote
+  cancellation is not exposed where deleting an already-finished task could
+  erase the only usable result reference. Local cancellation stops queued work
+  while already accepted requests remain tracked through download.
+- Native environment proxy support is enabled by the npm start command and
+  macOS launcher. Node 22.21 initializes its proxy agents even before preloads.
+  The npm entry therefore starts with `--no-use-env-proxy`, validates settings
+  without active proxy agents, then starts the service with `--use-env-proxy`
+  and forwards termination signals and exit status. The launcher validates in
+  its unproxied helper before spawning the same service. Bootstrap validates effective
+  proxy URLs, normalizes uppercase/lowercase settings and appends loopback
+  bypasses. This ordering also prevents Node's invalid-proxy errors from echoing
+  credentials. Public metadata exposes only redacted effective addresses.
+  The supported range is Node 22.21+ in the 22.x line, or 24.5+; Node 23 is
+  excluded. Tests use real HTTPS CONNECT tunnels with generated in-memory TLS
+  keys and trusted temporary public certificates, never disabled TLS validation.
+
+## Operational API
+
+All mutations require a matching Origin; keys and batches use separate requests.
+GET operations read local state only. The legacy generation/status/download
+routes are removed.
+
+| Resource | Operations |
+| --- | --- |
+| `/api/catalog` | GET catalog and runtime metadata; POST `/api/catalog/refresh/:provider` explicitly refreshes supported catalogs. |
+| `/api/keys` | GET lane presence only; POST `{lane,key}` sets an in-memory key; DELETE `/api/keys/:laneId` forgets it. |
+| `/api/estimate` | POST computes count, currency-specific cost and approximate ETA without creating records. |
+| `/api/batches` | POST enqueues JSON or multipart with one `input_reference`; GET paginates; GET `/:id` reads summary; POST `/:id/pause`, `/resume`, `/cancel` controls work. |
+| `/api/jobs` | GET paginates and filters; GET `/:id` reads details; POST `/:id/cancel`, `/retry`, `/resolve` applies guarded actions. |
+| `/api/lanes` | GET reads state; POST `/:id` sets concurrency or pause/resume. |
+| `/api/events` | GET incremental SSE with sequence replay, resync and heartbeat. |
+| `/api/history/clear` | POST removes finished records and unused assets, preserving unresolved/active jobs and outputs. |
+| `/api/select-output-dir` | POST opens the macOS chooser; other systems use manual paths. |
+
+The 100-job acceptance fixture independently counts accepted remote creates,
+unknown outcomes and peak concurrency. It kills real service processes during
+create, poll and download, disconnects SSE, restores keys and verifies original
+file bytes. Separate process tests cover the two create durability barriers and
+every snapshot compaction boundary. These are offline contracts, not a claim of
+paid production validation against each provider.
