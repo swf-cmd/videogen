@@ -62,6 +62,7 @@ class Gallery {
   }
   regenerate(id, { confirmed, confirmationToken } = {}) {
     if (this.app.stopping) throw failure('serviceStopping');
+    this.app.scheduler.assertHealthy();
     if (confirmed !== true || typeof confirmationToken !== 'string') throw failure('regenerateConfirmationRequired');
     // A successful response can be lost. Replaying its token returns the same take.
     for (const job of this.app.store.jobs.values()) {

@@ -57,7 +57,7 @@ function classifyError(error, phase = "poll") {
   if (/moderation|content_policy|DataInspection|SensitiveContent|ContentRisk|ResponsibleAIPolicy/i.test(code)) return "moderation";
   if (status === 400 || status === 422 || status === 413) return "invalid_request";
   if (status === 404 && phase === "create") return "model_unavailable";
-  if (["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "UND_ERR_CONNECT_TIMEOUT"].includes(code)) return "transient";
+  if (["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "ENETUNREACH", "EHOSTUNREACH", "ENETDOWN", "EHOSTDOWN", "EADDRNOTAVAIL", "UND_ERR_CONNECT_TIMEOUT"].includes(code)) return "local_offline";
   return phase === "create" ? "unknown_outcome" : "transient";
 }
 
@@ -129,7 +129,7 @@ function createContext({ lane, key = "", catalog, fetchImpl = globalThis.fetch, 
   if (!["http:", "https:"].includes(base.protocol) || base.username || base.password || base.search || base.hash) throw new ProviderError("invalidBaseUrl", { category: "invalid_request", accepted: false });
   const clean = (value) => {
     let result = String(redact(String(value)));
-    if (key) result = result.split(key).join("[REDACTED]");
+    if (key.length >= 16) result = result.split(key).join("[REDACTED]");
     return result.replace(/((?:authorization|x-goog-api-key|api-key)["'\s:=]+)(?:Bearer\s+)?[^\s,"'}]+/gi, "$1[REDACTED]");
   };
   const cleanValues = (value) => {
@@ -208,7 +208,7 @@ function createContext({ lane, key = "", catalog, fetchImpl = globalThis.fetch, 
       const code = source?.code || source?.cause?.code;
       const error = new ProviderError(clean(source?.message || "providerRequestFailed"), { code, status: source?.status });
       error.name = source?.name || error.name;
-      error.accepted = ["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "UND_ERR_CONNECT_TIMEOUT"].includes(code) ? false : undefined;
+      error.accepted = ["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "ENETUNREACH", "EHOSTUNREACH", "ENETDOWN", "EHOSTDOWN", "EADDRNOTAVAIL", "UND_ERR_CONNECT_TIMEOUT"].includes(code) ? false : undefined;
       error.category = classifyError(error, phase);
       throw error;
     }

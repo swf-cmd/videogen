@@ -1,6 +1,6 @@
 # Privacy notes
 
-videogen 2.0.0 runs locally. It has no telemetry, update checks, project-operated cloud service or npm runtime dependencies. The HTTP server listens only on `127.0.0.1`. Submitting work sends prompts, model parameters and optional first-frame images to the provider, region and endpoint you selected. Provider-side retention and account terms apply independently.
+videogen 2.1.0 runs locally. It has no telemetry, update checks, project-operated cloud service or npm runtime dependencies. The HTTP server listens only on `127.0.0.1`. Submitting work sends prompts, model parameters and optional first-frame images to the provider, region and endpoint you selected. Provider-side retention and account terms apply independently.
 
 ## Data saved on this computer
 
@@ -18,18 +18,20 @@ The default directory is `~/Library/Application Support/videogen/` on macOS, `${
 
 | File | Contents |
 | --- | --- |
-| `jobs.ndjson` / `jobs.snapshot.json` | Queue event journal and compacted task/batch records |
+| `jobs.ndjson` / `jobs.snapshot.ndjson` (legacy: `jobs.snapshot.json`) | Queue event journal and compacted task/batch records |
 | `assets/` | Content-addressed first-frame images needed after restart |
 | `settings.json` | Nonsecret lane configuration |
 | `catalog.local.json` | Optional user model/region/pricing overrides |
 | `openrouter-models.cache.json` | Public model metadata from an explicit refresh |
 | `lock` | Process/instance information preventing concurrent dispatch from the same data directory |
 
-Directories use mode 0700 and data files 0600 where supported. These files are not encrypted by videogen. Other processes with the same account's access, operating-system backups and disk-recovery tools are outside this boundary. Result/recovery URLs may grant access to generated media while valid; treat the task store as private even though it contains no API keys.
+Directories use mode 0700 and data files 0600 where supported. These files are not encrypted by videogen. Other processes with the same account's access, operating-system backups and disk-recovery tools are outside this boundary. Result/recovery URLs may grant access to generated media while valid; treat the task store as private. Credentials entered through the key form are not persisted; user-authored text is preserved verbatim, including any secret the user places in a prompt.
 
 Source downloads default to `~/Downloads/videogen` or your chosen directory. Portable bundles store their records and default downloads in `portable-data/` and `portable-output/` beside the application. The local gallery streams only completed recorded output files and supports seeking; it does not upload previews. Provider bytes, embedded metadata and generation labels are preserved without transcoding. Job-specific `.part` files can exist during a download or after process interruption. Startup recovery reconciles published files and their known markers; it does not delete arbitrary files in your output directory.
 
 ## Clearing data
+
+The journal compacts automatically as it grows; compaction retains all task history and is not deletion. Model configuration is shared by references rather than copied into every new record. Old JSON snapshots remain readable; their first load still uses the legacy whole-file parser before later compaction writes streaming NDJSON.
 
 **Clear history and assets** removes finished job records and unused images, then compacts the journal. Unfinished jobs and `needs_review` records remain so possibly paid work is not silently forgotten. Downloaded videos remain; delete them separately in your file manager. Clearing history does not remove provider-side records, backups or storage-level recoverable copies.
 
@@ -37,7 +39,7 @@ To remove all local app data manually, first stop the service and inspect any ou
 
 ## Keys, browser preferences and live updates
 
-Keys exist in service memory and transiently in the active browser form/request. Each key belongs to a lane: provider + region + base URL. Stopping the service forgets it; pending work shows `needs_key` until the required key is entered again. Keys are excluded from job data, settings, browser storage, URLs, logs, SSE payloads and API responses. Key-list responses report presence only, not a suffix. Known secrets and sensitive authorization-header values are redacted from errors.
+Keys exist in service memory and transiently in the active browser form/request. Each key belongs to a lane: provider + region + base URL. Stopping the service forgets it; pending work shows `needs_key` until the required key is entered again. Credential fields are excluded from job data, settings, browser storage, URLs, logs, SSE payloads and API responses. Validated keys of at least 16 characters are registered for provider-response redaction; short local placeholders are never used to rewrite user prompts, paths or endpoints. Key-list responses report presence only, not a suffix. Known secrets and sensitive authorization-header values are redacted from errors.
 
 The browser stores nonsecret `videogen.*` preferences and performs a one-time migration of applicable `sora2app.*` values. Stored language, provider, model, duration, resolution, aspect ratio and repeat count may remain until browser storage is cleared. Keys and output-directory preferences are removed/excluded. A job's output path is still part of its persistent record.
 

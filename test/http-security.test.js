@@ -111,6 +111,8 @@ test("child-process HTTP server preserves localhost security boundaries", { time
     assert.equal(absolute.status, 400);
     const head = await request(port, { method: "HEAD" });
     assert.equal(head.status, 200);
+    assert.equal(head.headers['x-frame-options'], 'DENY');
+    assert.equal(head.headers['content-security-policy'], "frame-ancestors 'none'");
     assert.equal(head.body, "");
   });
 });

@@ -15,7 +15,7 @@
             <label class="language-field" for="languageSelect"><span class="sr-only" data-i18n="languageLabel">语言</span>
               <select id="languageSelect" name="language" aria-label="语言"><option value="zh">中文</option><option value="ja">日本語</option><option value="en">English</option><option value="ko">한국어</option></select>
             </label>
-            <div class="status-pill" id="connectionState">就绪</div>
+            <div class="status-pill" id="connectionState" role="status" aria-live="polite" aria-atomic="true">就绪</div>
           </div>
         </header>
         <p class="notice retirement-note" data-i18n="soraRetired">Sora 已停用。请选择其他供应商或兼容端点。</p>
@@ -24,7 +24,7 @@
             <div class="section-head span-full"><div><p class="section-kicker" data-i18n="generateKicker">生成</p><h2 data-i18n="newBatch">新建批次</h2></div></div>
             <label class="field span-full"><span data-i18n="providerLabel">供应商 · 区域</span><select id="provider" name="provider"></select></label>
             <label class="field span-full"><span data-i18n="baseUrl">端点地址</span><input id="baseUrl" name="baseUrl" type="url" spellcheck="false" required /><small class="field-meta" data-i18n="baseUrlNote">请填写 API 根地址。</small><small id="availabilityNote" class="field-meta"></small></label>
-            <label class="field span-full secret-field"><span data-i18n="apiKeyLabel">API key</span><div class="input-row"><input id="apiKey" type="password" autocomplete="off" spellcheck="false" /><button id="toggleApiKey" type="button" class="icon-button" data-i18n="showApiKey">显示</button></div><small class="field-meta" data-i18n="trustNote">密钥仅存在本机服务内存中，服务停止即清除</small><div class="inline-actions"><button id="saveKeyButton" type="button" class="secondary" data-i18n="saveKey">保存密钥</button><button id="deleteKeyButton" type="button" class="secondary" data-i18n="deleteKey">清除密钥</button><span id="selectedKeyStatus" class="field-meta"></span></div></label>
+            <div class="field span-full secret-field"><label for="apiKey" data-i18n="apiKeyLabel">API key</label><div class="input-row"><input id="apiKey" type="password" autocomplete="off" spellcheck="false" /><button id="toggleApiKey" type="button" class="icon-button" data-i18n="showApiKey">显示</button></div><small class="field-meta" data-i18n="trustNote">密钥仅存在本机服务内存中，服务停止即清除</small><div class="inline-actions"><button id="saveKeyButton" type="button" class="secondary" data-i18n="saveKey">保存密钥</button><button id="deleteKeyButton" type="button" class="secondary" data-i18n="deleteKey">清除密钥</button><span id="selectedKeyStatus" class="field-meta"></span></div></div>
             <p id="transportWarning" class="notice warning-note span-full" data-i18n="plaintextKeyWarning" hidden></p>
             <div class="field span-full"><label for="model" data-i18n="modelLabel">模型</label><select id="model" name="model"></select><small id="modelNote" class="field-meta"></small><button id="refreshCatalogButton" type="button" class="text-button" data-i18n="refreshCatalog">刷新目录</button><p id="modelWarning" class="notice warning-note" hidden></p><small id="pricingNote" class="field-meta"></small></div>
             <div id="customModelFields" class="span-full custom-options" hidden>
@@ -58,7 +58,7 @@
               <label class="check-field"><input id="rowMode" type="checkbox" /><span data-i18n="rowMode">启用逐条编辑（提交下方列表）</span></label>
               <div id="rowEditorPanel" hidden><div class="inline-actions"><button id="rowsFromPrompts" type="button" class="secondary" data-i18n="rowsFromPrompts">用上方提示词重建列表</button><button id="addBatchRow" type="button" class="secondary" data-i18n="addBatchRow">添加任务</button></div><div id="batchRows" class="batch-rows"></div></div>
             </section>
-            <label class="field span-full"><span data-i18n="outputDirLabel">输出目录</span><div class="input-row output-dir-row"><input id="outputDir" name="outputDir" type="text" placeholder="~/Downloads/videogen" /><button id="selectOutputDir" type="button" class="icon-button output-dir-button" data-i18n="selectOutputDir">选择</button></div></label>
+            <div class="field span-full"><label for="outputDir" data-i18n="outputDirLabel">输出目录</label><div class="input-row output-dir-row"><input id="outputDir" name="outputDir" type="text" placeholder="~/Downloads/videogen" /><button id="selectOutputDir" type="button" class="icon-button output-dir-button" data-i18n="selectOutputDir">选择</button></div></div>
             <label class="field span-full"><span data-i18n="filenamePrefix">文件名前缀</span><input id="filename" name="filename" type="text" /></label>
             <label class="field span-full"><span data-i18n="budgetLabel">预算上限（可选）</span><input id="budget" type="number" min="0.000001" step="any" /><small id="budgetNote" class="field-meta"></small></label>
             <p class="notice privacy-note span-full" data-i18n="privacyNote">任务数据保存在本机，密钥不写入磁盘。</p>
@@ -113,6 +113,7 @@
       <div class="confirmation-actions"><button id="confirmCancel" type="button" class="secondary" data-i18n="cancel" autofocus>取消</button><button id="confirmAccept" type="button" class="primary-action" data-i18n="confirmProceed">确认</button></div>
     </dialog>
     <script src="./i18n.js"></script>
+    <script src="./pixel-size.js"></script>
     <script src="./image-reference.js"></script>
     <script src="./api.js"></script>
     <script src="./dialog.js"></script>

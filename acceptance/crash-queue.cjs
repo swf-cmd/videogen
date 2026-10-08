@@ -42,21 +42,8 @@ function filesUnder(directory) {
   });
 }
 
-// Read without instantiating the store: observing a crash must not repair its log.
-function durableJobs(directory) {
-  const snapshot = path.join(directory, "jobs.snapshot.json");
-  const saved = fs.existsSync(snapshot) ? JSON.parse(fs.readFileSync(snapshot, "utf8")) : { jobs: [], seq: 0 };
-  const jobs = new Map(saved.jobs.map((job) => [job.id, job]));
-  const log = fs.readFileSync(path.join(directory, "jobs.ndjson"));
-  for (const line of log.subarray(0, log.lastIndexOf(10) + 1).toString("utf8").split("\n")) {
-    if (!line) continue;
-    const { v, seq, at, jobId, type, ...patch } = JSON.parse(line);
-    if (seq <= saved.seq) continue;
-    if (type === "job") jobs.set(jobId, { ...jobs.get(jobId), ...patch, id: jobId });
-    if (type === "delete") jobs.delete(jobId);
-  }
-  return [...jobs.values()];
-}
+const { durableJobs } = require("./durable-jobs.cjs");
+const { failureDiagnostics } = require("./failure-diagnostics.cjs");
 
 test("100 jobs survive three process crashes without duplicate paid creates or lost outputs", { timeout: 75000 }, async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "videogen-crash-queue-"));
@@ -241,9 +228,15 @@ test("100 jobs survive three process crashes without duplicate paid creates or l
 
   await mockApi("/control", { pollDelayMs: 500 });
   await startApp();
+  // Freeze only new submissions before restoring credentials. Otherwise a
+  // completed poll can free a slot between the observation and SIGKILL, turning
+  // the poll/download crash into an unintended fourth lost-create scenario.
+  // Paid polls and downloads must continue throughout this persisted pause.
+  for (const id of laneIds) await api(`/api/lanes/${id}`, { action: "pause" });
   await restoreKeys();
   eventClient = await openEvents();
   await killInPhase("poll", (value, current) => Object.keys(value.pollsActive).length > 0 && Object.keys(value.createPending).length === 0 && !current.some((job) => job.state === "submitting"));
+  assert.equal(kills.at(-1).interruptedCreates, 0, "poll crash cannot interrupt a new paid create");
   await disconnect(eventClient);
 
   await mockApi("/control", { pollDelayMs: 5, renderDelayMs: 1000, downloadDelayMs: 800 });
@@ -251,6 +244,7 @@ test("100 jobs survive three process crashes without duplicate paid creates or l
   await restoreKeys();
   eventClient = await openEvents();
   await killInPhase("download", (value, current) => Object.keys(value.downloadsActive).length > 0 && Object.keys(value.createPending).length === 0 && !current.some((job) => job.state === "submitting"));
+  assert.equal(kills.at(-1).interruptedCreates, 0, "download crash cannot interrupt a new paid create");
   assert.ok(outputs.flatMap(filesUnder).some((filename) => filename.endsWith(".part")), "download SIGKILL leaves an actual partial file to recover");
   await disconnect(eventClient);
 
@@ -260,6 +254,7 @@ test("100 jobs survive three process crashes without duplicate paid creates or l
   assert.ok(waiting.lanes.some((lane) => lane.state === "needs_key"), "unfinished lanes need fresh keys after restart");
   for (let index = 0; index < laneIds.length; index += 1) assert.equal(waiting.lanes.find((lane) => lane.id === laneIds[index]).concurrency, index ? 5 : 3, "lane limits persist across process crashes");
   await restoreKeys();
+  for (const id of laneIds) await api(`/api/lanes/${id}`, { action: "resume" });
   eventClient = await openEvents();
   let finalJobs;
   try {
@@ -268,8 +263,19 @@ test("100 jobs survive three process crashes without duplicate paid creates or l
       return current.length === 100 && current.every(done) && current;
     }, 40000);
   } catch (error) {
-    const current = await jobs();
-    t.diagnostic(JSON.stringify({ states: current.reduce((counts, job) => ({ ...counts, [job.state]: (counts[job.state] || 0) + 1 }), {}), lanes: await api("/api/lanes") }));
+    const names = ["jobs", "lanes", "health", "mock"];
+    const inspections = await Promise.allSettled([jobs(), api("/api/lanes"), api("/api/health"), stats()]);
+    const details = { seed: initialSeed, phase: "final completion", kills, killedSubmissions: [...killedSubmissions], logs: [...processOutput, app?.output, mock.output], secrets, inspectionErrors: {} };
+    for (let index = 0; index < inspections.length; index += 1) {
+      const result = inspections[index], name = names[index];
+      if (result.status === "fulfilled") details[name] = result.value;
+      else details.inspectionErrors[name] = result.reason?.message || String(result.reason);
+    }
+    if (!details.jobs) {
+      try { details.jobs = durableJobs(dataDir); }
+      catch (cause) { details.inspectionErrors.durableJobs = cause.message; }
+    }
+    t.diagnostic(JSON.stringify(failureDiagnostics(details)));
     throw error;
   }
   await disconnect(eventClient);

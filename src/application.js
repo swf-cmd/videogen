@@ -1,4 +1,4 @@
-const { JobStore } = require("./store/job-store");
+const { JobStore, cursorPosition } = require("./store/job-store");
 const { AssetStore } = require("./store/asset-store");
 const { readSettings, normalizeSettings, writeJson } = require("./store/settings");
 const { KeyStore, normalizeLane, redact } = require("./queue/keys");
@@ -16,15 +16,7 @@ function adapters() {
   return Object.fromEntries(["openai-compatible", "openrouter", "gemini", "dashscope", "ark", "mock"].map((id) => [id, require(`./providers/${id}`)]));
 }
 
-function pixelSize(params) {
-  if (/^\d+x\d+$/.test(params.resolution)) return params.resolution;
-  const edge = params.resolution === "4k" ? 2160 : /^([0-9]+)p$/i.exec(params.resolution)?.[1];
-  const ratio = /^(\d+):(\d+)$/.exec(params.aspectRatio);
-  if (!edge || !ratio) return "";
-  const [a, b] = ratio.slice(1).map(Number);
-  const height = Number(edge);
-  return a >= b ? `${Math.round(height * a / b / 2) * 2}x${height}` : `${height}x${Math.round(height * b / a / 2) * 2}`;
-}
+const { pixelSize } = require("./pixel-size");
 
 class Application {
   constructor({ directory = dataDirectory(), port = 0 } = {}) {
@@ -43,6 +35,7 @@ class Application {
       } });
     } catch (error) { this.store.close(); throw error; }
     this.stopping = false;
+    this.preparations = new Set();
     this.gallery = new Gallery(this);
   }
 
@@ -107,8 +100,7 @@ class Application {
       if (!["json", "multipart"].includes(payload.params.requestFormat)) throw new Error("invalidParams");
       params.requestFormat = payload.params.requestFormat;
     }
-    const cost = { ...adapter.estimateCost(model, params), catalogAsOf: provider.asOf };
-    return { provider, region, lane, model, adapter, params, cost };
+    return { provider, region, lane, model, adapter, params };
   }
 
   prompts(payload) {
@@ -118,9 +110,13 @@ class Application {
     return parseBatchPrompts(payload.prompt, payload.batchCount, payload.language);
   }
 
-  estimate(payload) { return planBatch(this, payload).estimate; }
+  estimate(payload) { return planBatch(this, payload, { summaryOnly: payload.summaryOnly === true }).estimate; }
 
-  async prepare(payload, file, files) { return prepareBatch(this, payload, file, files, pixelSize); }
+  async prepare(payload, file, files) {
+    const pending = prepareBatch(this, payload, file, files, pixelSize);
+    this.preparations.add(pending);
+    try { return await pending; } finally { this.preparations.delete(pending); }
+  }
 
   context(job, phase = "create") {
     const lane = normalizeLane(job);
@@ -138,15 +134,16 @@ class Application {
 
   batches({ cursor, limit = 50 } = {}) {
     const count = Math.max(1, Math.min(500, Number(limit) || 50));
-    const entries = [...this.store.batches.values()];
-    const start = cursor ? entries.findIndex((batch) => batch.id === cursor) + 1 : 0;
+    const before = cursorPosition(cursor, this.store.batches);
+    const entries = [...this.store.batches.values()].reverse().filter(batch => before === null || batch.queueOrder < before);
+    const start = 0;
     const rows = entries.slice(start, start + count).map((batch) => ({ ...batch, counts: {}, total: 0 }));
     const lookup = new Map(rows.map((batch) => [batch.id, batch]));
     for (const job of this.store.jobs.values()) {
       const batch = lookup.get(job.batchId);
       if (batch) { batch.counts[job.state] = (batch.counts[job.state] || 0) + 1; batch.total += 1; }
     }
-    return { batches: rows, nextCursor: entries.length > start + count ? rows.at(-1).id : null, seq: this.store.seq };
+    return { batches: rows, nextCursor: entries.length > count ? `q1:${rows.at(-1).queueOrder}` : null, seq: this.store.seq };
   }
 
   async refreshCatalog(providerId, payload) {
@@ -172,7 +169,9 @@ class Application {
     if (this.stopping) return;
     this.stopping = true;
     this.events.close();
+    await Promise.allSettled([...this.preparations]);
     await this.scheduler.close(15000);
+    if (this.store.compacting) await this.store.compacting.catch(() => {});
     this.store.close();
   }
 }

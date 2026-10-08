@@ -5,7 +5,6 @@ const os = require("node:os");
 const path = require("node:path");
 const { Readable } = require("node:stream");
 const { ROOT, HOME_DIR, DEFAULT_OUTPUT_DIR } = require("../config");
-const { st } = require("../i18n/server-messages");
 
 function expandHome(inputPath) {
   if (!inputPath || inputPath === "~") return os.homedir();
@@ -13,17 +12,37 @@ function expandHome(inputPath) {
   return inputPath;
 }
 
+// Leave room under the common 255-byte component limit for collision suffixes,
+// a 100-byte job owner and the durable .part publication marker.
+const MAX_FILENAME_BYTES = 128;
+function truncateUtf8(value, maximum) {
+  let text = "";
+  let bytes = 0;
+  for (const character of value) {
+    const size = Buffer.byteLength(character);
+    if (bytes + size > maximum) break;
+    text += character;
+    bytes += size;
+  }
+  return text;
+}
+
 function sanitizeFilename(name) {
   const base = path.basename(String(name || "").trim());
   const fallback = `videogen-${new Date().toISOString().replace(/[:.]/g, "-")}.mp4`;
-  const cleaned = (base || fallback).replace(/[<>:"/\\|?*\x00-\x1f]/g, "-");
-  return cleaned.toLowerCase().endsWith(".mp4") ? cleaned : `${cleaned}.mp4`;
+  let cleaned = (base || fallback).replace(/[<>:"/\\|?*\x00-\x1f]/g, "-").replace(/[. ]+$/, "");
+  if (!cleaned) cleaned = fallback;
+  if (/^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:[. ]|$)/i.test(cleaned)) cleaned = `_${cleaned}`;
+  const extension = /\.(?:mp4|webm)$/i.exec(cleaned)?.[0] || ".mp4";
+  const stem = cleaned.endsWith(extension) ? cleaned.slice(0, -extension.length) : cleaned;
+  return `${truncateUtf8(stem, MAX_FILENAME_BYTES - Buffer.byteLength(extension))}${extension}`;
 }
 
 function appendFilenameIndex(filename, index) {
-  const ext = path.extname(filename);
-  const stem = ext ? filename.slice(0, -ext.length) : filename;
-  return `${stem}-${String(index + 1).padStart(2, "0")}${ext || ".mp4"}`;
+  const ext = path.extname(filename) || ".mp4";
+  const stem = path.extname(filename) ? filename.slice(0, -ext.length) : filename;
+  const suffix = `-${String(index + 1).padStart(2, "0")}`;
+  return `${truncateUtf8(stem, MAX_FILENAME_BYTES - Buffer.byteLength(ext + suffix))}${suffix}${ext}`;
 }
 
 function resolveOutputPath(outputDir, filename) {
@@ -40,27 +59,31 @@ function resolveBatchOutputPath(outputDir, filename, index, total, fallbackName)
   return resolveOutputPath(outputDir, baseName);
 }
 
-async function assertOutputFileAvailable(filePath, language = "zh") {
+async function preflightOutputDirectory(directory) {
+  const probe = path.join(directory, `.videogen-check-${crypto.randomUUID()}`);
+  const linked = `${probe}.link`;
+  let handle;
+  let ownsProbe = false;
+  let ownsLink = false;
   try {
-    await fsp.lstat(filePath);
-  } catch (error) {
-    if (error?.code === "ENOENT") return;
-    throw error;
-  }
-  throw new Error(st(language, "outputFileExists", { path: displayPathForUser(filePath) }));
-}
-
-async function assertBatchOutputFilesAvailable(payload, total) {
-  if (!payload.filename) return;
-  for (let index = 0; index < total; index += 1) {
-    const { filePath } = resolveBatchOutputPath(
-      payload.outputDir,
-      payload.filename,
-      index,
-      total,
-      "batch-output",
-    );
-    await assertOutputFileAvailable(filePath, payload.language);
+    await fsp.mkdir(directory, { recursive: true, mode: 0o700 });
+    handle = await fsp.open(probe, "wx", 0o600);
+    ownsProbe = true;
+    await handle.writeFile("videogen output check");
+    await handle.sync();
+    await handle.close();
+    handle = null;
+    // Publication requires atomic no-overwrite hardlinks for crash recovery.
+    // Reject unsupported filesystems before a paid request can be submitted.
+    await fsp.link(probe, linked);
+    ownsLink = true;
+    await syncOutputDirectory(directory);
+  } catch (cause) {
+    throw Object.assign(new Error("outputDirectoryUnavailable", { cause }), { code: "outputDirectoryUnavailable", status: 400, details: { filesystemCode: cause.code } });
+  } finally {
+    await handle?.close().catch(() => {});
+    if (ownsLink) await fsp.unlink(linked).catch(() => {});
+    if (ownsProbe) await fsp.unlink(probe).catch(() => {});
   }
 }
 
@@ -83,12 +106,6 @@ function displayPathForUser(inputPath) {
   return resolved;
 }
 
-function outputInfoForUser(filePath, stats) {
-  return {
-    path: displayPathForUser(filePath),
-    bytes: stats.size,
-  };
-}
 
 const activePartialPaths = new Set();
 
@@ -130,7 +147,10 @@ async function recoverPublishedOutput(partialPath, desiredPath, contentType, sig
   const extension = path.extname(filename);
   const stem = filename.slice(0, -extension.length);
   for (const name of await fsp.readdir(directory)) {
-    if (name !== filename && !(name.startsWith(`${stem} (`) && name.endsWith(`)${extension}`))) continue;
+    // The partial keeps the originally requested name while the published
+    // extension follows the actual response. Recover either container format.
+    const extensions = new Set([extension, ".mp4", ".webm"]);
+    if (![...extensions].some((ext) => name === `${stem}${ext}` || name.startsWith(`${stem} (`) && name.endsWith(`)${ext}`))) continue;
     const candidate = path.join(directory, name);
     const stats = await fsp.lstat(candidate).catch((error) => {
       if (error.code === "ENOENT") return null;
@@ -143,7 +163,7 @@ async function recoverPublishedOutput(partialPath, desiredPath, contentType, sig
       hash.update(chunk);
       bytes += chunk.length;
     }
-    return { path: candidate, bytes, contentType, sha256: hash.digest("hex") };
+    return { path: candidate, bytes, contentType: /\.webm$/i.test(candidate) ? "video/webm" : /\.mp4$/i.test(candidate) ? "video/mp4" : contentType, sha256: hash.digest("hex") };
   }
   return null;
 }
@@ -261,10 +281,13 @@ async function writeOutput(response, desiredPath, { jobId = crypto.randomUUID(),
     await handle.close();
     handle = null;
     const sha256 = hash.digest("hex");
+    const mediaType = contentType.split(";")[0].trim().toLowerCase();
+    const extension = mediaType === "video/webm" ? ".webm" : mediaType === "video/mp4" ? ".mp4" : path.extname(target);
+    const publishTarget = `${target.slice(0, -path.extname(target).length)}${extension}`;
     let output;
     for (let index = 1; ; index += 1) {
       checkDownloadSignal(signal);
-      output = { path: outputCandidate(target, index), bytes, contentType, sha256 };
+      output = { path: outputCandidate(publishTarget, index), bytes, contentType, sha256 };
       try {
         // Unlike rename, linking fails atomically if a destination already exists.
         await fsp.link(partialPath, output.path);
@@ -294,11 +317,9 @@ module.exports = {
   appendFilenameIndex,
   resolveOutputPath,
   resolveBatchOutputPath,
-  assertOutputFileAvailable,
-  assertBatchOutputFilesAvailable,
+  preflightOutputDirectory,
   normalizeDirectoryPath,
   displayPathForUser,
-  outputInfoForUser,
   recoverOutput,
   cleanupPublishedPartial,
   writeOutput,

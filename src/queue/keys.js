@@ -11,7 +11,7 @@ function keyError(code) {
 }
 
 function rememberSecret(value) {
-  if (typeof value === "string" && value) knownSecrets.add(value);
+  if (typeof value === "string" && value.length >= 16) knownSecrets.add(value);
 }
 
 function normalizeLane(lane) {
@@ -39,12 +39,12 @@ class KeyStore {
   #entries = new Map();
 
   set(lane, key, adapter) {
-    rememberSecret(key);
     if (typeof key !== "string" || /[\s\x00-\x1f\x7f-\x9f]/.test(key)) throw keyError("invalidKey");
     const normalized = normalizeLane(lane);
     if (typeof adapter?.validateKey !== "function") throw keyError("invalidKey");
     const validationError = adapter.validateKey(key);
     if (validationError !== null) throw keyError(typeof validationError === "string" ? validationError : "invalidKey");
+    rememberSecret(key);
     this.#entries.set(normalized.id, { lane: normalized, key });
     return { ...normalized };
   }
@@ -113,4 +113,19 @@ for (const name of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "htt
   }
 }
 
-module.exports = { normalizeLane, KeyStore, rememberSecret, redact };
+// Only diagnostic/provider-owned content receives substring redaction. User
+// prompts, identifiers, paths, endpoints and model configurations are data.
+function sanitizeRecord(value, seen = new WeakSet()) {
+  if (!value || typeof value !== "object") return value;
+  if (seen.has(value)) return "[Circular]";
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) return value.map(item => sanitizeRecord(item, seen));
+    return Object.fromEntries(Object.entries(value).map(([name, item]) => [name,
+      sensitiveFields.has(name.toLowerCase().replace(/[-_\s]/g, "")) ? "[REDACTED]"
+        : ["error", "details", "message", "providerMessage"].includes(name) ? redact(item)
+        : sanitizeRecord(item, seen),
+    ]));
+  } finally { seen.delete(value); }
+}
+module.exports = { normalizeLane, KeyStore, rememberSecret, redact, sanitizeRecord };

@@ -112,3 +112,9 @@ test("loading existing local catalog metadata tightens permissions without chang
   loadCatalog(dir);
   assert.equal(fs.statSync(target).mode & 0o777, 0o644);
 });
+
+test('a malformed or duplicate remote model cannot discard valid catalog entries', () => {
+  const source = require('./fixtures/openrouter-models.json').data[0];
+  const models = normalizeOpenRouterModels({ data: [null, { ...source, id: 'fraction', supported_durations: [7.5] }, { ...source, id: 'bad', supported_resolutions: 12 }, source, source] });
+  assert.deepEqual(models.map(model => model.id), [source.id]);
+});

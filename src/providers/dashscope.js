@@ -70,7 +70,7 @@ module.exports = {
     }
     const status = base.normalizeStatus(output.task_status);
     if (status === "succeeded" && !output.video_url) throw new base.ProviderError("invalidProviderResponse", { category: "transient" });
-    const error = output.code ? { category: classifyError({ code: output.code }), code: output.code } : undefined;
+    const error = output.code ? { category: classifyError({ code: output.code }), code: ctx.redact(output.code), message: ctx.redact(output.message || data.message || "providerFailed") } : undefined;
     return { status, error, ...(status === "succeeded" ? { result: { url: output.video_url, needsAuth: false, contentType: "video/mp4" } } : {}) };
   },
   async download(ctx, job, result, { signal } = {}) { return ctx.fetch(result.url, { needsAuth: false, signal, phase: "download", timeoutMs: 300000 }); },

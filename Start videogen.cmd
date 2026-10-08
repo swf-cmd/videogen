@@ -9,6 +9,8 @@ if not defined SOURCE_NODE goto missing
 set "NODE_BIN=%SOURCE_NODE%"
 :run
 if not exist "%~dp0server.js" goto missing
+"%NODE_BIN%" "%~dp0scripts\check-runtime.cjs"
+if errorlevel 1 exit /b 1
 "%NODE_BIN%" --no-use-env-proxy "%~dp0scripts\launcher.cjs"
 set "VIDEOGEN_EXIT=%ERRORLEVEL%"
 if not "%VIDEOGEN_EXIT%"=="0" if not "%OPEN_BROWSER%"=="0" pause

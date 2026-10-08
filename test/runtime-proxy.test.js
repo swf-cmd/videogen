@@ -115,7 +115,7 @@ function launcherDirectory(directory) {
   fs.copyFileSync(path.join(root, "server.js"), path.join(directory, "server.js"));
   fs.copyFileSync(path.join(root, "package.json"), path.join(directory, "package.json"));
   fs.mkdirSync(path.join(directory, "scripts"));
-  fs.copyFileSync(path.join(root, "scripts", "launcher.cjs"), path.join(directory, "scripts", "launcher.cjs"));
+  for (const script of ["launcher.cjs", "check-runtime.cjs"]) fs.copyFileSync(path.join(root, "scripts", script), path.join(directory, "scripts", script));
   fs.symlinkSync(path.join(root, "src"), path.join(directory, "src"), "dir");
   const node = path.join(directory, "runtime", `node-darwin-${process.arch}`, "node"); fs.mkdirSync(path.dirname(node), { recursive: true });
   fs.writeFileSync(node, `#!/bin/sh\nexec '${process.execPath.replaceAll("'", "'\\''")}' "$@"\n`, { mode: 0o700 });
@@ -143,6 +143,8 @@ async function smoke(t, kind, withProxy) {
   let catalog;
   for (let count = 0; count < 150; count += 1) { try { catalog = await getJson(port); break; } catch {} if (child.exitCode !== null) break; await new Promise((resolve) => setTimeout(resolve, 20)); }
   assert.ok(catalog, output); assert.equal(catalog.proxy.enabled, withProxy); assert.ok(catalog.proxy.noProxy.includes("127.0.0.1")); assert.equal(connects, 0);
+  for (let index = 0; index < 50 && !/running at|Ready at/.test(output); index += 1) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.match(output, /running at|Ready at/);
   for (const value of ["smoke-user", "smoke-pass"]) assert.ok(!JSON.stringify(catalog).includes(value) && !output.includes(value));
 }
 

@@ -1,13 +1,13 @@
 const fs = require("node:fs");
 const path = require("node:path");
-const { normalizeLane, redact } = require("../queue/keys");
+const { normalizeLane, sanitizeRecord } = require("../queue/keys");
 const { syncDirectory } = require("./job-store");
 
 function writeJson(directory, filename, value) {
   const target = path.join(directory, filename);
   const temporary = `${target}.tmp`;
   const fd = fs.openSync(temporary, "w", 0o600);
-  try { fs.fchmodSync(fd, 0o600); fs.writeFileSync(fd, JSON.stringify(redact(value))); fs.fsyncSync(fd); }
+  try { fs.fchmodSync(fd, 0o600); fs.writeFileSync(fd, JSON.stringify(sanitizeRecord(value))); fs.fsyncSync(fd); }
   finally { fs.closeSync(fd); }
   fs.renameSync(temporary, target);
   syncDirectory(directory);

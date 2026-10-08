@@ -1,12 +1,11 @@
 const base = require("./base");
 const frames = require("./frames");
+const { pixelSize: resolvePixelSize } = require("../pixel-size");
 
 function pixelSize(params) {
-  if (/^\d+x\d+$/.test(params.resolution)) return params.resolution;
-  const height = Number.parseInt(params.resolution, 10);
-  const [widthRatio, heightRatio] = String(params.aspectRatio).split(":").map(Number);
-  if (!height || !widthRatio || !heightRatio) throw new base.ProviderError("invalidParameter", { category: "invalid_request", accepted: false });
-  return widthRatio >= heightRatio ? `${Math.round(height * widthRatio / heightRatio / 2) * 2}x${height}` : `${height}x${Math.round(height * heightRatio / widthRatio / 2) * 2}`;
+  const size = resolvePixelSize(params);
+  if (!size) throw new base.ProviderError("invalidParameter", { category: "invalid_request", accepted: false });
+  return size;
 }
 
 const adapter = {

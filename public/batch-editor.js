@@ -26,7 +26,7 @@ class BatchEditor {
     const file = input.files?.[0]; if (!file) return;
     try {
       if (file.size > 5 * 1024 * 1024) throw new Error(t("csvTooLarge"));
-      const rows = BatchImport.rowsFromCSV(await file.text(), document.querySelector("#importTemplate").value.trim());
+      const rows = BatchImport.rowsFromCSV(BatchImport.decodeCSV(await file.arrayBuffer()), document.querySelector("#importTemplate").value.trim());
       if (!rows.length) throw new Error(t("csvEmpty"));
       if (rows.length > 1000) throw new Error(t("importTooMany"));
       this.rows = rows; this.resolveImages(); this.activate();

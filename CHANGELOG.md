@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — reliability and safety fixes
+
+- Preserve prompts, paths, endpoints and IDs when local placeholder keys are used; rejected keys no longer enter the redaction registry. Scope substring redaction to provider-returned data and validated long keys.
+- Recover submission circuits after cooldown, treat local connection/DNS failures as offline, and continue polling/downloading accepted jobs through quota, model-access and circuit pauses.
+- Keep entered budgets during estimate refreshes. Reconcile SSE reconnects and coalesce state refreshes while preserving row focus. Reject non-UTF-8 CSV input with an explicit encoding error.
+- Compact journals automatically, stream new snapshots and replay, and deduplicate model metadata. Keep normal-batch estimates bounded and yield while preparing large submissions.
+- Preserve provider error codes/messages, distinguish local storage failures, reject new batches after fatal scheduler errors, and validate output directories before paid submission. Validate output filenames and retain the correct video extension.
+- Request graceful shutdown over IPC, including Windows Ctrl+C and launcher disconnects; handle SIGHUP, check Node versions before new CLI flags, and announce URLs only after successful startup. Unsupported hard-link filesystems fail with directory guidance.
+- Package only tracked, allowlisted files, normalize text and Windows launcher endings, and use a platform-independent archive order. Run CI for all pull requests and main pushes, including minimum Node 22.21, Node 24, crash acceptance and native portable smoke tests. Tag jobs pass the exact tested archives into draft releases.
+- Add framing protection, tolerate individual malformed OpenRouter catalog entries, and update architecture, provider, storage and portable-run documentation.
+
+All added verification uses local fixtures. Native Windows/macOS release validation is performed by CI; a source test pass does not substitute for a successful native artifact run.
+
 ## 2.1.0 — 2026-10-08
 
 - Add per-job first and supported last frames, CSV/template-variable imports and image-folder matching with row-level model validation and cost estimates.

@@ -1,6 +1,13 @@
 const SUPPORTED_LANGUAGES = new Set(["zh", "ja", "en", "ko"]);
 const SERVER_MESSAGES = {
   zh: {
+    invalidCursor: "分页游标无效，请刷新列表。",
+    batchPreparing: "批次正在保存，请稍后再操作。",
+    schedulerFailed: "调度器已停止，请查看服务日志并重启后再提交。",
+    local_offline: "本机暂时无法连接网络，将自动重试。",
+    output_write_failed: "无法保存视频，请检查磁盘空间与目录权限；已保留任务并将重试。",
+    outputDirectoryUnavailable: "输出目录不可写或不支持安全文件发布，请选择其他目录。",
+
     firstFrameRequired: "尾帧需要搭配首帧。",
     unsupportedLastFrame: "此模型不支持尾帧图片。",
     lastFrameRequiresFirst: "使用尾帧时还需要首帧。",
@@ -20,7 +27,7 @@ const SERVER_MESSAGES = {
     assetProcessingFailed: "供应商无法处理首帧素材，请检查图片后重新提交。",
     unsafeProviderUrl: "已阻止不安全的供应商地址，避免泄露密钥。",
     manual_pause: "已手动暂停派发。",
-    circuit_open: "连续多次出错，车道已暂停。请检查后恢复。",
+    circuit_open: "连续多次出错，暂缓新任务并将在冷却后自动试探恢复。",
     budget: "已达到估算预算上限，剩余任务暂停。",
     budget_unknown: "无法确定成本，预算保护已暂停派发。",
     invalidProviderResponse: "供应商响应格式无效，任务记录已保留。",
@@ -95,6 +102,13 @@ const SERVER_MESSAGES = {
     missingApiKeyAndVideoId: "需要 API key 和 video id。",
   },
   ja: {
+    invalidCursor: "ページ位置が無効です。一覧を更新してください。",
+    batchPreparing: "バッチを保存中です。完了するまでお待ちください。",
+    schedulerFailed: "スケジューラーが停止しました。ログを確認し、再起動してください。",
+    local_offline: "ネットワークに接続できません。自動的に再試行します。",
+    output_write_failed: "動画を保存できません。空き容量と権限を確認してください。ダウンロードを再試行します。",
+    outputDirectoryUnavailable: "出力先に書き込めないか、安全なファイル保存に対応していません。別のフォルダーを選択してください。",
+
     firstFrameRequired: "終了フレームには開始フレームが必要です。",
     unsupportedLastFrame: "このモデルは終了フレームに対応していません。",
     lastFrameRequiresFirst: "終了フレームには開始フレームも必要です。",
@@ -189,6 +203,13 @@ const SERVER_MESSAGES = {
     missingApiKeyAndVideoId: "API key と video id が必要です。",
   },
   en: {
+    invalidCursor: "The page cursor is invalid. Refresh the list.",
+    batchPreparing: "The batch is being saved. Please wait before changing it.",
+    schedulerFailed: "The scheduler stopped. Check the service log and restart before submitting.",
+    local_offline: "This computer cannot connect. Retrying automatically.",
+    output_write_failed: "Cannot save video. Check disk space and directory permissions; tracking is retained and downloads will retry.",
+    outputDirectoryUnavailable: "The output directory is not writable or does not support safe file publication. Choose another directory.",
+
     firstFrameRequired: "A last frame requires a first frame.",
     unsupportedLastFrame: "This model does not support a last-frame image.",
     lastFrameRequiresFirst: "A last frame also requires a first frame.",
@@ -283,6 +304,13 @@ const SERVER_MESSAGES = {
     missingApiKeyAndVideoId: "API key and video id are required.",
   },
   ko: {
+    invalidCursor: "페이지 위치가 잘못되었습니다. 목록을 새로 고치세요.",
+    batchPreparing: "배치를 저장 중입니다. 완료될 때까지 기다려 주세요.",
+    schedulerFailed: "스케줄러가 중지되었습니다. 서비스 로그를 확인하고 다시 시작하세요.",
+    local_offline: "네트워크에 연결할 수 없습니다. 자동으로 재시도합니다.",
+    output_write_failed: "동영상을 저장할 수 없습니다. 디스크 공간과 권한을 확인하세요. 다운로드를 재시도합니다.",
+    outputDirectoryUnavailable: "출력 폴더에 쓸 수 없거나 안전한 파일 게시를 지원하지 않습니다. 다른 폴더를 선택하세요.",
+
     firstFrameRequired: "마지막 프레임에는 첫 프레임이 필요합니다.",
     unsupportedLastFrame: "이 모델은 마지막 프레임 이미지를 지원하지 않습니다.",
     lastFrameRequiresFirst: "마지막 프레임을 사용하려면 첫 프레임도 필요합니다.",

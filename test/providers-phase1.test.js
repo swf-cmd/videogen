@@ -10,7 +10,7 @@ const lanes = {
   dashscope: { provider: "dashscope", region: "beijing", baseUrl: "https://ws123.cn-beijing.maas.aliyuncs.com" },
   ark: { provider: "ark", region: "byteplus", baseUrl: "https://ark.ap-southeast.bytepluses.com/api/v3" },
 };
-const keys = { gemini: "AIza-test-secret", dashscope: "dashscope-test-secret", ark: "ark-test-secret" };
+const keys = { gemini: "AIza-test-secret-long", dashscope: "dashscope-test-secret", ark: "ark-test-secret-long" };
 const job = { model: "model-id", prompt: "A bird flies", params: { durationSeconds: 5, resolution: "720p", aspectRatio: "16:9", audio: true }, assets: [], remote: { id: "remote-1" } };
 const asset = { buffer: Buffer.from("offline-image-fixture"), mimeType: "image/png", filename: "first.png", width: 1280, height: 720 };
 function response(value, status = 200, headers = {}) { return new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json", ...headers } }); }

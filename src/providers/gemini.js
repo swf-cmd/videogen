@@ -51,7 +51,7 @@ async function pollFile(ctx, file, signal) {
   catch (error) { if (error.status === 404) return { status: "expired" }; error.category = classifyError(error); throw error; }
   if (data.name && data.name !== file.name) throw invalidFile("invalidProviderResponse", "transient");
   if (data.state === "PROCESSING") return { status: "running" };
-  if (data.state === "FAILED") return { status: "failed", error: { category: classifyError(data.error) === "moderation" ? "moderation" : "invalid_request", code: "assetProcessingFailed" } };
+  if (data.state === "FAILED") return { status: "failed", error: { category: classifyError(data.error) === "moderation" ? "moderation" : "invalid_request", code: ctx.redact(data.error?.code || "assetProcessingFailed"), message: ctx.redact(data.error?.message || "assetProcessingFailed") } };
   if (data.state !== "ACTIVE") throw invalidFile("invalidProviderResponse", "transient");
   const expiresAt = Number.isFinite(Date.parse(data.expirationTime)) ? data.expirationTime : undefined;
   if (expiresAt && Date.parse(expiresAt) <= Date.now()) return { status: "expired" };
@@ -76,7 +76,7 @@ async function readInteraction(ctx, response, remoteId) {
     let event;
     try { event = JSON.parse(raw); } catch { throw invalidFile("invalidProviderResponse", "transient"); }
     if (event.interaction_id && event.interaction_id !== remoteId || event.interaction?.id && event.interaction.id !== remoteId) throw invalidFile("invalidProviderResponse", "transient");
-    if (event.event_type === "error") throw new base.ProviderError("providerFailed", { code: ctx.redact(event.error?.code || "providerFailed"), category: classifyError(event.error) });
+    if (event.event_type === "error") throw new base.ProviderError(ctx.redact(event.error?.message || "providerFailed"), { code: ctx.redact(event.error?.code || "providerFailed"), category: classifyError(event.error) });
     const interaction = event.interaction || (event.event_type === "interaction.status_update" ? { status: event.status } : null);
     if (interaction) data = interaction;
     const file = videoFile(ctx, event) || videoFile(ctx, interaction);
@@ -190,7 +190,7 @@ module.exports = {
     if (["incomplete", "requires_action"].includes(data.status)) throw invalidFile("invalidProviderResponse", "transient");
     const status = base.normalizeStatus(data.status);
     if (status === "succeeded") throw invalidFile("geminiResultUriUnavailable", "transient");
-    return { status, ...(data.error ? { error: { category: classifyError(data.error), code: ctx.redact(data.error.code || "providerFailed") } } : {}) };
+    return { status, ...(data.error ? { error: { category: classifyError(data.error), code: ctx.redact(data.error.code || "providerFailed"), message: ctx.redact(data.error.message || "providerFailed") } } : {}) };
   },
   async download(ctx, job, result, { signal } = {}) {
     const file = fileResource(result.url, ctx.lane);

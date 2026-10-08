@@ -186,3 +186,36 @@ test("invalid imported audio is visibly distinct from inheritance and can be rep
   audio.value = "false"; audio.events.change();
   assert.equal(row.params.audio, false);
 });
+
+test("CSV bytes must decode as UTF-8 before imported rows replace the draft", async () => {
+  const { decodeCSV } = require("../public/import");
+  assert.equal(decodeCSV(new TextEncoder().encode("\uFEFFprompt\n树林、森、숲")), "prompt\n树林、森、숲");
+  for (const bytes of [[0xd6, 0xd0], [0x82, 0xa0], [0xb0, 0xa1], [0xff, 0xfe, 0x70, 0x00], [0x70, 0x00, 0x72, 0x00]]) {
+    assert.throws(() => decodeCSV(Uint8Array.from(bytes)), (error) => error.code === "csvEncoding");
+  }
+  const source = fs.readFileSync(path.join(__dirname, "../public/batch-editor.js"), "utf8");
+  const messages = [];
+  const BatchEditor = vm.runInNewContext(`${source}\nBatchEditor`, { BatchImport: require("../public/import"), t: (key) => key, formMessage: (message) => messages.push(message), document: { querySelector: () => ({ value: "" }) } });
+  const editor = Object.create(BatchEditor.prototype); editor.rows = [{ prompt: "Keep this draft" }];
+  const input = { value: "legacy.csv", files: [{ size: 2, arrayBuffer: async () => Uint8Array.from([0xd6, 0xd0]).buffer }] };
+  await editor.importCSV(input);
+  assert.deepEqual(editor.rows, [{ prompt: "Keep this draft" }]); assert.deepEqual(messages, ["csvEncoding"]); assert.equal(input.value, "");
+});
+
+test("retry obtains a current estimate and requires a paid-request confirmation", async () => {
+  const source = fs.readFileSync(path.join(__dirname, "../public/queue-view.js"), "utf8");
+  const calls = [], confirmations = []; let accepted = false;
+  const QueueView = vm.runInNewContext(`${source}\nQueueView`, {
+    apiRequest: async (endpoint, payload) => { calls.push({ endpoint, payload }); return { cost: { amount: 2.5, currency: "USD" } }; },
+    confirmAction: async (text) => { confirmations.push(text); return accepted; }, canRetryJob: () => true,
+    t: (key, values) => JSON.stringify({ key, ...values }), formatCost: (cost) => `${cost.amount} ${cost.currency}`,
+  });
+  const view = Object.create(QueueView.prototype); view.refresh = async () => {};
+  const job = { id: "retry-me", prompt: "Scene" };
+  await view.retryJob(job);
+  assert.deepEqual(calls.map((call) => call.endpoint), ["/api/jobs/retry-me/regenerate/estimate"]);
+  assert.match(confirmations[0], /2.5 USD/);
+  accepted = true; calls.length = 0; await view.retryJob(job);
+  assert.deepEqual(calls.map((call) => call.endpoint), ["/api/jobs/retry-me/regenerate/estimate", "/api/jobs/retry-me/retry"]);
+  assert.equal(calls[1].payload.confirmed, true);
+});

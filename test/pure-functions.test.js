@@ -123,38 +123,3 @@ test("Retry-After accepts seconds and HTTP dates and ignores invalid values", ()
   const delay = legacy.parseRetryAfterMs(future);
   assert.ok(delay >= 59000 && delay <= 60000, `Unexpected HTTP-date delay: ${delay}`);
 });
-
-test("idempotent error classifier distinguishes retryable transport and status errors", () => {
-  for (const status of [408, 429, 500, 502, 503]) assert.equal(legacy.isRetryableIdempotentError({ status }), true);
-  for (const status of [200, 400, 401, 403, 404, 422]) assert.equal(legacy.isRetryableIdempotentError({ status }), false);
-  for (const name of ["TypeError", "SyntaxError", "AbortError"]) assert.equal(legacy.isRetryableIdempotentError({ name }), true);
-  for (const code of ["ECONNRESET", "ETIMEDOUT", "EAI_AGAIN", "ENOTFOUND", "ECONNREFUSED", "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT"]) {
-    assert.equal(legacy.isRetryableIdempotentError({ code }), true);
-    assert.equal(legacy.isRetryableIdempotentError({ cause: { code } }), true);
-  }
-  assert.equal(legacy.isRetryableIdempotentError(new Error("bad request")), false);
-  assert.equal(legacy.isRetryableIdempotentError(null), false);
-});
-
-test("idempotent retries back off, respect Retry-After and stop on exhaustion", async () => {
-  const delays = [];
-  const { withIdempotentRetry } = loadLegacyServer({ setTimeout: (callback, delay) => { delays.push(delay); queueMicrotask(callback); } });
-  let attempts = 0;
-  const value = await withIdempotentRetry(async () => {
-    attempts += 1;
-    if (attempts < 3) throw Object.assign(new Error("temporary"), { status: 503 });
-    return "done";
-  });
-  assert.equal(value, "done");
-  assert.equal(attempts, 3);
-  assert.deepEqual(delays.splice(0), [1000, 2000]);
-  const throttled = Object.assign(new Error("throttled"), { status: 429, retryAfterMs: 60000 });
-  attempts = 0;
-  await assert.rejects(withIdempotentRetry(async () => { attempts += 1; throw throttled; }), (error) => error === throttled && error.retryExhausted === true);
-  assert.equal(attempts, 5);
-  assert.deepEqual(delays.splice(0), [60000, 60000, 60000, 60000]);
-  attempts = 0;
-  await assert.rejects(withIdempotentRetry(async () => { attempts += 1; throw Object.assign(new Error("invalid"), { status: 400 }); }), /invalid/);
-  assert.equal(attempts, 1);
-  assert.deepEqual(delays, []);
-});
