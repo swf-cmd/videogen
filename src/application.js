@@ -100,8 +100,7 @@ class Application {
       if (!["json", "multipart"].includes(payload.params.requestFormat)) throw new Error("invalidParams");
       params.requestFormat = payload.params.requestFormat;
     }
-    const cost = { ...adapter.estimateCost(model, params), catalogAsOf: provider.asOf };
-    return { provider, region, lane, model, adapter, params, cost };
+    return { provider, region, lane, model, adapter, params };
   }
 
   prompts(payload) {
