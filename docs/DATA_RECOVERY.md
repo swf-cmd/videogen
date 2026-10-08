@@ -1,7 +1,7 @@
 # Recovering an old damaged data directory
 
 A short API key in versions before 2.1.1 could replace parts of stored prompts,
-URLs, paths or IDs with `[REDACTED]`. Version 2.1.2 prevents further corruption
+URLs, paths or IDs with `[REDACTED]`. Version 2.1.4 prevents further corruption
 and offers an explicit offline quarantine tool. It cannot reconstruct the lost
 text or infer whether a provider accepted a request whose response is missing.
 

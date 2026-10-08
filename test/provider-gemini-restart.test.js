@@ -6,10 +6,50 @@ const path = require("node:path");
 const http = require("node:http");
 const { once } = require("node:events");
 const { spawn } = require("node:child_process");
+const { observeProcess } = require("./fixtures/process-observer.cjs");
+
+function workerMessage(output, state) {
+  // A pipe chunk is not a record: retain the unfinished final line until the
+  // next chunk arrives, even when it already includes the expected state.
+  const line = output.split("\n").slice(0, -1).find(value => value.includes(`"state":"${state}"`));
+  return line ? JSON.parse(line) : undefined;
+}
+
+test("worker status parsing waits for every fragment of a complete JSON line", () => {
+  const line = JSON.stringify({ state: "done", output: { path: "offline-video.mp4" }, attempts: { create: 1 } }) + "\n";
+  for (let end = 1; end < line.length; end += 1) assert.equal(workerMessage(line.slice(0, end), "done"), undefined);
+  assert.deepEqual(workerMessage(line, "done"), JSON.parse(line));
+  assert.equal(workerMessage('{"state":"saved"}\n' + line.slice(0, -1), "done"), undefined);
+});
+
+async function killWorker(observed) {
+  if (observed.exited()) throw new Error(`Worker exited before checkpoint SIGKILL; ${observed.diagnostics()}`);
+  assert.equal(observed.child.kill("SIGKILL"), true, observed.diagnostics());
+  await observed.waitForClose(5000);
+  const { exitCode, signalCode } = observed.child;
+  if (process.platform === "win32") assert.ok(signalCode === "SIGKILL" || Number.isInteger(exitCode) && exitCode !== 0, observed.diagnostics());
+  else { assert.equal(exitCode, null, observed.diagnostics()); assert.equal(signalCode, "SIGKILL", observed.diagnostics()); }
+}
+
+test("checkpoint shutdown rejects a worker that already closed after buffering its status", { timeout: 20000 }, async t => {
+  const child = spawn(process.execPath, ["-e", 'require("node:fs").writeSync(1, JSON.stringify({state:"saved",id:"v1_durable"})+"\\n");'], { stdio: ["ignore", "pipe", "pipe"] });
+  const observed = observeProcess(child, { label: "naturally exited checkpoint worker" });
+  t.after(() => observed.cleanup());
+  await observed.waitForClose(15000);
+  assert.equal(child.exitCode, 0, observed.diagnostics());
+  assert.equal(workerMessage(observed.stdout, "saved").id, "v1_durable");
+  // A late close waiter must finish, while natural exit must never count as the
+  // intentional crash even though the requested status remains in stdout.
+  await observed.waitForClose(1000);
+  await assert.rejects(killWorker(observed), /exited before checkpoint SIGKILL/);
+});
 
 const worker = `
 const { Application } = require('./src/application');
 const path = require('node:path');
+// This fixture has no HTTP listener. Scheduler polling timers are deliberately
+// unref'ed, so keep it alive until the parent performs the checkpoint SIGKILL.
+setInterval(() => {}, 1000);
 (async () => {
   const app = new Application({ directory: process.env.TEST_DIRECTORY });
   const lane = { provider: 'gemini', region: 'global', baseUrl: process.env.TEST_BASE_URL };
@@ -29,9 +69,11 @@ const path = require('node:path');
 })().catch(error => { console.error(error); process.exit(1); });
 `;
 
-test("Gemini survives process kills after interaction ID and Files URI fsync with exactly one create", { timeout: 20000 }, async (t) => {
+// Three 15s status waits, two 5s crash waits, and bounded startup/cleanup must
+// report their own phase failures before the outer test deadline.
+test("Gemini survives process kills after interaction ID and Files URI fsync with exactly one create", { timeout: 75000 }, async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "videogen-gemini-restart-"));
-  const children = new Set(), requests = [], bytes = Buffer.from("offline-video-original-bytes");
+  const children = new Set(), sockets = new Set(), requests = [], bytes = Buffer.from("offline-video-original-bytes");
   let ready = false, fileReady = false;
   const server = http.createServer(async (req, res) => {
     requests.push(`${req.method} ${req.url}`);
@@ -51,36 +93,47 @@ test("Gemini survives process kills after interaction ID and Files URI fsync wit
     if (req.url === "/v1beta/files/output-1:download?alt=media") { res.writeHead(200, { "content-type": "video/mp4" }); return res.end(bytes); }
     res.writeHead(404); res.end();
   });
-  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  server.on("connection", socket => { sockets.add(socket); socket.once("close", () => sockets.delete(socket)); });
   t.after(async () => {
-    for (const child of children) { const closed = once(child, "close"); child.kill("SIGKILL"); await closed; }
-    server.closeAllConnections(); await new Promise((resolve) => server.close(resolve));
-    fs.rmSync(directory, { recursive: true, force: true });
+    const results = await Promise.allSettled([...children].map(observed => observed.cleanup({ timeoutMs: 5000 })));
+    try {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`Gemini fixture server close deadline; ${JSON.stringify({ sockets: sockets.size, requests })}`)), 5000);
+        server.close(error => { clearTimeout(timer); error && error.code !== "ERR_SERVER_NOT_RUNNING" ? reject(error) : resolve(); });
+        server.closeAllConnections();
+        for (const socket of sockets) socket.destroy();
+      });
+    } catch (reason) { results.push({ status: "rejected", reason }); }
+    finally { fs.rmSync(directory, { recursive: true, force: true }); }
+    const failures = results.filter(result => result.status === "rejected").map(result => result.reason);
+    if (failures.length) throw new AggregateError(failures, "Gemini fixture cleanup failed");
   });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening", { signal: AbortSignal.timeout(5000) });
   function launch() {
     const child = spawn(process.execPath, ["-e", worker], { cwd: path.resolve(__dirname, ".."), env: { ...process.env, TEST_DIRECTORY: directory, TEST_BASE_URL: `http://127.0.0.1:${server.address().port}/v1beta` }, stdio: ["ignore", "pipe", "pipe"] });
-    children.add(child); child.once("close", () => children.delete(child));
-    let output = "", errors = "";
-    child.stdout.on("data", (chunk) => { output += chunk; }); child.stderr.on("data", (chunk) => { errors += chunk; });
-    return { child, async wait(state) {
-      const end = Date.now() + 10000;
-      while (Date.now() < end) {
-        const line = output.split("\n").find((value) => value.includes(`"state":"${state}"`));
-        if (line) return JSON.parse(line);
-        if (child.exitCode !== null || child.signalCode !== null) throw new Error(`Worker exited before ${state}: ${errors}`);
+    const observed = observeProcess(child, { label: `Gemini checkpoint worker ${children.size + 1}`, paths: [directory, path.resolve(__dirname, "..")], secrets: ["AIza-offline-test-key"] });
+    children.add(observed);
+    const diagnostics = () => observed.diagnostics({ requests });
+    return { observed, async wait(state) {
+      const end = performance.now() + 15000;
+      while (performance.now() < end) {
+        if (observed.exited()) throw new Error(`Worker exited before ${state}: ${diagnostics()}`);
+        const message = workerMessage(observed.stdout, state);
+        if (message) return message;
         await new Promise((resolve) => setTimeout(resolve, 15));
       }
-      throw new Error(`Timed out waiting for ${state}: ${errors}`);
+      throw new Error(`Timed out waiting for ${state}: ${diagnostics()}`);
     } };
   }
   const first = launch();
   assert.equal((await first.wait("saved")).id, "v1_durable");
-  const closed = once(first.child, "close"); first.child.kill("SIGKILL"); await closed;
+  await killWorker(first.observed);
   assert.match(fs.readFileSync(path.join(directory, "jobs.ndjson"), "utf8"), /"id":"v1_durable"/);
   ready = true;
   const second = launch();
   assert.match((await second.wait("file_saved")).pollingUrl, /\/files\/output-1$/);
-  const secondClosed = once(second.child, "close"); second.child.kill("SIGKILL"); await secondClosed;
+  await killWorker(second.observed);
   const replayRequests = requests.filter(value => value.includes("/interactions/v1_durable?stream=true")).length;
   fileReady = true;
   const third = launch(), done = await third.wait("done");

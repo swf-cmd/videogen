@@ -23,13 +23,18 @@ function sha256(bytes) {
   return crypto.createHash("sha256").update(bytes).digest("hex");
 }
 
-async function waitForBytes(filename) {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    const stats = await fsp.stat(filename).catch(() => null);
+async function waitForBytes(filename, writing) {
+  const deadline = performance.now() + 10000;
+  let failure, finished = false, stats;
+  writing.then(() => { finished = true; }, error => { failure = error; });
+  while (performance.now() < deadline) {
+    if (failure) throw failure;
+    stats = await fsp.stat(filename).catch(error => { if (error.code === "ENOENT") return null; throw error; });
     if (stats?.size) return;
-    await new Promise((resolve) => setTimeout(resolve, 2));
+    if (finished) throw new Error("Output completed before its held first chunk was observed");
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  throw new Error("Stream did not write its first chunk");
+  throw new Error(`Output first-chunk deadline exceeded: ${JSON.stringify({ exists: Boolean(stats), bytes: stats?.size || 0, finished })}`);
 }
 
 test("lane keys canonicalize endpoints and remain isolated without serializing secrets", () => {
@@ -128,26 +133,30 @@ test("output streams bytes into a private partial and publishes without replacin
     arrayBuffer() { throw new Error("Must not buffer video bodies"); },
   };
   let published;
+  const controller = new AbortController();
   const writing = writeOutput(response, target, {
     jobId: "stream-job",
+    signal: controller.signal,
     onPublished(info) {
       published = info;
       assert.equal(fs.existsSync(partial), true);
       assert.equal(fs.existsSync(info.path), true);
     },
   });
-  await waitForBytes(partial);
-  assert.deepEqual(await fsp.readFile(partial), first);
-  if (process.platform !== "win32") assert.equal((await fsp.stat(partial)).mode & 0o777, 0o600);
-  release();
-  const output = await writing;
-  const expected = Buffer.concat([first, last]);
-  assert.deepEqual(output, { path: path.join(directory, "clip (3).mp4"), bytes: expected.length, contentType: "video/mp4", sha256: sha256(expected) });
-  assert.equal(published, output);
-  assert.deepEqual(await fsp.readFile(output.path), expected);
-  assert.equal(await fsp.readFile(target, "utf8"), "existing");
-  assert.equal(await fsp.readFile(path.join(directory, "clip (2).mp4"), "utf8"), "also existing");
-  assert.equal((await fsp.readdir(directory)).some((name) => name.endsWith(".part")), false);
+  try {
+    await waitForBytes(partial, writing);
+    assert.deepEqual(await fsp.readFile(partial), first);
+    if (process.platform !== "win32") assert.equal((await fsp.stat(partial)).mode & 0o777, 0o600);
+    release();
+    const output = await writing;
+    const expected = Buffer.concat([first, last]);
+    assert.deepEqual(output, { path: path.join(directory, "clip (3).mp4"), bytes: expected.length, contentType: "video/mp4", sha256: sha256(expected) });
+    assert.equal(published, output);
+    assert.deepEqual(await fsp.readFile(output.path), expected);
+    assert.equal(await fsp.readFile(target, "utf8"), "existing");
+    assert.equal(await fsp.readFile(path.join(directory, "clip (2).mp4"), "utf8"), "also existing");
+    assert.equal((await fsp.readdir(directory)).some((name) => name.endsWith(".part")), false);
+  } finally { release(); controller.abort(); await writing.catch(() => {}); }
 });
 
 test("concurrent output publishers choose distinct names and retain every byte", async (t) => {
@@ -183,10 +192,12 @@ test("aborting an active stream removes its partial", async (t) => {
   const body = new Readable({ read() {} });
   const writing = writeOutput({ body }, target, { jobId: "abort-job", signal: controller.signal });
   body.push(Buffer.from("first chunk"));
-  await waitForBytes(`${target}.abort-job.part`);
-  controller.abort();
-  await assert.rejects(writing, { name: "AbortError" });
-  assert.deepEqual(await fsp.readdir(directory), []);
+  try {
+    await waitForBytes(`${target}.abort-job.part`, writing);
+    controller.abort();
+    await assert.rejects(writing, { name: "AbortError" });
+    assert.deepEqual(await fsp.readdir(directory), []);
+  } finally { controller.abort(); await writing.catch(() => {}); }
 });
 
 test("a published partial recovers after interruption before its job record was saved", async (t) => {

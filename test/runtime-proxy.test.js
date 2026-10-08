@@ -10,6 +10,7 @@ const { spawn } = require("node:child_process");
 const { once } = require("node:events");
 const { supportsRuntime, configureProxyEnvironment, proxyInfo, runtimeErrorMessage } = require("../src/runtime");
 const { createTlsFixture } = require("./helpers/tls-fixture");
+const { observeProcess } = require("./fixtures/process-observer.cjs");
 const root = path.resolve(__dirname, "..");
 const runtimePath = path.join(root, "src/runtime.js");
 
@@ -19,16 +20,19 @@ function cleanEnv(extra = {}) {
   return { ...env, ...extra };
 }
 function temporary(t) { const directory = fs.mkdtempSync(path.join(os.tmpdir(), "videogen-proxy-")); t.after(() => fs.rmSync(directory, { recursive: true, force: true })); return directory; }
-function run(args, env, cwd = root) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = ""; let stderr = "";
-    child.stdout.on("data", (value) => { stdout += value; }); child.stderr.on("data", (value) => { stderr += value; });
-    const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("Child timed out")); }, 5000);
-    child.once("error", (error) => { clearTimeout(timer); reject(error); });
-    child.once("exit", (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
-  });
+const fixtureSecrets = ["proxy-test-user", "proxy-test-password", "fake-user", "fake-pass", "smoke-user", "smoke-pass"];
+async function run(args, env, cwd = root) {
+  const child = spawn(process.execPath, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
+  const observed = observeProcess(child, { label: "proxy runtime probe", paths: [root, cwd], secrets: fixtureSecrets, processGroup: true });
+  let failure;
+  try {
+    // Includes OS/Node startup, a real CONNECT/TLS exchange and fetch teardown.
+    await observed.waitForClose(15000);
+    return { code: child.exitCode, stdout: observed.stdout, stderr: observed.stderr, diagnostics: observed.diagnostics() };
+  } catch (error) { failure = error; throw error; }
+  finally { await observed.cleanup({ primaryError: failure }); }
 }
+
 async function networkFixture(t) {
   const directory = temporary(t); const fixture = createTlsFixture();
   const certPath = path.join(directory, "public-ca.pem"); fs.writeFileSync(certPath, fixture.cert, { mode: 0o600 });
@@ -83,7 +87,7 @@ test("native fetch uses authenticated HTTPS CONNECT with flag or environment act
     const env = cleanEnv({ NODE_EXTRA_CA_CERTS: fixture.certPath, PROXY_TEST_URL: `https://provider.test:${fixture.originPort}/${mode}`, ...(mode === "http-fallback" ? { HTTP_PROXY: authenticated, NODE_USE_ENV_PROXY: "1" } : mode === "lowercase" ? { HTTPS_PROXY: "http://127.0.0.1:1", https_proxy: authenticated, NO_PROXY: "*", no_proxy: ".unmatched.example" } : { HTTPS_PROXY: authenticated }) });
     configureProxyEnvironment(env);
     const result = await run([...(mode === "http-fallback" ? [] : ["--use-env-proxy"]), "-e", childFetch], env);
-    assert.equal(result.code, 0, result.stderr); const data = JSON.parse(result.stdout);
+    assert.equal(result.code, 0, result.diagnostics); const data = JSON.parse(result.stdout);
     assert.equal(data.status, 200); assert.equal(data.body, `verified:/${mode}`); assert.equal(fixture.connects.length - start, 1);
     assert.ok(fixture.connects.at(-1).toLowerCase().includes(`proxy-authorization: basic ${Buffer.from("proxy-test-user:proxy-test-password").toString("base64").toLowerCase()}`));
     assert.equal(data.proxy.https, authenticated.replace("proxy-test-user:proxy-test-password", "[REDACTED]"));
@@ -95,7 +99,7 @@ test("native fetch honors a user NO_PROXY suffix and always bypasses localhost a
   const fixture = await networkFixture(t);
   for (const [host, bypass] of [["provider.test", ".test"], ["localhost", ".aliyuncs.com"], ["127.0.0.1", ".volces.com"]]) {
     const result = await run(["--use-env-proxy", "-e", childFetch], configureProxyEnvironment(cleanEnv({ HTTPS_PROXY: fixture.proxyUrl, NO_PROXY: bypass, NODE_EXTRA_CA_CERTS: fixture.certPath, PROXY_TEST_URL: `https://${host}:${fixture.originPort}/bypass` })));
-    assert.equal(result.code, 0, result.stderr); assert.equal(JSON.parse(result.stdout).body, "verified:/bypass"); assert.equal(fixture.connects.length, 0);
+    assert.equal(result.code, 0, result.diagnostics); assert.equal(JSON.parse(result.stdout).body, "verified:/bypass"); assert.equal(fixture.connects.length, 0);
   }
 });
 
@@ -108,7 +112,24 @@ test("invalid proxy credentials never appear in server startup stdout or stderr"
 });
 
 async function availablePort() { const server = net.createServer(); server.listen(0, "127.0.0.1"); await once(server, "listening"); const port = server.address().port; await new Promise((resolve) => server.close(resolve)); return port; }
-function getJson(port) { return new Promise((resolve, reject) => { const req = http.get({ host: "127.0.0.1", port, path: "/api/catalog", agent: false }, (res) => { let text = ""; res.on("data", (data) => { text += data; }); res.on("end", () => { try { resolve(JSON.parse(text)); } catch (error) { reject(error); } }); }); req.on("error", reject); }); }
+function getJson(port, diagnostics) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => req.destroy(new Error(`Local catalog deadline exceeded; ${diagnostics()}`)), 10000);
+    const finish = (error, value) => { clearTimeout(timer); error ? reject(error) : resolve(value); };
+    const req = http.get({ host: "127.0.0.1", port, path: "/api/catalog", agent: false }, res => {
+      let text = "";
+      res.on("data", data => { text += data; });
+      res.on("end", () => {
+        try { finish(null, JSON.parse(text)); }
+        catch { finish(new Error(`Invalid catalog response (${res.statusCode}); ${diagnostics()}`)); }
+      });
+      res.on("error", finish);
+      res.on("aborted", () => finish(new Error(`Catalog response aborted; ${diagnostics()}`)));
+    });
+    req.on("error", finish);
+  });
+}
+
 function launcherDirectory(directory) {
   fs.mkdirSync(directory, { recursive: true });
   fs.copyFileSync(path.join(root, "Start videogen.command"), path.join(directory, "Start videogen.command"));
@@ -123,7 +144,8 @@ function launcherDirectory(directory) {
 }
 async function smoke(t, kind, withProxy) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "videogen-proxy-start-")); const port = await availablePort(); let connects = 0;
-  const proxy = net.createServer((socket) => { connects += 1; socket.end("HTTP/1.1 502 Local request must bypass\r\n\r\n"); });
+  const proxySockets = new Set();
+  const proxy = net.createServer((socket) => { proxySockets.add(socket); socket.on("close", () => proxySockets.delete(socket)); socket.on("error", () => {}); connects += 1; socket.end("HTTP/1.1 502 Local request must bypass\r\n\r\n"); });
   proxy.listen(0, "127.0.0.1"); await once(proxy, "listening");
   const data = path.join(directory, "data");
   const env = cleanEnv({ PORT: String(port), VIDEOGEN_DATA_DIR: data, OPEN_BROWSER: "0", PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH || ""}`, ...(withProxy ? { HTTP_PROXY: `http://smoke-user:smoke-pass@127.0.0.1:${proxy.address().port}`, HTTPS_PROXY: `http://smoke-user:smoke-pass@127.0.0.1:${proxy.address().port}`, no_proxy: ".aliyuncs.com" } : {}) });
@@ -132,29 +154,49 @@ async function smoke(t, kind, withProxy) {
     const npm = [process.env.npm_execpath, path.join(path.dirname(process.execPath), "node_modules/npm/bin/npm-cli.js"), path.resolve(path.dirname(process.execPath), "../lib/node_modules/npm/bin/npm-cli.js"), ...String(process.env.PATH || "").split(path.delimiter).map((directory) => path.join(directory, "npm"))].filter(Boolean).find((filename) => fs.existsSync(filename));
     assert.ok(npm && fs.existsSync(npm), "npm CLI must accompany the supported runtime"); args = [fs.realpathSync(npm), "start", "--silent"];
   } else { command = "/bin/zsh"; cwd = launcherDirectory(path.join(directory, "app")); args = [path.join(cwd, "Start videogen.command")]; }
-  const child = spawn(command, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] }); let output = "";
-  child.stdout.on("data", (value) => { output += value; }); child.stderr.on("data", (value) => { output += value; }); child.stdin.on("error", () => {});
+  const child = spawn(command, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"], detached: process.platform !== "win32" });
+  const observed = observeProcess(child, { label: `${kind} proxy smoke`, paths: [directory, root], secrets: fixtureSecrets, processGroup: true });
+  child.stdin.on("error", () => {});
   t.after(async () => {
-    try { const lock = JSON.parse(fs.readFileSync(path.join(data, "lock"), "utf8")); if (lock.pid) process.kill(lock.pid, "SIGTERM"); } catch {}
-    child.stdin.end("\n"); if (child.exitCode === null && child.signalCode === null) { const exited = once(child, "exit"); const timer = setTimeout(() => child.kill("SIGKILL"), 2000); await exited; clearTimeout(timer); }
-    await new Promise((resolve) => proxy.close(resolve));
-    fs.rmSync(directory, { recursive: true, force: true });
+    let servicePid, failure;
+    try {
+      try { servicePid = JSON.parse(fs.readFileSync(path.join(data, "lock"), "utf8")).pid; } catch {}
+      if (servicePid) { try { process.kill(servicePid, "SIGTERM"); } catch (error) { if (error.code !== "ESRCH") throw error; } }
+      if (!observed.exited()) child.stdin.end("\n");
+      await observed.waitForClose(20000);
+    } catch (error) { failure = error; throw error; } finally {
+      try { await observed.cleanup({ pids: [servicePid], primaryError: failure }); }
+      finally {
+        for (const socket of proxySockets) socket.destroy();
+        await new Promise(resolve => proxy.close(resolve));
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
+    }
   });
-  let catalog;
-  for (let count = 0; count < 150; count += 1) { try { catalog = await getJson(port); break; } catch {} if (child.exitCode !== null) break; await new Promise((resolve) => setTimeout(resolve, 20)); }
-  assert.ok(catalog, output); assert.equal(catalog.proxy.enabled, withProxy); assert.ok(catalog.proxy.noProxy.includes("127.0.0.1")); assert.equal(connects, 0);
-  for (let index = 0; index < 50 && !/running at|Ready at/.test(output); index += 1) await new Promise(resolve => setTimeout(resolve, 20));
-  assert.match(output, /running at|Ready at/);
-  for (const value of ["smoke-user", "smoke-pass"]) assert.ok(!JSON.stringify(catalog).includes(value) && !output.includes(value));
+  // Readiness includes application initialization; do not poll an HTTP listener
+  // which may already exist while the service still returns startup HTTP 503.
+  await observed.ready(/(?:^|\n)(?:videogen running at|Ready at) /);
+  const catalog = await getJson(port, observed.diagnostics);
+  assert.ok(catalog, observed.diagnostics()); assert.equal(catalog.proxy.enabled, withProxy); assert.ok(catalog.proxy.noProxy.includes("127.0.0.1")); assert.equal(connects, 0);
+  for (const value of ["smoke-user", "smoke-pass"]) assert.ok(!JSON.stringify(catalog).includes(value) && !(observed.stdout + observed.stderr).includes(value));
+
 }
 
-for (const kind of ["npm", "launcher"]) for (const withProxy of [false, true]) test(`${kind} starts with ${withProxy ? "proxy" : "direct"} networking and local API bypass`, { skip: kind === "launcher" && process.platform !== "darwin" }, async (t) => smoke(t, kind, withProxy));
+for (const kind of ["npm", "launcher"]) for (const withProxy of [false, true]) test(`${kind} starts with ${withProxy ? "proxy" : "direct"} networking and local API bypass`, { skip: kind === "launcher" && process.platform !== "darwin", timeout: 55000 }, async (t) => smoke(t, kind, withProxy));
 
-test("launcher rejects invalid proxy configuration before native HTTP imports without exposing userinfo", { skip: process.platform !== "darwin" }, async (t) => {
+test("launcher rejects invalid proxy configuration before native HTTP imports without exposing userinfo", { skip: process.platform !== "darwin", timeout: 20000 }, async (t) => {
   const directory = launcherDirectory(path.join(temporary(t), "app"));
-  const child = spawn("/bin/zsh", [path.join(directory, "Start videogen.command")], { cwd: directory, env: cleanEnv({ HTTPS_PROXY: "http://fake-user:fake-pass@bad host", OPEN_BROWSER: "0", VIDEOGEN_LANGUAGE: "en" }), stdio: ["pipe", "pipe", "pipe"] });
-  let output = ""; child.stdout.on("data", (data) => { output += data; }); child.stderr.on("data", (data) => { output += data; }); child.stdin.end("\n");
-  const [code] = await once(child, "exit"); assert.equal(code, 1); assert.match(output, /Invalid proxy configuration/); for (const value of ["fake-user", "fake-pass"]) assert.ok(!output.includes(value));
+  const child = spawn("/bin/zsh", [path.join(directory, "Start videogen.command")], { cwd: directory, env: cleanEnv({ HTTPS_PROXY: "http://fake-user:fake-pass@bad host", OPEN_BROWSER: "0", VIDEOGEN_LANGUAGE: "en" }), stdio: ["pipe", "pipe", "pipe"], detached: true });
+  const observed = observeProcess(child, { label: "invalid proxy launcher", paths: [directory, root], secrets: fixtureSecrets, processGroup: true });
+  child.stdin.on("error", () => {}); child.stdin.end("\n");
+  let failure;
+  try {
+    await observed.waitForClose(15000);
+    const output = observed.stdout + observed.stderr;
+    assert.equal(child.exitCode, 1, observed.diagnostics()); assert.match(output, /Invalid proxy configuration/);
+    for (const value of ["fake-user", "fake-pass"]) assert.ok(!output.includes(value));
+  } catch (error) { failure = error; throw error; }
+  finally { await observed.cleanup({ primaryError: failure }); }
 });
 
 test("displayed proxy activation matches native NODE_OPTIONS and ordered CLI flag precedence", async (t) => {
@@ -162,20 +204,22 @@ test("displayed proxy activation matches native NODE_OPTIONS and ordered CLI fla
   for (const [options, flags, enabled] of [["--no-use-env-proxy", [], false], ["--no-use-env-proxy", ["--no-use-env-proxy", "--use-env-proxy"], true], ["--use-env-proxy", ["--use-env-proxy", "--no-use-env-proxy"], false]]) {
     const before = fixture.connects.length;
     const result = await run([...flags, "-e", childFetch], configureProxyEnvironment(cleanEnv({ HTTPS_PROXY: fixture.proxyUrl, NODE_USE_ENV_PROXY: "1", NODE_OPTIONS: options, NODE_EXTRA_CA_CERTS: fixture.certPath, PROXY_TEST_URL: `https://provider.test:${fixture.originPort}/flags` })));
-    assert.equal(result.code, 0, result.stderr); assert.equal(JSON.parse(result.stdout).proxy.enabled, enabled); assert.equal(fixture.connects.length - before, enabled ? 1 : 0);
+    assert.equal(result.code, 0, result.diagnostics); assert.equal(JSON.parse(result.stdout).proxy.enabled, enabled); assert.equal(fixture.connects.length - before, enabled ? 1 : 0);
   }
 });
 
-for (const guarded of [true, false]) test(`${guarded ? "guarded proxy bootstrap forwards signals" : "unflagged direct startup stays in one process"} and releases the data lock`, { skip: process.platform === "win32" }, async (t) => {
+for (const guarded of [true, false]) test(`${guarded ? "guarded proxy bootstrap forwards signals" : "unflagged direct startup stays in one process"} and releases the data lock`, { skip: process.platform === "win32", timeout: 50000 }, async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "videogen-runtime-signal-")); const port = await availablePort();
-  const child = spawn(process.execPath, [...(guarded ? ["--no-use-env-proxy"] : []), "server.js"], { cwd: root, env: cleanEnv({ PORT: String(port), VIDEOGEN_DATA_DIR: directory, HTTPS_PROXY: "http://127.0.0.1:1" }), stdio: ["ignore", "pipe", "pipe"] });
-  let output = ""; let servicePid; child.stdout.on("data", (data) => { output += data; }); child.stderr.on("data", (data) => { output += data; });
-  t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); if (servicePid && servicePid !== child.pid) { try { process.kill(servicePid, "SIGKILL"); } catch {} } fs.rmSync(directory, { recursive: true, force: true }); });
-  let catalog;
-  for (let count = 0; count < 150; count += 1) { try { catalog = await getJson(port); break; } catch {} if (child.exitCode !== null) break; await new Promise((resolve) => setTimeout(resolve, 20)); }
-  assert.ok(catalog, output); servicePid = JSON.parse(fs.readFileSync(path.join(directory, "lock"), "utf8")).pid;
+  const child = spawn(process.execPath, [...(guarded ? ["--no-use-env-proxy"] : []), "server.js"], { cwd: root, env: cleanEnv({ PORT: String(port), VIDEOGEN_DATA_DIR: directory, HTTPS_PROXY: "http://127.0.0.1:1" }), stdio: ["ignore", "pipe", "pipe"], detached: true });
+  const observed = observeProcess(child, { label: "proxy signal forwarding", paths: [directory, root], processGroup: true });
+  let servicePid;
+  t.after(async () => { try { await observed.cleanup({ pids: [servicePid] }); } finally { fs.rmSync(directory, { recursive: true, force: true }); } });
+  await observed.ready(/(?:^|\n)videogen running at /);
+  const catalog = await getJson(port, observed.diagnostics);
+  assert.ok(catalog, observed.diagnostics()); servicePid = JSON.parse(fs.readFileSync(path.join(directory, "lock"), "utf8")).pid;
   assert.equal(servicePid === child.pid, !guarded); assert.equal(catalog.proxy.enabled, guarded);
-  const exited = once(child, "exit"); const timer = setTimeout(() => child.kill("SIGKILL"), 3000); child.kill("SIGTERM"); const [code] = await exited; clearTimeout(timer);
-  assert.equal(code, 0, output); assert.equal(fs.existsSync(path.join(directory, "lock")), false);
+  const exited = observed.waitForClose(20000);
+  child.kill("SIGTERM"); await exited;
+  assert.equal(child.exitCode, 0, observed.diagnostics()); assert.equal(fs.existsSync(path.join(directory, "lock")), false);
   if (guarded) assert.throws(() => process.kill(servicePid, 0), { code: "ESRCH" });
 });

@@ -1,9 +1,9 @@
-# videogen v2.1.2 — Startup, recovery and queue synchronization
+# videogen v2.1.4 — Startup, recovery and queue synchronization
 
-This tag was not published after a CI fixture failure. Use [v2.1.4](RELEASE-v2.1.4.md), which includes these product fixes and the launcher-test correction.
+This maintenance release removes the Windows cold-start process query and makes recovery and queue maintenance more reliable. It includes the product fixes prepared for v2.1.2 and test improvements prepared for v2.1.3. Both earlier tags remain unchanged and unpublished after CI fixtures hit short startup/state deadlines.
 
-This maintenance release removes the Windows cold-start process query and makes recovery and queue maintenance more reliable.
-
+- Queue and HTTP integration tests wait for explicit states under bounded deadlines, report sanitized failure details and exercise deliberately delayed work while preserving duplicate-charge and output checks.
+- Launcher process tests wait for an actual ready event with a bounded deadline and cover deliberately delayed startup; shutdown and lock-release assertions remain strict.
 - Normal startup records its own process lifetime without launching PowerShell or ps. Existing-lock conflicts alone may query another process; unverifiable ownership remains locked with an explicit message.
 - Crash acceptance uses a realistic normal request timeout and explicit lost-response faults. Separate tests continue to verify that an accepted request with a missing response or a real timeout cannot be created again after restart. Duplicate-charge and untracked-job assertions remain strict.
 - An explicit offline recovery command creates a separate data directory, retains original evidence and quarantines identifiable damaged records. Known remote IDs remain available for tracking; uncertain work requires manual review. Missing journal records and other ambiguous corruption stop recovery.
@@ -13,8 +13,8 @@ This maintenance release removes the Windows cold-start process query and makes 
 
 ## Downloads and upgrade
 
-- `videogen-2.1.2-windows-x64.zip`
-- `videogen-2.1.2-macos-universal.zip` (Apple Silicon and Intel)
+- `videogen-2.1.4-windows-x64.zip`
+- `videogen-2.1.4-macos-universal.zip` (Apple Silicon and Intel)
 - Matching `.zip.sha256` files
 
 Both archives include official Node v24.21.0 LTS and license notices. Extract the entire archive. Stop the previous service, preserve its data/output directories and re-enter provider keys after upgrading. Existing output paths remain absolute.

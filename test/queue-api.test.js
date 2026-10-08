@@ -8,6 +8,7 @@ const net = require("node:net");
 const { spawn } = require("node:child_process");
 const { once } = require("node:events");
 const { JobStore } = require("../src/store/job-store");
+const { observeProcess } = require("./fixtures/process-observer.cjs");
 
 const root = path.resolve(__dirname, "..");
 const secret = "sk-or-offline-api-contract-secret-873";
@@ -21,9 +22,11 @@ async function availablePort() {
   return port;
 }
 
-function request(port, pathname, { method = "GET", payload, origin = true, chunks, headers = {} } = {}) {
+function request(port, pathname, { method = "GET", payload, origin = true, chunks, headers = {} } = {}, diagnostics = () => "") {
   return new Promise((resolve, reject) => {
     const body = payload === undefined ? undefined : JSON.stringify(payload);
+    const timer = setTimeout(() => req.destroy(new Error(`HTTP deadline: ${method} ${pathname}; ${diagnostics()}`)), 10000);
+    const finish = (error, result) => { clearTimeout(timer); error ? reject(error) : resolve(result); };
     const req = http.request({ hostname: "127.0.0.1", port, path: pathname, method, headers: {
       ...(origin ? { origin: `http://127.0.0.1:${port}` } : {}),
       ...(body !== undefined || chunks ? { "content-type": "application/json" } : {}),
@@ -36,40 +39,69 @@ function request(port, pathname, { method = "GET", payload, origin = true, chunk
         const text = Buffer.concat(parts).toString("utf8");
         let data;
         try { data = JSON.parse(text); } catch {}
-        resolve({ status: res.statusCode, headers: res.headers, text, data });
+        finish(null, { status: res.statusCode, headers: res.headers, text, data });
       });
-      res.on("error", reject);
+      res.on("error", finish);
+      res.on("aborted", () => finish(new Error(`HTTP response aborted: ${method} ${pathname}; ${diagnostics()}`)));
     });
-    req.on("error", reject);
-    req.setTimeout(5000, () => req.destroy(new Error(`HTTP timeout: ${method} ${pathname}`)));
+    req.on("error", finish);
     if (chunks) for (const chunk of chunks) req.write(chunk);
     req.end(body);
   });
 }
 
-async function openEvents(port, headers = {}) {
+async function openEvents(port, headers = {}, diagnostics = () => "") {
   return new Promise((resolve, reject) => {
+    let settled = false, status, text = "";
+    // Start before connecting: waiting for response headers must also be bounded.
+    const timer = setTimeout(() => fail("SSE initial event deadline exceeded"), 10000);
+    const fail = message => {
+      if (settled) return;
+      settled = true; clearTimeout(timer);
+      reject(new Error(`${message}; ${diagnostics({ status, eventReceived: Boolean(text) })}`));
+      req.destroy();
+    };
     const req = http.get({ hostname: "127.0.0.1", port, path: "/api/events", headers }, (res) => {
-      let text = "";
-      const timer = setTimeout(() => { req.destroy(); reject(new Error("SSE initial event timeout")); }, 3000);
+      status = res.statusCode;
       res.on("data", (part) => {
         text += part;
-        if (!text.includes("\n\n")) return;
-        clearTimeout(timer);
-        resolve({ status: res.statusCode, headers: res.headers, text, close: () => req.destroy() });
+        if (settled || !text.includes("\n\n")) return;
+        settled = true; clearTimeout(timer);
+        resolve({ status, headers: res.headers, text, close: () => req.destroy() });
       });
+      res.on("error", () => fail("SSE response error"));
+      res.on("aborted", () => fail("SSE response aborted"));
+      res.on("end", () => fail("SSE ended before the initial event"));
     });
-    req.on("error", reject);
+    req.on("error", error => fail(`SSE request failed (${error.code || "unknown"})`));
   });
 }
 
-async function waitUntil(read, predicate, message) {
-  for (let count = 0; count < 100; count += 1) {
-    const result = await read();
-    if (predicate(result)) return result;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  throw new Error(message);
+async function waitUntil(read, predicate, message, diagnostics) {
+  const deadline = Date.now() + 15000;
+  let last;
+  do {
+    last = await read();
+    if (predicate(last)) return last;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  } while (Date.now() < deadline);
+  throw new Error(`${message}; ${diagnostics({ last: last?.data, status: last?.status })}`);
+}
+
+async function stopServer(observed) {
+  if (!observed) return;
+  const child = observed.child;
+  let failure;
+  try {
+    if (!observed.exited()) {
+      if (child.connected) child.send({ type: "videogen:shutdown" }, () => {});
+      else child.kill("SIGTERM");
+    }
+    // The service may legitimately take up to 15 seconds to drain paid work.
+    await observed.waitForClose(20000);
+    assert.equal(child.exitCode, 0, observed.diagnostics());
+  } catch (error) { failure = error; throw error; }
+  finally { await observed.cleanup({ primaryError: failure }); }
 }
 
 async function harness(t) {
@@ -87,11 +119,12 @@ async function harness(t) {
   await once(provider, "listening");
   const port = await availablePort();
   const lane = { provider: "openrouter", region: "global", baseUrl: `http://127.0.0.1:${provider.address().port}/api/v1` };
-  let child;
+  let child, observed;
   let output = "";
   const responses = [];
-  const api = async (...args) => {
-    const result = await request(port, ...args);
+  const diagnostics = extra => observed?.diagnostics(extra) || "server not started";
+  const api = async (pathname, options) => {
+    const result = await request(port, pathname, options, diagnostics);
     responses.push(result.text);
     return result;
   };
@@ -99,42 +132,29 @@ async function harness(t) {
     child = spawn(process.execPath, ["server.js"], { cwd: root, env: {
       ...process.env, PORT: String(port), VIDEOGEN_DATA_DIR: dataDir,
       HTTP_PROXY: "", HTTPS_PROXY: "", ALL_PROXY: "", http_proxy: "", https_proxy: "", all_proxy: "", NO_PROXY: "*",
-    }, stdio: ["ignore", "pipe", "pipe"] });
-    let current = "";
-    child.stdout.on("data", (chunk) => { current += chunk; output += chunk; });
-    child.stderr.on("data", (chunk) => { current += chunk; output += chunk; });
-    await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => finish(new Error(`Startup timeout: ${current}`)), 5000);
-      const finish = (error) => { clearTimeout(timer); child.stdout.off("data", ready); child.off("exit", exited); child.off("error", failed); error ? reject(error) : resolve(); };
-      const ready = () => { if (current.includes(`http://127.0.0.1:${port}`)) finish(); };
-      const exited = () => finish(new Error(`Server exited before listening: ${current}`));
-      const failed = (error) => finish(error);
-      child.stdout.on("data", ready);
-      child.once("exit", exited);
-      child.once("error", failed);
-      ready();
-    });
+    }, stdio: ["ignore", "pipe", "pipe", "ipc"], detached: process.platform !== "win32" });
+    observed = observeProcess(child, { label: "queue API server", paths: [directory, root], secrets: [secret], processGroup: true });
+    child.stdout.on("data", chunk => { output += chunk; });
+    child.stderr.on("data", chunk => { output += chunk; });
+    // The real service sends readiness only after application startup finishes.
+    await observed.readyMessage("videogen:ready");
   }
-  async function stop() {
-    if (!child || child.exitCode !== null || child.signalCode !== null) return;
-    const exited = once(child, "exit");
-    child.kill("SIGTERM");
-    const timer = setTimeout(() => child.kill("SIGKILL"), 3000);
-    await exited;
-    clearTimeout(timer);
-  }
+
+  async function stop() { await stopServer(observed); }
   t.after(async () => {
-    await stop();
-    provider.closeAllConnections();
-    await new Promise((resolve) => provider.close(resolve));
-    fs.rmSync(directory, { recursive: true, force: true });
+    try { await stop(); } finally {
+      provider.closeAllConnections();
+      await new Promise(resolve => provider.close(resolve));
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
   await start();
   const payload = (prompt) => ({ ...lane, model: "alibaba/wan-3.0", prompt, params: { durationSeconds: 2, resolution: "480p", aspectRatio: "16:9", audio: false }, outputDir, filename: "api-contract" });
-  return { api, port, lane, payload, calls, start, stop, dataDir, responses, output: () => output };
+  return { api, port, lane, payload, calls, start, stop, dataDir, responses, diagnostics, output: () => output };
 }
 
-test("queue HTTP contracts preserve local security and keyless restart semantics", { timeout: 25000 }, async (t) => {
+// Three complete starts and drains must fit the outer budget as well as requests.
+test("queue HTTP contracts preserve local security and keyless restart semantics", { timeout: 120000 }, async (t) => {
   const app = await harness(t);
   let batch;
   let jobs;
@@ -177,7 +197,7 @@ test("queue HTTP contracts preserve local security and keyless restart semantics
     jobs = (await app.api(`/api/jobs?batch=${batch}`)).data.jobs;
     assert.equal(jobs.length, 3);
     assert.ok(jobs.every((job) => job.state === "queued" && job.attempts.create === 0));
-    const lanes = await waitUntil(() => app.api("/api/lanes"), (result) => result.data.lanes.some((lane) => lane.state === "needs_key"), "Missing needs_key lane");
+    const lanes = await waitUntil(() => app.api("/api/lanes"), (result) => result.data.lanes.some((lane) => lane.state === "needs_key"), "Missing needs_key lane", app.diagnostics);
     assert.ok(lanes.data.lanes.some((lane) => lane.state === "needs_key"));
     assert.equal((await app.api(`/api/batches/${batch}/pause`, { method: "POST", payload: {} })).status, 200);
     assert.equal((await app.api(`/api/batches/${batch}`)).data.state, "paused");
@@ -212,14 +232,15 @@ test("queue HTTP contracts preserve local security and keyless restart semantics
     assert.deepEqual((await app.api("/api/keys")).data, []);
     assert.equal((await app.api(`/api/batches/${batch}`)).data.state, "paused");
     assert.equal((await app.api(`/api/batches/${batch}/resume`, { method: "POST", payload: {} })).status, 200);
-    await waitUntil(() => app.api("/api/lanes"), (result) => result.data.lanes.some((lane) => lane.state === "needs_key"), "Restarted work did not wait for key");
+    await waitUntil(() => app.api("/api/lanes"), (result) => result.data.lanes.some((lane) => lane.state === "needs_key"), "Restarted work did not wait for key", app.diagnostics);
     jobs = (await app.api(`/api/jobs?batch=${batch}`)).data.jobs;
+    assert.equal(jobs.length, 3);
     assert.ok(jobs.every((job) => job.state === "queued" && job.attempts.create === 0));
     assert.equal(app.calls.length, 0);
   });
 
   await t.test("SSE exposes incremental metadata without CORS and honors replay cursors", async () => {
-    const initial = await openEvents(app.port);
+    const initial = await openEvents(app.port, {}, app.diagnostics);
     try {
       assert.equal(initial.status, 200);
       assert.match(initial.headers["content-type"], /^text\/event-stream/);
@@ -228,7 +249,7 @@ test("queue HTTP contracts preserve local security and keyless restart semantics
       assert.ok(!initial.text.includes("waiting-one"));
       const cursor = /^id: (\d+)$/m.exec(initial.text)[1];
       await app.api(`/api/batches/${batch}/pause`, { method: "POST", payload: {} });
-      const replay = await openEvents(app.port, { "last-event-id": cursor });
+      const replay = await openEvents(app.port, { "last-event-id": cursor }, app.diagnostics);
       try { assert.match(replay.text, /event: change/); assert.ok(Number(/^id: (\d+)$/m.exec(replay.text)[1]) > Number(cursor)); }
       finally { replay.close(); }
     } finally { initial.close(); }
@@ -247,6 +268,7 @@ test("queue HTTP contracts preserve local security and keyless restart semantics
   await t.test("batch cancellation affects only queued local work", async () => {
     assert.equal((await app.api(`/api/batches/${batch}/cancel`, { method: "POST", payload: {} })).status, 200);
     const cancelled = (await app.api(`/api/jobs?batch=${batch}`)).data.jobs;
+    assert.equal(cancelled.length, 3);
     assert.ok(cancelled.every((job) => job.state === "cancelled" && job.attempts.create === 0));
     assert.equal(app.calls.length, 0);
   });
@@ -286,4 +308,36 @@ test("queue HTTP contracts preserve local security and keyless restart semantics
   assert.ok(!app.output().includes(secret));
   assert.ok(app.responses.every((text) => !text.includes(secret)));
   assert.equal(app.calls.length, 0);
+});
+
+
+test("SSE initial-frame deadline covers missing response headers and rejects an early EOF", { timeout: 10000 }, async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let emptyResponse = false;
+  const server = http.createServer((req, res) => { if (emptyResponse) res.end(); });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  const received = once(server, "request");
+  const timedOut = assert.rejects(openEvents(server.address().port, {}, () => "safe process state"), /SSE initial event deadline exceeded; safe process state/);
+  await received;
+  t.mock.timers.tick(10000);
+  await timedOut;
+  emptyResponse = true;
+  await assert.rejects(openEvents(server.address().port, {}, () => "safe process state"), /SSE ended before the initial event/);
+});
+
+
+test("restart stopping rejects a service that already closed with an abnormal exit", async () => {
+  for (const exitCode of [0, 7]) {
+    let cleanups = 0;
+    const observed = { child: { exitCode }, closed: true, exited: () => true,
+      waitForClose: async () => {}, diagnostics: () => "closed service state",
+      cleanup: async () => { cleanups += 1; } };
+    if (exitCode === 0) await stopServer(observed);
+    else await assert.rejects(stopServer(observed), error => {
+      assert.equal(error.actual, 7); assert.equal(error.expected, 0);
+      assert.match(error.message, /closed service state/); return true;
+    });
+    assert.equal(cleanups, 1, "a failed stop still executes cleanup");
+  }
 });

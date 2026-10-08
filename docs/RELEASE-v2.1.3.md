@@ -1,5 +1,7 @@
 # videogen v2.1.3 — Startup, recovery and queue synchronization
 
+This tag was not published after a queue integration-test deadline failure. Use [v2.1.4](RELEASE-v2.1.4.md), which includes these fixes and the bounded-wait corrections.
+
 This maintenance release removes the Windows cold-start process query and makes recovery and queue maintenance more reliable. It includes the fixes prepared for v2.1.2, whose tag was retained but never published after an Intel CI startup-test timing failure.
 
 - Launcher process tests wait for an actual ready event with a bounded deadline and cover deliberately delayed startup; shutdown and lock-release assertions remain strict.
