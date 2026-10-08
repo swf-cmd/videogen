@@ -239,3 +239,23 @@ test("a budget pause still permits an already charged idempotent recovery withou
   f.scheduler.start(); await settle(); await f.clock.advance(1);
   assert.deepEqual(f.calls.create, ["one", "one"]); assert.equal(f.store.get("one").state, "running"); assert.equal(f.store.get("one").estimatedCharges, 1); assert.equal(f.store.get("two").state, "queued");
 });
+
+test("a failed batch flush never dispatches a paid create even if the disk immediately recovers", async (t) => {
+  const f = fixture(t); const first = f.add("template"); f.scheduler.setLane(first.laneId, { action: "pause" });
+  f.scheduler.start(); await settle();
+  const sync = fs.fsyncSync; let failures = 0;
+  fs.fsyncSync = (fd) => { if (fd === f.store.fd && failures++ === 0) throw Object.assign(new Error("one-shot fsync failure"), { code: "EIO" }); return sync(fd); };
+  try { assert.throws(() => f.store.addMany([{ ...first, id: "batch-one" }, { ...first, id: "batch-two" }]), { code: "EIO" }); }
+  finally { fs.fsyncSync = sync; }
+  f.scheduler.setLane(first.laneId, { action: "resume" }); await settle();
+  assert.equal(f.calls.create.length, 0); assert.equal(f.scheduler.laneList()[0].reason, "storeClosed");
+});
+
+test("a failed settings resume stops the scheduler so later events cannot activate the lane", async (t) => {
+  let fail = false;
+  const f = fixture(t, {}, { onSettings: () => { if (fail) throw Object.assign(new Error("settings disk failure"), { code: "ENOSPC" }); } });
+  const job = f.add("one"); f.scheduler.setLane(job.laneId, { action: "pause" }); f.scheduler.start(); await settle();
+  fail = true; assert.throws(() => f.scheduler.setLane(job.laneId, { action: "resume" }), { code: "ENOSPC" });
+  f.add("two"); await settle(); await f.clock.advance(60000);
+  assert.equal(f.calls.create.length, 0); assert.equal(f.scheduler.laneList()[0].state, "paused"); assert.equal(f.scheduler.laneList()[0].reason, "storeWriteFailed");
+});

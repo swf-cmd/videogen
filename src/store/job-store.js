@@ -210,28 +210,34 @@ class JobStore extends EventEmitter {
 
   compact() {
     if (this.fd === undefined || this.failed) throw storeError("storeClosed");
-    const target = path.join(this.directory, "jobs.snapshot.json");
-    const temporary = `${target}.tmp`;
-    const fd = fs.openSync(temporary, "w", 0o600);
     try {
-      fs.fchmodSync(fd, 0o600);
-      this.checkpoint("compact:opened");
-      writeAll(fd, JSON.stringify({ v: 1, seq: this.seq, jobs: [...this.jobs.values()], batches: [...this.batches.values()] }));
-      this.checkpoint("compact:written");
-      fs.fsyncSync(fd);
-      this.checkpoint("compact:fsynced");
-    } finally { fs.closeSync(fd); }
-    fs.renameSync(temporary, target);
-    this.checkpoint("compact:renamed");
-    syncDirectory(this.directory);
-    this.checkpoint("compact:directorySynced");
-    fs.ftruncateSync(this.fd, 0);
-    this.checkpoint("compact:truncated");
-    this.flush();
-    this.checkpoint("compact:logSynced");
+      const target = path.join(this.directory, "jobs.snapshot.json");
+      const temporary = `${target}.tmp`;
+      const fd = fs.openSync(temporary, "w", 0o600);
+      try {
+        fs.fchmodSync(fd, 0o600);
+        this.checkpoint("compact:opened");
+        writeAll(fd, JSON.stringify({ v: 1, seq: this.seq, jobs: [...this.jobs.values()], batches: [...this.batches.values()] }));
+        this.checkpoint("compact:written");
+        fs.fsyncSync(fd);
+        this.checkpoint("compact:fsynced");
+      } finally { fs.closeSync(fd); }
+      fs.renameSync(temporary, target);
+      this.checkpoint("compact:renamed");
+      syncDirectory(this.directory);
+      this.checkpoint("compact:directorySynced");
+      fs.ftruncateSync(this.fd, 0);
+      this.checkpoint("compact:truncated");
+      this.flush();
+      this.checkpoint("compact:logSynced");
+    } catch (error) { this.failed = true; throw error; }
   }
 
-  flush() { if (this.fd !== undefined) fs.fsyncSync(this.fd); }
+  flush() {
+    if (this.fd === undefined) return;
+    try { fs.fsyncSync(this.fd); }
+    catch (error) { this.failed = true; throw error; }
+  }
   releaseLock() { this.instanceLock?.release(); }
   close() {
     try {

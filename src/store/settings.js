@@ -27,6 +27,8 @@ function normalizeSettings(value) {
 function readSettings(directory) {
   const filename = path.join(directory, "settings.json");
   if (!fs.existsSync(filename)) return { lanes: {} };
+  if (!fs.lstatSync(filename).isFile()) throw new Error("invalidSettings");
+  fs.chmodSync(filename, 0o600);
   return normalizeSettings(JSON.parse(fs.readFileSync(filename, "utf8")));
 }
 

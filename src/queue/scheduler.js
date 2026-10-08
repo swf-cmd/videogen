@@ -149,7 +149,8 @@ class Scheduler extends EventEmitter {
 
   saveSettings(lane) {
     this.settings.lanes[lane.lane.id] = { lane: { ...lane.lane }, concurrency: lane.concurrency, paused: lane.paused };
-    this.onSettings(this.settings);
+    try { this.onSettings(this.settings); }
+    catch (error) { this.fatal(error); throw error; }
   }
 
   setLane(value, patch = {}) {
@@ -517,7 +518,8 @@ class Scheduler extends EventEmitter {
 
   fatal(error) {
     if (this.fatalError) return;
-    this.fatalError = { code: error.code || "storeWriteFailed", message: st("zh", error.code || "storeWriteFailed") };
+    const code = ["storeClosed", "invalidStore"].includes(error.code) ? error.code : "storeWriteFailed";
+    this.fatalError = { code, message: st("zh", code) };
     this.stopping = true;
     if (this.timer !== null) { this.clearTimer(this.timer); this.timer = null; }
     this.emit("fatal", this.fatalError);

@@ -297,3 +297,29 @@ test("50,000 queued jobs append with one batch flush and remain paginated after 
   assert.equal(store.jobs.size, 50000);
   assert.equal(store.get("large-49999").prompt, "large-49999");
 });
+
+test("one-shot batch flush failure poisons the store even when later disk calls succeed", (t) => {
+  const store = new JobStore(directory(t)); t.after(() => store.close());
+  const sync = fs.fsyncSync; let failed = false;
+  fs.fsyncSync = (fd) => { if (fd === store.fd && !failed) { failed = true; throw Object.assign(new Error("temporary disk failure"), { code: "EIO" }); } return sync(fd); };
+  try { assert.throws(() => store.addMany([job("one"), job("two")]), { code: "EIO" }); }
+  finally { fs.fsyncSync = sync; }
+  assert.equal(store.failed, true);
+  assert.throws(() => submit(store, "one"), { code: "storeClosed" });
+  assert.equal(store.get("one").state, "queued");
+});
+
+test("compaction disk failures at snapshot sync, directory sync and truncation fail closed", (t) => {
+  for (const phase of ["snapshot", "directory", "truncate"]) {
+    const dir = directory(t); const store = new JobStore(dir);
+    store.add(job("preserved")); const sync = fs.fsyncSync; const truncate = fs.ftruncateSync;
+    let syncs = 0;
+    fs.fsyncSync = (fd) => { syncs += 1; if ((phase === "snapshot" && syncs === 1) || (phase === "directory" && syncs === 2)) throw Object.assign(new Error("disk full"), { code: "ENOSPC" }); return sync(fd); };
+    fs.ftruncateSync = (fd, size) => { if (phase === "truncate") throw Object.assign(new Error("truncate failed"), { code: "EIO" }); return truncate(fd, size); };
+    try { assert.throws(() => store.compact()); }
+    finally { fs.fsyncSync = sync; fs.ftruncateSync = truncate; }
+    assert.equal(store.failed, true, phase);
+    assert.throws(() => submit(store, "preserved"), { code: "storeClosed" }); store.close();
+    const recovered = new JobStore(dir); assert.equal(recovered.get("preserved").state, "queued"); recovered.close();
+  }
+});
