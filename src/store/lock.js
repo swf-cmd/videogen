@@ -3,7 +3,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
 
-const PROCESS_IDENTITY = /^(linux|darwin|win32):1:[a-f0-9]{64}$/;
+const PROCESS_IDENTITY = /^(?:(?:linux|darwin):1|win32:[12]):[a-f0-9]{64}$/;
 let selfIdentity;
 
 function pidAlive(pid) {
@@ -41,14 +41,18 @@ function processIdentity(pid, { platform = process.platform, read = readSmallFil
       if (platform === "darwin") result = run("/bin/ps", ["-p", String(pid), "-o", "lstart="], options);
       else {
         const powershell = path.win32.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-        const query = `$ErrorActionPreference='Stop'; $p=Get-CimInstance -Query 'SELECT CreationDate FROM Win32_Process WHERE ProcessId=${pid}'; if ($null -eq $p) { exit 1 }; [Console]::Out.Write($p.CreationDate.ToUniversalTime().Ticks.ToString([Globalization.CultureInfo]::InvariantCulture))`;
+        // Process.StartTime reads the process handle directly. CIM initializes
+        // WMI infrastructure and can exceed the timeout on a cold Windows host.
+        const query = `$ErrorActionPreference='Stop'; $p=[System.Diagnostics.Process]::GetProcessById(${pid}); try { [Console]::Out.Write($p.StartTime.ToUniversalTime().Ticks.ToString([Globalization.CultureInfo]::InvariantCulture)) } finally { $p.Dispose() }`;
         result = run(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", query], options);
       }
       if (result.error || result.status !== 0 || typeof result.stdout !== "string") return null;
       start = result.stdout.trim().replace(/\s+/g, " ");
       if (platform === "darwin" ? !/^[A-Za-z]{3} [A-Za-z]{3} \d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/.test(start) : !/^\d{16,20}$/.test(start)) return null;
     } else return null;
-    return `${platform}:1:${digest(start)}`;
+    // Native StartTime preserves finer precision than CIM CreationDate. Never
+    // compare a v1 CIM value with v2 ticks and mistake a live owner for PID reuse.
+    return `${platform}:${platform === "win32" ? 2 : 1}:${digest(start)}`;
   } catch { return null; }
 }
 

@@ -13,13 +13,24 @@ function directory(t) {
   return value;
 }
 
-// Keep this a real OS lookup rather than a fixture: changes to ps/CIM/proc
+// Keep this a real OS lookup rather than a fixture: changes to ps/StartTime/proc
 // behavior should be caught on each platform in the native CI matrix.
 test("native process creation identity is present and stable across independent lookups", { timeout: 8000 }, () => {
-  const first = processIdentity(process.pid);
-  const second = processIdentity(process.pid);
-  assert.match(first || "", new RegExp(`^${process.platform}:1:[a-f0-9]{64}$`));
-  assert.equal(second, first);
+  const { spawnSync } = require("node:child_process");
+  const samples = [];
+  const run = (executable, args, options) => {
+    const started = Date.now();
+    const result = spawnSync(executable, args, options);
+    samples.push({ durationMs: Date.now() - started, status: result.status,
+      errorCode: /^[A-Z][A-Z0-9_]*$/.test(result.error?.code || "") ? result.error.code : result.error ? "UNKNOWN" : null });
+    return result;
+  };
+  const first = processIdentity(process.pid, { run });
+  const second = processIdentity(process.pid, { run });
+  // Diagnostics intentionally exclude stderr, command arguments and environment.
+  const evidence = JSON.stringify(samples);
+  assert.match(first || "", new RegExp(`^${process.platform}:${process.platform === "win32" ? 2 : 1}:[a-f0-9]{64}$`), evidence);
+  assert.equal(second, first, evidence);
   assert.equal(processIdentity(-1), null);
 });
 
@@ -93,10 +104,14 @@ test("platform identity probes are bounded and omit command-line or executable m
       assert.equal(options.windowsHide, true);
       assert.deepEqual(options.stdio, ["ignore", "pipe", "pipe"]);
       assert.doesNotMatch(args.join(" "), /commandline|executablepath|select \*/i);
+      if (platform === "win32") {
+        assert.match(args.join(" "), /System\.Diagnostics\.Process.*GetProcessById\(1234\)/);
+        assert.doesNotMatch(args.join(" "), /CimInstance|CreationDate/i);
+      }
       return { status: 0, stdout: platform === "darwin" ? "Thu Oct  8 16:00:00 2026\n" : "639112608000000000" };
     } });
     assert.equal(calls, 1);
-    assert.match(identity || "", new RegExp(`^${platform}:1:[a-f0-9]{64}$`));
+    assert.match(identity || "", new RegExp(`^${platform}:${platform === "win32" ? 2 : 1}:[a-f0-9]{64}$`));
     for (const result of [{ error: new Error("timed out") }, { status: 1, stdout: "error" }, { status: 0, stdout: "unrecognized" }]) {
       assert.equal(processIdentity(1234, { platform, run: () => result }), null);
     }
@@ -114,4 +129,10 @@ test("Linux identity uses boot ID and start ticks even when process names contai
   ticks = "123456"; boot = "55e7096e-4a22-400b-9204-c93a00cecf17";
   assert.notEqual(processIdentity(1234, { platform: "linux", read }), first);
   assert.equal(processIdentity(1234, { platform: "linux", read: () => { throw new Error("denied"); } }), null);
+});
+
+
+test("different Windows identity versions do not reclaim a live lock after changing query precision", () => {
+  const owner = { pid: process.pid, processIdentity: `win32:1:${"a".repeat(64)}` };
+  assert.equal(ownerAlive(owner, () => `win32:2:${"b".repeat(64)}`, () => true), true);
 });
