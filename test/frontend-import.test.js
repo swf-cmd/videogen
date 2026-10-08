@@ -281,3 +281,23 @@ test("image-folder import treats ordinary prompt braces literally and expands on
   assert.equal(editor.rows[0].prompt, "Film img1.png with {{missing}}"); assert.equal(editor.rows[0].templateMode, true);
   assert.equal(editor.rowErrors(editor.rows[0])[0].code, "templateMissing"); assert.throws(() => editor.validate(), /rowInvalid/);
 });
+
+test("image matching prefers exact case and accepts a unique folded full path, suffix or basename", () => {
+  const upper = { name: "Cafe\u0301.PNG", webkitRelativePath: "Photos/Scene/Cafe\u0301.PNG" };
+  const lower = { name: "café.png", webkitRelativePath: "Photos/Other/café.png" };
+  for (const name of ["photos/scene/café.png", "scene/café.png", "café.png"]) assert.equal(findImageFile(name, [upper]).file, upper, name);
+  assert.equal(findImageFile("café.png", [upper, lower]).file, lower, "an exact-case basename wins before case-insensitive fallback");
+  assert.equal(findImageFile("Café.PNG", [upper, lower]).file, upper);
+  assert.equal(findImageFile("Photos/Other/café.png", [upper, lower]).file, lower);
+  assert.equal(findImageFile("PHOTOS\\SCENE\\CAFÉ.png", [upper, lower]).file, upper);
+});
+
+test("case-folded image collisions stay ambiguous across path, suffix and basename candidates", () => {
+  const a = { name: "Frame.PNG", webkitRelativePath: "Photos/A/Frame.PNG" };
+  const b = { name: "frame.png", webkitRelativePath: "Photos/a/frame.png" };
+  for (const name of ["PHOTOS/A/FRAME.png", "A/FRAME.png", "FRAME.png"]) assert.equal(findImageFile(name, [a, b]).error, "imageAmbiguous", name);
+  const root = { name: "Frame.PNG", webkitRelativePath: "A/Frame.PNG" };
+  assert.equal(findImageFile("a/FRAME.png", [root, a]).error, "imageAmbiguous", "a folded complete path must not hide another valid suffix match");
+  assert.equal(findImageFile("Photos/A/Frame.PNG", [a, b]).file, a, "an explicitly cased full path still resolves safely");
+  assert.equal(findImageFile("missing.PNG", [a, b]).error, "imageMissing");
+});

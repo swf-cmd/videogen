@@ -43,6 +43,14 @@ class QueueView {
     this.stateFilter = "";
     this.refreshTimer = null;
     this.pagePending = new Set();
+    this.snapshotEpoch = 0;
+    this.streamConnected = false;
+    this.connectionSyncing = false;
+    this.lastEventSeq = 0;
+    this.jobSnapshotSeq = this.batchSnapshotSeq = 0;
+    this.jobEventFloor = this.batchEventFloor = 0;
+    this.jobEvents = new Map();
+    this.batchEvents = new Map();
     this.bindControls();
   }
 
@@ -119,12 +127,28 @@ class QueueView {
   }
 
   invalidateSnapshots(resetSequence = false) {
+    this.snapshotEpoch += 1;
     this.jobRevision += 1; this.batchRevision += 1; this.laneRevision += 1; this.galleryRevision += 1;
     // The old connection's requests must neither update the view nor block the
     // first snapshot of the new connection if an old response is slow.
     this.snapshotPromise = null;
     this.nextJobCursor = this.nextBatchCursor = null;
-    if (resetSequence) for (const job of this.jobs.values()) delete job._seq;
+    if (resetSequence) {
+      this.lastEventSeq = this.jobSnapshotSeq = this.batchSnapshotSeq = 0;
+      this.jobEventFloor = this.batchEventFloor = 0;
+      this.jobEvents.clear(); this.batchEvents.clear();
+      for (const job of this.jobs.values()) delete job._seq;
+    }
+  }
+
+  syncConnection(resetSequence = false) {
+    this.invalidateSnapshots(resetSequence);
+    this.streamConnected = true;
+    this.connectionSyncing = true;
+    setConnectionState("connectionSyncing");
+    clearTimeout(this.refreshTimer); this.refreshTimer = null;
+    // Reconnection and replay gaps must not wait for the normal event debounce.
+    return this.run(() => this.refresh());
   }
 
   async start() {
@@ -143,16 +167,15 @@ class QueueView {
     setConnectionState("connectionReconnecting");
     // Connect before taking snapshots so changes during the requests are replayed.
     const events = this.events = new EventSource("/api/events");
-    const active = (action) => (event) => { if (this.events === events) action(event); };
-    events.addEventListener("ready", active(() => { setConnectionState("ready"); this.scheduleRefresh(); }));
-    events.addEventListener("resync", active(() => { this.invalidateSnapshots(); this.scheduleRefresh(); }));
+    const active = (action) => (event) => { if (this.events === events) return action(event); };
+    events.addEventListener("ready", active(() => { if (!this.streamConnected) return this.syncConnection(true); }));
+    events.addEventListener("resync", active(() => this.syncConnection()));
     events.addEventListener("change", active((event) => this.applyEvent(JSON.parse(event.data))));
     events.onopen = active(() => {
       // A restarted service can begin a new event sequence at zero.
-      this.invalidateSnapshots(true);
-      setConnectionState("ready"); this.scheduleRefresh();
+      return this.syncConnection(true);
     });
-    events.onerror = active(() => { this.invalidateSnapshots(); setConnectionState("connectionReconnecting"); });
+    events.onerror = active(() => { this.streamConnected = false; this.invalidateSnapshots(); setConnectionState("connectionReconnecting"); });
     this.statusTimer = setInterval(() => { this.scheduleRefresh(); this.updateCooldowns(); }, 2000);
     this.countdownTimer = setInterval(() => this.updateCooldowns(), 1000);
     // Install cleanup and timers before a snapshot can fail.
@@ -162,6 +185,7 @@ class QueueView {
   suspendLiveUpdates() {
     const events = this.events;
     this.events = null;
+    this.streamConnected = this.connectionSyncing = false;
     events?.close();
     clearInterval(this.statusTimer); clearInterval(this.countdownTimer); clearTimeout(this.refreshTimer); clearTimeout(this.renderTimer);
     this.statusTimer = this.countdownTimer = this.refreshTimer = this.renderTimer = null;
@@ -178,12 +202,60 @@ class QueueView {
   }
 
   applyEvent(event) {
-    const current = this.jobs.get(event.jobId);
-    if (event.type === "job" && current) {
-      if ((current._seq || 0) < event.seq) this.jobs.set(event.jobId, { ...current, ...event, id: event.jobId, _seq: event.seq });
-      this.scheduleJobRender();
-    } else if (event.type === "delete") { this.jobs.delete(event.jobId); this.scheduleJobRender(); }
+    if (!Number.isSafeInteger(event.seq) || event.seq <= this.lastEventSeq) return;
+    this.lastEventSeq = event.seq;
+    const isJob = event.type === "job" || event.type === "delete";
+    const isBatch = event.type === "batch" || event.type === "delete_batch";
+    if (isJob || isBatch) {
+      const changes = isJob ? this.jobEvents : this.batchEvents;
+      const snapshotSeq = isJob ? this.jobSnapshotSeq : this.batchSnapshotSeq;
+      if (event.seq > snapshotSeq) {
+        const previous = changes.get(event.jobId);
+        changes.delete(event.jobId);
+        changes.set(event.jobId, { ...(previous?.type === event.type ? previous : {}), ...event });
+        if (changes.size > 2000) {
+          const [oldestId, oldest] = changes.entries().next().value;
+          changes.delete(oldestId);
+          // Bound memory while preserving safety: snapshots predating an evicted
+          // change can no longer be applied, especially for deleted tasks.
+          const floorKey = isJob ? "jobEventFloor" : "batchEventFloor";
+          this[floorKey] = Math.max(this[floorKey], oldest.seq);
+        }
+        if (isJob) {
+          const current = this.jobs.get(event.jobId);
+          if (event.type === "delete") this.jobs.delete(event.jobId);
+          else if (current && (current._seq || 0) < event.seq) {
+            const updated = { ...current, ...event, id: event.jobId, _seq: event.seq };
+            if (this.stateFilter && updated.state !== this.stateFilter) this.jobs.delete(event.jobId);
+            else this.jobs.set(event.jobId, updated);
+          }
+          this.scheduleJobRender();
+        } else {
+          this.batches = this.batches.flatMap((batch) => batch.id !== event.jobId ? [batch] : event.type === "delete_batch" ? [] : [{ ...batch, ...event, id: event.jobId }]);
+          this.renderBatches();
+        }
+      }
+    }
     this.scheduleRefresh();
+  }
+
+  mergeSnapshot(kind, rows, value) {
+    const seqKey = `${kind}SnapshotSeq`, changes = this[`${kind}Events`];
+    const seq = Number.isSafeInteger(value) ? value : this[seqKey];
+    if (seq < Math.max(this[seqKey], this[`${kind}EventFloor`])) { this.scheduleRefresh(); return null; }
+    const merged = rows.flatMap((row) => {
+      const event = changes.get(row.id);
+      if (!event || event.seq <= seq) return [{ ...row, _seq: seq }];
+      if (event.type === "delete" || event.type === "delete_batch") return [];
+      const updated = { ...row, ...event, id: row.id, _seq: event.seq };
+      if (kind === "job" && this.stateFilter && updated.state !== this.stateFilter) return [];
+      return [updated];
+    });
+    this[seqKey] = seq;
+    // Once acknowledged by a snapshot, a change can be dropped: any response
+    // with an older sequence is rejected above, including deleted-row snapshots.
+    for (const [id, event] of changes) if (event.seq <= seq) changes.delete(id);
+    return merged;
   }
 
   scheduleJobRender() {
@@ -196,9 +268,14 @@ class QueueView {
     // Slow snapshots are allowed to finish. New events request one later refresh
     // instead of starting requests that invalidate every response in flight.
     if (this.snapshotPromise) { this.scheduleRefresh(); return this.snapshotPromise; }
+    const epoch = this.snapshotEpoch;
     const snapshot = this.snapshotPromise = Promise.allSettled([this.loadJobs(), this.loadBatches(), this.loadLanes(), this.loadGallerySummary()]).then((results) => {
+      if (epoch !== this.snapshotEpoch) return false;
       const failure = results.find((result) => result.status === "rejected");
       if (failure) throw failure.reason;
+      if (results.some((result) => result.value === false)) { this.scheduleRefresh(); return false; }
+      if (this.streamConnected && this.connectionSyncing) { this.connectionSyncing = false; setConnectionState("ready"); }
+      return true;
     });
     try { await snapshot; }
     finally { if (this.snapshotPromise === snapshot) this.snapshotPromise = null; }
@@ -214,8 +291,7 @@ class QueueView {
     pending.promise = (async () => {
       const result = await apiRequest(`/api/${kind === "job" ? "jobs" : "batches"}?${query}`);
       if (revision !== this[revisionKey]) return false;
-      apply(result);
-      return true;
+      return apply(result) !== false;
     })();
     this[requestKey] = pending;
     try { return await pending.promise; }
@@ -228,10 +304,9 @@ class QueueView {
     if (this.batchFilter) query.set("batch", this.batchFilter);
     if (this.stateFilter) query.set("state", this.stateFilter);
     return this.loadPage("job", query, (result) => {
-      this.jobs = new Map(result.jobs.map((job) => {
-        const newer = this.jobs.get(job.id);
-        return [job.id, newer?._seq > result.seq ? newer : { ...job, _seq: result.seq }];
-      }));
+      const jobs = this.mergeSnapshot("job", result.jobs, result.seq);
+      if (!jobs) return false;
+      this.jobs = new Map(jobs.map((job) => [job.id, job]));
       this.nextJobCursor = result.nextCursor;
       this.renderJobs();
     });
@@ -241,7 +316,9 @@ class QueueView {
     const query = new URLSearchParams({ limit: "10" });
     if (this.batchCursors[this.batchPage]) query.set("cursor", this.batchCursors[this.batchPage]);
     return this.loadPage("batch", query, (result) => {
-      this.batches = result.batches;
+      const batches = this.mergeSnapshot("batch", result.batches, result.seq);
+      if (!batches) return false;
+      this.batches = batches;
       this.nextBatchCursor = result.nextCursor;
       this.renderBatches();
     });
@@ -250,11 +327,12 @@ class QueueView {
   async loadLanes() {
     const revision = ++this.laneRevision;
     const [result, keys] = await Promise.all([apiRequest("/api/lanes"), apiRequest("/api/keys")]);
-    if (revision !== this.laneRevision) return;
+    if (revision !== this.laneRevision) return false;
     this.lanes = result.lanes;
     this.keys = keys;
     this.renderLanes();
     updateSelectedKeyStatus();
+    return true;
   }
 
   resetJobs() { this.jobPage = 0; this.jobCursors = [null]; this.nextJobCursor = null; this.renderPagination("job"); this.run(() => Promise.all([this.loadJobs(), this.loadGallerySummary()])); }
@@ -452,8 +530,9 @@ class QueueView {
     const revision = ++this.galleryRevision;
     const query = this.batchFilter ? `?${new URLSearchParams({ batchId: this.batchFilter })}` : "";
     const result = await apiRequest(`/api/gallery/summary${query}`);
-    if (revision !== this.galleryRevision) return;
+    if (revision !== this.galleryRevision) return false;
     this.gallerySummary = result; this.renderGallerySummary();
+    return true;
   }
 
   renderGallerySummary() {

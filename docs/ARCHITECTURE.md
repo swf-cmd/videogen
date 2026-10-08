@@ -2,7 +2,7 @@
 
 ## Current and target system
 
-Version 2.1.1 is a local, zero-dependency, multi-provider render queue. The browser
+Version 2.1.2 is a local, zero-dependency, multi-provider render queue. The browser
 observes work owned by the service process. It replaces v1.0.2's monolithic
 OpenAI Videos/Batch server, where jobs lived only inside request handlers.
 
@@ -95,10 +95,15 @@ cover the durable queue and release artifacts.
   while eliminating the empty-lock crash window. Stale-lock takeover claims an
   immutable generation before deletion. Dead reclaimers have successor claims;
   contenders never race to unlink a shared claim. Canonical locks and reclaim
-  markers include a kernel-backed process creation identity, cached only for the
-  current process. A live PID with a verified different identity is stale; missing,
-  failed or incompatible identity checks remain locked. Legacy records can still
-  recover when their PID no longer exists. Native queries have a bounded timeout (two seconds on macOS, five seconds on Windows)
+  markers store a process-instance token, a UTC birth-time estimate from Node
+  uptime, and a cheap precise kernel identity when available (Linux). Creating
+  the normal lock never launches PowerShell or ps. Only an existing lock owned
+  by another live PID triggers an OS query. Exact compatible identities can
+  prove PID reuse; an approximate match within two seconds confirms ownership,
+  but a mismatch alone never authorizes takeover. Clock corrections, workers,
+  missing identities and failed queries remain conservative and explain the
+  uncertainty. Legacy records recover when their PID no longer exists. Conflict
+  queries have a bounded timeout (two seconds on macOS, five seconds on Windows)
   and bounded output, and neither request nor save command lines. Release checks
   the immutable file generation. Malformed or externally altered metadata fails closed. Data directories
   must support hard links; unsupported filesystems fail with an actionable startup
@@ -117,8 +122,12 @@ cover the durable queue and release artifacts.
   line is truncated and fsynced before new appends; complete corrupt records or
   sequence gaps stop startup instead of silently discarding work. This does not
   reconstruct strings damaged by older substring redaction; existing corrupted
-  prompts, endpoints or IDs require a known-good backup or explicit repair after
-  checking provider records. Paid work must not be silently requeued.
+  prompts, endpoints or IDs require a known-good backup or verified original
+  values. The explicit offline [quarantine recovery tool](DATA_RECOVERY.md) can
+  preserve source evidence and isolate attributable damaged records into a new
+  directory. It cannot reconstruct lost text or skip ambiguous journal gaps.
+  Recovered unpaid/uncertain work requires review; known remote jobs stay tracked.
+  Paid work must not be silently requeued.
 - Assets are validated and fsynced in unique private partials before publication.
   Existing content is checked by digest, MIME and dimensions. A corrupt regular
   file is repaired only from known incoming bytes with its expected hash; reads
@@ -157,12 +166,18 @@ cover the durable queue and release artifacts.
 - The expanded prompt text is bounded by the batch request byte budget to avoid
   unbounded allocation through a huge repeat count. There is no 50,000-job cap.
   Catalog refresh is an explicit POST; GET endpoints never contact providers.
-- Any failed journal flush, snapshot publication or settings write stops new
-  dispatch. A later successful disk call cannot make an uncertain in-memory
+- Busy snapshot/journal replacement (EPERM/EBUSY) defers compaction with a
+  one-to-thirty-second backoff while writes continue to the verified original
+  journal. A held temporary snapshot blocks generating another one until cleanup
+  succeeds. Non-transient maintenance failures, failed journal flushes, failed
+  journal reopening and settings write failures stop new dispatch. A later successful disk call cannot make an uncertain in-memory
   record safe to submit; the service must restart and replay durable state.
 - The browser connects SSE before fetching paginated snapshots. Durable sequence
   numbers preserve newer events over stale snapshots; request revisions discard
-  outdated pages and lane responses. Secrets are submitted separately from batch
+  outdated pages and lane responses. Reconnects start snapshots immediately;
+  ready is shown only after the current connection synchronizes. Bounded newer
+  job/batch events and deletion markers overlay older snapshots without starving
+  refreshes. Secrets are submitted separately from batch
   payloads, cleared from input fields and never included in native form fields.
   HTML confirmation dialogs preserve cost and duplicate-charge warnings without
   relying on browser-native modal behavior. Preview scripts never call the API.

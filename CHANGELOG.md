@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.1.2 — 2026-10-08
+
+- Remove PowerShell/ps from normal lock creation. Inspect foreign processes only on lock conflicts, tolerate approximate birth times conservatively, and explain unverifiable ownership.
+- Stabilize crash acceptance with a ten-second normal create timeout and explicit lost-response faults; retain separate timeout and duplicate-charge safety tests plus sanitized diagnostics for every failure phase.
+- Add explicit offline quarantine recovery into a new directory with original evidence retained, paid IDs preserved, uncertain creates requiring review, and ambiguous journal corruption rejected.
+- Defer Windows busy-file compaction with bounded background backoff while durable appends continue. Reopen only the same original journal and limit retained temporary snapshots.
+- Match image filenames case-insensitively only when unambiguous, preserving exact-match priority. Synchronize SSE reconnects immediately and overlay newer events and deletions over stale snapshots.
+
 ## 2.1.1 — 2026-10-08
 
 - Preserve prompts, paths, endpoints and IDs when local placeholder keys are used; rejected keys no longer enter the redaction registry. Scope substring redaction to provider-returned data and validated long keys.

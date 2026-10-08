@@ -60,3 +60,5 @@ npm run test:e2e
 テストはローカルの模擬サービスを使用し、有料 API を呼び出しません。Sora2App の旧 Batch / Files ジョブを他社サービスへ自動移行する機能はありません。旧動画とプロンプトをバックアップし、[移行ガイド](docs/MIGRATING_FROM_SORA.md) に従ってください。
 
 [MIT ライセンス](LICENSE) · [更新履歴](CHANGELOG.md) · [コントリビューション](CONTRIBUTING.md)
+
+旧バージョンの短いキーでデータが破損した場合は、[オフライン隔離復旧](docs/DATA_RECOVERY.md)を参照してください。

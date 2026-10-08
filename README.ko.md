@@ -60,3 +60,5 @@ npm run test:e2e
 테스트는 로컬 모의 서비스를 사용하며 유료 API를 호출하지 않습니다. 이전 Sora2App의 Batch / Files 작업을 다른 공급자로 자동 이전하지 않습니다. 기존 동영상과 프롬프트를 백업하고 [이전 안내](docs/MIGRATING_FROM_SORA.md)를 확인하세요.
 
 [MIT 라이선스](LICENSE) · [변경 기록](CHANGELOG.md) · [기여 안내](CONTRIBUTING.md)
+
+이전 버전의 짧은 키로 데이터가 손상된 경우 [오프라인 격리 복구](docs/DATA_RECOVERY.md)를 참고하세요.

@@ -49,6 +49,7 @@ class Application {
         this.settings = normalizeSettings(settings);
         writeJson(this.directory, "settings.json", this.settings);
       } });
+      this.store.on("maintenance", details => this.scheduler.log("warn", "store_compaction_deferred", details));
     } catch (error) { this.store.close(); throw error; }
     this.stopping = false;
     this.preparations = new Set();
