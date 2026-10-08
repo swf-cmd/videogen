@@ -14,7 +14,7 @@ const { parseBatchPrompts } = require("./http/handlers/prompts");
 const { dataDirectory, MAX_BATCH_BYTES } = require("./config");
 
 function adapters() {
-  return Object.fromEntries(["openai-compatible", "openrouter", "mock"].map((id) => [id, require(`./providers/${id}`)]));
+  return Object.fromEntries(["openai-compatible", "openrouter", "gemini", "dashscope", "ark", "mock"].map((id) => [id, require(`./providers/${id}`)]));
 }
 
 function pixelSize(params) {
@@ -98,6 +98,8 @@ class Application {
     model = structuredClone(model);
     if (model.pricingByRegion) model.pricing = model.pricingByRegion[region.id] ?? null;
     const adapter = this.adapters[provider.provider];
+    const laneError = adapter.validateLane?.(lane, model);
+    if (laneError) throw Object.assign(new Error(laneError), { code: laneError });
     const normalized = adapter.normalizeParams(model, payload.params || {});
     if (!normalized.ok) throw new Error("invalidParams");
     const params = normalized.value;

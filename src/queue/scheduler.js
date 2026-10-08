@@ -496,6 +496,9 @@ class Scheduler extends EventEmitter {
       if (payload.action === "resubmit") this.update(id, { state: "queued" }, { sync: true, manualResubmit: true });
       else if (payload.action === "attach_remote_id") {
         if (typeof payload.remoteId !== "string" || !payload.remoteId || payload.remoteId.length > 512 || /[\s\x00-\x1f\x7f]/.test(payload.remoteId)) throw actionError("invalidRemoteId");
+        if (redact(payload.remoteId) !== payload.remoteId) throw actionError("invalidRemoteId");
+        const remoteError = this.adapters[job.provider].validateRemoteId?.(payload.remoteId, job);
+        if (remoteError) throw actionError(remoteError);
         this.update(id, { state: "running", remote: { id: payload.remoteId, lastStatus: "running" }, error: null, startedAt: new Date(this.now()).toISOString() }, { sync: true });
       } else throw actionError("invalidParams");
       this.due.delete(id);

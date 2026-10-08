@@ -1,11 +1,36 @@
 const { parseRetryAfterMs } = require("./retry");
 
 /**
- * Adapters translate requests only; the caller owns persistence and scheduling.
- * create(ctx, job, {idempotencyKey, signal}) returns {remoteId, pollingUrl?, status}.
- * poll(ctx, job, {signal}) returns {status, progress?, result?, error?}.
- * Result is {url, needsAuth, contentType?, expiresAt?}; download returns a Response.
- * ctx.assets holds ephemeral {buffer, mimeType, filename} uploads, never credentials.
+ * Provider adapter contract. Adapters translate HTTP only; the caller owns disk,
+ * state transitions, retries and fsync barriers. Pure methods use catalog data.
+ *
+ * @typedef {Object} ProviderAdapter
+ * @property {string} id
+ * @property {string} displayNameKey Four-language UI translation key.
+ * @property {"async"|"blocking"} createMode
+ * @property {boolean} supportsIdempotencyKey True only with verified guarantees.
+ * @property {function(string): (string|null)} validateKey Error translation key.
+ * @property {function(Object, Object): {ok:boolean,value:Object,errors:Array}} normalizeParams
+ * @property {function(Object, Object): {amount:(number|null),currency:(string|null),basis:string}} estimateCost
+ * @property {function(Object, Object, Object): Promise<Array>} prepareAssets Safe before paid create.
+ * @property {function(Object, Object, Object): Promise<{remoteId:string,pollingUrl?:string,status?:string}>} create
+ * @property {function(Object, Object, Object): Promise<Object>} poll Normalized status, progress, result and error.
+ * @property {function(Object, Object, Object, Object): Promise<Response>} download Original bytes.
+ * @property {function(Object, string): string} classifyError Phase is prepare/create/poll/download.
+ * @property {function(Object, Object): Promise<unknown>} [cancel]
+ * @property {function(Object): Promise<Object>} [listModels]
+ * @property {function(Object): Promise<unknown>} [checkKey] Must never incur generation charges.
+ * @property {function(Object, Object): Promise<Array>} [reconcile] Candidates require manual association.
+ * @property {function(Object, Object): (string|null)} [validateLane]
+ * @property {function(string, Object): (string|null)} [validateRemoteId]
+ *
+ * ctx contains lane, key, fetch, log, catalog, assets and remoteAssets. assets are
+ * ephemeral {buffer,mimeType,filename,width,height}; remoteAssets are memory-only.
+ * fetch enforces origin-scoped credentials, timeouts and redaction. Call options
+ * contain signal and, for create, the local UUID as idempotencyKey. Once create
+ * has an ID it must return without another await, so the scheduler can fsync it.
+ * poll statuses are queued/running/succeeded/failed/cancelled/expired. Its result
+ * is {url,needsAuth,contentType?,expiresAt?}; polling and downloads never create.
  */
 class ProviderError extends Error {
   constructor(message, details = {}) {
@@ -51,6 +76,7 @@ function normalizeParams(model, params = {}) {
     } else value[key] = selected;
   }
   if (params.audio !== undefined && typeof params.audio !== "boolean") errors.push({ key: "audio", code: "invalidParameter" });
+  else if (caps.audioFixed === true && params.audio === false) errors.push({ key: "audio", code: "unsupportedParameter" });
   else if (params.audio === true && !caps.audio) errors.push({ key: "audio", code: "unsupportedParameter" });
   else value.audio = Boolean(caps.audio && (params.audio ?? true));
   if (params.seed !== undefined && params.seed !== "" && params.seed !== null) {
@@ -75,6 +101,13 @@ function estimateCost(model, params = {}) {
     const tokensPerSecond = formula?.tokensPerSecond?.[params.resolution];
     if (Number.isFinite(tokensPerSecond) && Number.isFinite(formula?.pricePerMillion)) {
       amount = Number(params.durationSeconds) * tokensPerSecond * formula.pricePerMillion / 1000000;
+    } else {
+      const dimensions = formula?.dimensions?.[params.resolution]?.[params.aspectRatio];
+      const price = formula?.pricePerMillionByResolution?.[params.resolution];
+      if (Array.isArray(dimensions) && dimensions.length === 2 && dimensions.every((value) => Number.isFinite(value) && value > 0)
+        && Number.isFinite(price) && Number.isFinite(formula.frameRate) && formula.frameRate > 0 && Number.isFinite(formula.pixelsPerToken) && formula.pixelsPerToken > 0) {
+        amount = Number(params.durationSeconds) * dimensions[0] * dimensions[1] * formula.frameRate / formula.pixelsPerToken * price / 1000000;
+      }
     }
   }
   if (rate === null || !Number.isFinite(amount) || amount < 0) return unknown;

@@ -5,6 +5,25 @@ function assert(condition, message) {
   if (!condition) throw new Error(`Invalid catalog: ${message}`);
 }
 
+function validatePricing(price) {
+  if (price === null) return;
+  const nonnegative = (value) => Number.isFinite(value) && value >= 0;
+  assert(price && /^[A-Z]{3}$/.test(price.currency) && ["second", "token", "video"].includes(price.unit), "pricing");
+  if (price.unit !== "token") {
+    assert(price.rates && Object.values(price.rates).every(nonnegative), "rates");
+    return;
+  }
+  const formula = price.formula;
+  assert(formula && typeof formula === "object", "token formula");
+  if (formula.tokensPerSecond) {
+    assert(nonnegative(formula.pricePerMillion) && Object.values(formula.tokensPerSecond).every(nonnegative), "tokensPerSecond");
+  } else {
+    assert(formula.pricePerMillionByResolution && Object.values(formula.pricePerMillionByResolution).every(nonnegative), "token prices");
+    assert(Number.isFinite(formula.frameRate) && formula.frameRate > 0 && Number.isFinite(formula.pixelsPerToken) && formula.pixelsPerToken > 0, "pixel token formula");
+    assert(formula.dimensions && Object.values(formula.dimensions).every((ratios) => ratios && typeof ratios === "object" && Object.values(ratios).every((size) => Array.isArray(size) && size.length === 2 && size.every((value) => Number.isInteger(value) && value > 0))), "token dimensions");
+  }
+}
+
 function validateCatalog(provider) {
   assert(provider && provider.schemaVersion === 1, "schemaVersion");
   assert(typeof provider.provider === "string" && /^[a-z][a-z0-9-]*$/.test(provider.provider), "provider");
@@ -30,19 +49,21 @@ function validateCatalog(provider) {
     assert(caps && Array.isArray(caps.durations) && caps.durations.length > 0 && caps.durations.every((value) => Number.isInteger(value) && value > 0), "durations");
     for (const key of ["resolutions", "aspectRatios"]) assert(Array.isArray(caps[key]) && caps[key].length > 0 && caps[key].every((value) => typeof value === "string" && value.length > 0), key);
     for (const key of ["firstFrame", "lastFrame", "audio"]) assert(typeof caps[key] === "boolean", key);
+    if (caps.audioFixed !== undefined) assert(typeof caps.audioFixed === "boolean" && (!caps.audioFixed || caps.audio), "audioFixed");
+    if (model.createMode !== undefined) assert(["async", "blocking"].includes(model.createMode), "createMode");
     assert(Number.isInteger(model.concurrencyDefault) && model.concurrencyDefault >= 1 && model.concurrencyDefault <= 1000, "concurrencyDefault");
     assert(Number.isFinite(model.pollIntervalSec) && model.pollIntervalSec > 0, "pollIntervalSec");
     assert(model.resultTtlHours === null || (Number.isFinite(model.resultTtlHours) && model.resultTtlHours > 0), "resultTtlHours");
     assert(Number.isFinite(model.typicalRenderSec) && model.typicalRenderSec > 0, "typicalRenderSec");
     if (model.rpm !== undefined) assert(Number.isFinite(model.rpm) && model.rpm > 0, "rpm");
     if (model.regions) assert(Array.isArray(model.regions) && model.regions.every((id) => regionIds.has(id)), "model regions");
-    if (model.pricing !== null) {
-      const price = model.pricing;
-      assert(price && /^[A-Z]{3}$/.test(price.currency) && ["second", "token", "video"].includes(price.unit), "pricing");
-      if (price.unit === "token") {
-        assert(price.formula && Number.isFinite(price.formula.pricePerMillion) && price.formula.pricePerMillion >= 0, "token formula");
-        assert(price.formula.tokensPerSecond && Object.values(price.formula.tokensPerSecond).every((value) => Number.isFinite(value) && value >= 0), "tokensPerSecond");
-      } else assert(price.rates && Object.values(price.rates).every((value) => Number.isFinite(value) && value >= 0), "rates");
+    validatePricing(model.pricing);
+    if (model.pricingByRegion !== undefined) {
+      assert(model.pricingByRegion && typeof model.pricingByRegion === "object" && !Array.isArray(model.pricingByRegion), "pricingByRegion");
+      for (const [region, pricing] of Object.entries(model.pricingByRegion)) {
+        assert(regionIds.has(region), "pricing region");
+        validatePricing(pricing);
+      }
     }
   }
   return provider;
@@ -78,15 +99,21 @@ function loadCatalog(dataDir, { directory = path.join(__dirname, "../../data/cat
   const cached = dataDir && path.join(dataDir, "openrouter-models.cache.json");
   if (cached && fs.existsSync(cached)) {
     try {
-      const saved = validateCatalog(JSON.parse(fs.readFileSync(cached, "utf8")).provider);
+      const saved = validateCatalog(JSON.parse(readLocal(cached)).provider);
       const index = providers.findIndex((provider) => provider.provider === "openrouter");
       if (saved.provider === "openrouter" && saved.models.length && index >= 0) providers[index] = saved;
     } catch { /* A cache failure falls back to the bundled snapshot. */ }
   }
   const local = dataDir && path.join(dataDir, "catalog.local.json");
-  const merged = mergeCatalog({ providers }, local && fs.existsSync(local) ? JSON.parse(fs.readFileSync(local, "utf8")) : null);
+  const merged = mergeCatalog({ providers }, local && fs.existsSync(local) ? JSON.parse(readLocal(local)) : null);
   merged.providers = merged.providers.filter((provider) => includeMock || provider.provider !== "mock");
   return merged;
+}
+
+function readLocal(filename) {
+  // Tighten local metadata permissions without chmod following a user symlink.
+  if (process.platform !== "win32" && fs.lstatSync(filename).isFile()) fs.chmodSync(filename, 0o600);
+  return fs.readFileSync(filename, "utf8");
 }
 
 function findModel(catalog, providerId, modelId, region) {

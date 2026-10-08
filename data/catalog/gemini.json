@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 1,
+  "provider": "gemini",
+  "asOf": "2026-10-08",
+  "sources": [
+    "https://ai.google.dev/gemini-api/docs/omni",
+    "https://ai.google.dev/api/files",
+    "https://ai.google.dev/gemini-api/docs/pricing",
+    "https://github.com/google-gemini/gemini-skills/blob/main/skills/gemini-omni-flash-api/scripts/video/generate_video.py"
+  ],
+  "regions": [
+    {
+      "id": "global",
+      "labelKey": "regionGlobal",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+      "keyFormatHint": "AIza",
+      "availabilityNoteKey": "geminiAvailability"
+    }
+  ],
+  "models": [
+    {
+      "id": "gemini-omni-1.1-flash",
+      "label": "Gemini Omni 1.1 Flash",
+      "verified": true,
+      "verifiedAt": "2026-10-08",
+      "sources": [
+        "https://ai.google.dev/gemini-api/docs/omni",
+        "https://ai.google.dev/api/files",
+        "https://ai.google.dev/gemini-api/docs/pricing",
+        "https://github.com/google-gemini/gemini-skills/blob/main/skills/gemini-omni-flash-api/scripts/video/generate_video.py"
+      ],
+      "capabilities": {
+        "durations": [
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10
+        ],
+        "resolutions": [
+          "720p",
+          "360p",
+          "1080p",
+          "4k"
+        ],
+        "aspectRatios": [
+          "16:9",
+          "9:16"
+        ],
+        "firstFrame": true,
+        "lastFrame": false,
+        "audio": true,
+        "seed": false,
+        "audioFixed": true
+      },
+      "pricing": {
+        "currency": "USD",
+        "unit": "token",
+        "formula": {
+          "pricePerMillion": 17.5,
+          "tokensPerSecond": {
+            "720p": 5792
+          }
+        },
+        "scope": "video-output-only"
+      },
+      "concurrencyDefault": 3,
+      "pollIntervalSec": 5,
+      "resultTtlHours": 48,
+      "typicalRenderSec": 360,
+      "createMode": "blocking",
+      "warningKey": "geminiBlockingWarning",
+      "pricingNoteKey": "geminiPartialPrice",
+      "manualRecoveryNoteKey": "geminiManualRecoveryNote"
+    }
+  ]
+}

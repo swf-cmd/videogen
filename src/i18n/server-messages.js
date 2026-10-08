@@ -1,6 +1,12 @@
 const SUPPORTED_LANGUAGES = new Set(["zh", "ja", "en", "ko"]);
 const SERVER_MESSAGES = {
   zh: {
+    workspaceRequired: "请填写此区域的百炼工作空间专属端点。",
+    regionMismatch: "端点与所选区域不匹配，请同时检查区域、端点和密钥。",
+    geminiFileIdRequired: "Gemini 手动关联需要 Files 资源 ID（files/…）或同源 Files 地址；仅凭 interaction ID 无法找回视频链接。",
+    geminiResultUriUnavailable: "Gemini 未返回可下载的 Files 地址。任务记录已保留，请检查供应商控制台。",
+    assetProcessingFailed: "供应商无法处理首帧素材，请检查图片后重新提交。",
+    unsafeProviderUrl: "已阻止不安全的供应商地址，避免泄露密钥。",
     manual_pause: "已手动暂停派发。",
     circuit_open: "连续多次出错，车道已暂停。请检查后恢复。",
     budget: "已达到估算预算上限，剩余任务暂停。",
@@ -77,6 +83,12 @@ const SERVER_MESSAGES = {
     missingApiKeyAndVideoId: "需要 API key 和 video id。",
   },
   ja: {
+    workspaceRequired: "この地域の専用ワークスペースエンドポイントを入力してください。",
+    regionMismatch: "エンドポイントと地域が一致しません。地域、URL、キーを確認してください。",
+    geminiFileIdRequired: "Gemini の手動関連付けには Files リソース ID（files/…）または同一ホストの Files URL が必要です。interaction ID のみでは復元できません。",
+    geminiResultUriUnavailable: "Gemini からダウンロード用 Files URL が返されませんでした。保存済み記録と管理画面を確認してください。",
+    assetProcessingFailed: "プロバイダーが先頭フレームを処理できません。画像を確認してください。",
+    unsafeProviderUrl: "キー漏えいを防ぐため安全でないプロバイダー URL を停止しました。",
     manual_pause: "送信を手動で一時停止しました。",
     circuit_open: "連続エラーにより停止しました。確認後に再開してください。",
     budget: "見積予算の上限に達したため残りのタスクを停止しました。",
@@ -153,6 +165,12 @@ const SERVER_MESSAGES = {
     missingApiKeyAndVideoId: "API key と video id が必要です。",
   },
   en: {
+    workspaceRequired: "Enter the workspace-specific Model Studio endpoint for this region.",
+    regionMismatch: "The endpoint does not match this region. Check the region, URL and key.",
+    geminiFileIdRequired: "Gemini manual recovery requires a Files resource ID (files/…) or same-origin Files URL. An interaction ID alone cannot recover the video link.",
+    geminiResultUriUnavailable: "Gemini returned no downloadable Files URL. The task record is preserved; check the provider console.",
+    assetProcessingFailed: "The provider could not process the first frame. Check the image before resubmitting.",
+    unsafeProviderUrl: "An unsafe provider URL was blocked to protect credentials.",
     manual_pause: "Dispatch is manually paused.",
     circuit_open: "The lane paused after repeated errors. Check it before resuming.",
     budget: "The estimated budget limit has paused remaining tasks.",
@@ -229,6 +247,12 @@ const SERVER_MESSAGES = {
     missingApiKeyAndVideoId: "API key and video id are required.",
   },
   ko: {
+    workspaceRequired: "이 지역의 Model Studio 워크스페이스 전용 엔드포인트를 입력하세요.",
+    regionMismatch: "엔드포인트가 선택한 지역과 일치하지 않습니다. 지역, URL, 키를 확인하세요.",
+    geminiFileIdRequired: "Gemini 수동 연결에는 Files 리소스 ID(files/…) 또는 같은 호스트의 Files URL이 필요합니다. interaction ID만으로는 영상 링크를 복구할 수 없습니다.",
+    geminiResultUriUnavailable: "Gemini가 다운로드 가능한 Files URL을 반환하지 않았습니다. 작업 기록은 보존되며 공급자 콘솔을 확인하세요.",
+    assetProcessingFailed: "공급자가 첫 프레임을 처리하지 못했습니다. 이미지를 확인한 후 다시 제출하세요.",
+    unsafeProviderUrl: "자격 증명 보호를 위해 안전하지 않은 공급자 URL을 차단했습니다.",
     manual_pause: "전송을 수동으로 일시 중지했습니다.",
     circuit_open: "연속 오류로 레인이 일시 중지되었습니다. 확인 후 재개하세요.",
     budget: "예상 예산 한도에 도달하여 나머지 작업을 일시 중지했습니다.",
