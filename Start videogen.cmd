@@ -10,13 +10,15 @@ set "NODE_BIN=%SOURCE_NODE%"
 :run
 if not exist "%~dp0server.js" goto missing
 "%NODE_BIN%" "%~dp0scripts\check-runtime.cjs"
-if errorlevel 1 exit /b 1
+set "VIDEOGEN_EXIT=%ERRORLEVEL%"
+if not "%VIDEOGEN_EXIT%"=="0" goto finish
 "%NODE_BIN%" --no-use-env-proxy "%~dp0scripts\launcher.cjs"
 set "VIDEOGEN_EXIT=%ERRORLEVEL%"
-if not "%VIDEOGEN_EXIT%"=="0" if not "%OPEN_BROWSER%"=="0" pause
-exit /b %VIDEOGEN_EXIT%
+goto finish
 :missing
 echo The app or Node runtime is missing. Extract the whole ZIP before starting.
 echo Source checkouts require Node 22.21+ (22.x) or 24.5+.
-if not "%OPEN_BROWSER%"=="0" pause
-exit /b 1
+set "VIDEOGEN_EXIT=1"
+:finish
+if not "%VIDEOGEN_EXIT%"=="0" if not "%VIDEOGEN_NO_PAUSE%"=="1" if not "%OPEN_BROWSER%"=="0" pause
+exit /b %VIDEOGEN_EXIT%

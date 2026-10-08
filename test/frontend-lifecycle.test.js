@@ -19,7 +19,7 @@ function harness({ preview = false, request = async () => ({ jobs: [], seq: 0 })
   }
   const QueueView = vm.runInNewContext(`${source}\nQueueView`, {
     window, EventSource, URLSearchParams, isFilePreview: preview, apiRequest: request,
-    setConnectionState: (state) => states.push(state),
+    setConnectionState: (state) => states.push(state), updateSelectedKeyStatus() {},
     setInterval: (callback) => { intervals.set(++timerId, callback); return timerId; }, clearInterval: (id) => intervals.delete(id),
     setTimeout: (callback) => { timeouts.set(++timerId, callback); return timerId; }, clearTimeout: (id) => timeouts.delete(id),
   });
@@ -139,5 +139,26 @@ test("SSE reconnection refreshes full job details even after the server resets i
   await app.view.loadJobs();
   assert.equal(app.view.jobs.get("one").state, "downloading");
   assert.equal(app.view.jobs.get("one").remote.id, "paid");
+  app.dispatch("pagehide");
+});
+
+test("disconnect and reconnect reject all old snapshots before and after fresh low-sequence responses", async () => {
+  const pending = [];
+  const app = harness({ request: (endpoint) => new Promise((resolve) => pending.push({ endpoint, resolve })) });
+  app.view.renderBatches = app.view.renderLanes = app.view.renderGallerySummary = () => {};
+  const initialize = app.view.start();
+  app.view.jobs.set("one", { id: "one", state: "succeeded", _seq: 900 });
+  app.view.batches = [{ id: "batch", state: "active" }]; app.view.lanes = [{ id: "lane", state: "active" }]; app.view.gallerySummary = { kept: 5 }; app.view.keys = [{ present: true }];
+  const respond = (requests, state, seq, kept, present) => requests.forEach(({ endpoint, resolve }) => resolve(endpoint.startsWith("/api/jobs?") ? { jobs: [{ id: "one", state }], seq, nextCursor: null } : endpoint.startsWith("/api/batches?") ? { batches: [{ id: "batch", state }], nextCursor: null } : endpoint === "/api/lanes" ? { lanes: [{ id: "lane", state }] } : endpoint === "/api/keys" ? [{ present }] : { kept }));
+  app.sources[0].onerror();
+  respond(pending.splice(0), "old-before-open", 800, 1, false); await initialize;
+  assert.equal(app.view.jobs.get("one").state, "succeeded"); assert.equal(app.view.batches[0].state, "active"); assert.equal(app.view.lanes[0].state, "active"); assert.equal(app.view.gallerySummary.kept, 5); assert.equal(app.view.keys[0].present, true);
+  const old = app.view.refresh(); const oldRequests = pending.splice(0);
+  app.sources[0].onopen();
+  const fresh = app.view.refresh(); const freshRequests = pending.splice(0);
+  assert.equal(freshRequests.length, 5, "a hanging old snapshot cannot hold the new connection's refresh hostage");
+  respond(freshRequests, "downloading", 1, 8, true); await fresh;
+  respond(oldRequests, "old-after-open", 850, 2, false); await old;
+  assert.equal(app.view.jobs.get("one").state, "downloading"); assert.equal(app.view.batches[0].state, "downloading"); assert.equal(app.view.lanes[0].state, "downloading"); assert.equal(app.view.gallerySummary.kept, 8); assert.equal(app.view.keys[0].present, true);
   app.dispatch("pagehide");
 });

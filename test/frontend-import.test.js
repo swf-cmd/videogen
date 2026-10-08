@@ -23,7 +23,7 @@ test("malformed CSV is rejected before replacing the editable task list", () => 
 });
 
 test("CSV templates use row values, preserve zero, and never evaluate or recursively expand input", () => {
-  const rows = rowsFromCSV('prompt,subject,durationSeconds,audio,seed,firstFrame,lastFrame\r\n"Film {{ subject }} at {{index}}",mountains,8,false,0,start.png,end.png\r\n,sea,6,1,-1,,', 'Explore {{subject}}');
+  const rows = rowsFromCSV('prompt,subject,durationSeconds,audio,seed,firstFrame,lastFrame\r\n"Film {{ subject }} at {{index}}",mountains,8,false,0,start.png,end.png\r\n,sea,6,1,-1,,', 'Explore {{subject}}', { templatePrompts: true });
   assert.equal(rows[0].prompt, "Film mountains at 1");
   assert.deepEqual(rows[0].params, { durationSeconds: 8, seed: 0, audio: false });
   assert.equal(rows[0].firstFrameName, "start.png");
@@ -31,13 +31,13 @@ test("CSV templates use row values, preserve zero, and never evaluate or recursi
   assert.equal(rows[1].prompt, "Explore sea");
   assert.equal(rows[1].params.audio, true);
   assert.deepEqual(renderTemplate("{{ x }} / {{index}} / {{missing}}", { x: "{{index}}", index: 0 }), { text: "{{index}} / 0 / {{missing}}", missing: ["missing"] });
-  const hostile = rowsFromCSV('prompt,__proto__,constructor\n"{{__proto__}} {{constructor}}",safe,text');
+  const hostile = rowsFromCSV('prompt,__proto__,constructor\n"{{__proto__}} {{constructor}}",safe,text', '', { templatePrompts: true });
   assert.equal(hostile[0].prompt, "safe text");
   assert.equal({}.polluted, undefined);
 });
 
 test("missing templates and invalid imported numbers/booleans remain row errors", () => {
-  const rows = rowsFromCSV('prompt,seconds,durationSeconds,audio\n"{{subject}}",8,nonsense,yes\n,,,');
+  const rows = rowsFromCSV('prompt,seconds,durationSeconds,audio\n"{{subject}}",8,nonsense,yes\n,,,', '', { templatePrompts: true });
   assert.equal(rows.length, 1);
   assert.deepEqual(rows[0].errors.map((error) => error.code), ["templateMissing", "csvNumber", "csvBoolean"]);
   assert.equal(rowsFromCSV('subject\na tree')[0].errors[0].code, "missingPrompt");
@@ -160,7 +160,7 @@ function renderDraft(row) {
 }
 
 test("editing a draft prompt keeps unresolved template errors until all remaining variables are replaced", () => {
-  const row = rowsFromCSV('prompt\n"A {{subject}}"')[0];
+  const row = rowsFromCSV('prompt\n"A {{subject}}"', '', { templatePrompts: true })[0];
   const { editor, elements } = renderDraft(row);
   const prompt = elements.find((item) => item.tag === "textarea");
   prompt.value = "A {{subject}}!"; prompt.events.input();
@@ -218,4 +218,51 @@ test("retry obtains a current estimate and requires a paid-request confirmation"
   accepted = true; calls.length = 0; await view.retryJob(job);
   assert.deepEqual(calls.map((call) => call.endpoint), ["/api/jobs/retry-me/regenerate/estimate", "/api/jobs/retry-me/retry"]);
   assert.equal(calls[1].payload.confirmed, true);
+});
+
+test("CSV imports semicolon-delimited Excel exports with case-insensitive known and template headers", () => {
+  const source = '\uFEFFsep=;\r\nPROMPT;Subject;DURATIONSECONDS;ASPECTRATIO;FIRSTFRAME;AUDIO\r\n"Film {{SUBJECT}}; then pan, slowly";forest;8;16:9;start.png;FALSE\r\n';
+  const row = rowsFromCSV(source, "", { templatePrompts: true })[0];
+  assert.equal(row.prompt, "Film forest; then pan, slowly");
+  assert.deepEqual(row.params, { aspectRatio: "16:9", durationSeconds: 8, audio: false }); assert.equal(row.firstFrameName, "start.png");
+  assert.equal(rowsFromCSV('Prompt;Filename\n"A forest; at dawn";forest')[0].filename, "forest");
+  assert.equal(rowsFromCSV('Prompt\nA literal; semicolon')[0].prompt, "A literal; semicolon", "single-column CSV must not infer a delimiter from prompt text");
+  assert.equal(rowsFromCSV('Prompt,Filename\n"A forest; at dawn",forest')[0].prompt, "A forest; at dawn");
+  assert.throws(() => parseCSV('Prompt;PROMPT\na;b'), (error) => error.code === "csvHeaders");
+});
+
+test("ordinary CSV preserves literal braces through validation and payload creation; template mode is explicit", () => {
+  const source = 'Prompt;Subject\n"Write {{x}} and {{subject}} literally";forest';
+  const row = rowsFromCSV(source)[0], { editor } = renderDraft(row);
+  assert.equal(row.prompt, "Write {{x}} and {{subject}} literally"); assert.equal(row.templateMode, false);
+  assert.deepEqual(Array.from(editor.rowErrors(row)), []); assert.doesNotThrow(() => editor.validate());
+  const BatchEditor = vm.runInNewContext(`${fs.readFileSync(path.join(__dirname, "../public/batch-editor.js"), "utf8")}\nBatchEditor`, { selectedInputReferenceFile: () => null });
+  assert.equal(BatchEditor.prototype.payloadRows.call(editor)[0].prompt, row.prompt);
+  const templated = rowsFromCSV(source, "", { templatePrompts: true })[0], templatedEditor = renderDraft(templated).editor;
+  assert.equal(templated.prompt, "Write {{x}} and forest literally");
+  assert.equal(templatedEditor.rowErrors(templated)[0].code, "templateMissing"); assert.throws(() => templatedEditor.validate(), /rowInvalid/);
+  const fallback = rowsFromCSV('Subject\nforest', 'Explore {{SUBJECT}}')[0]; assert.equal(fallback.prompt, "Explore forest"); assert.equal(fallback.templateMode, true);
+});
+
+test("folder matching normalizes NFC and NFD names while preserving duplicate-name ambiguity", () => {
+  const decomposed = { name: "cafe\u0301.png", webkitRelativePath: "photos/cafe\u0301.png" };
+  assert.equal(findImageFile("café.png", [decomposed]).file, decomposed);
+  assert.equal(findImageFile("photos/café.png", [decomposed]).file, decomposed);
+  const composed = { name: "café.png", webkitRelativePath: "other/café.png" };
+  assert.equal(findImageFile("café.png", [decomposed, composed]).error, "imageAmbiguous");
+  assert.equal(findImageFile("photos/café.png", [decomposed, composed]).file, decomposed);
+});
+
+test("folder imports keep manual first and last frames and naturally order newly generated tasks", () => {
+  const source = fs.readFileSync(path.join(__dirname, "../public/batch-editor.js"), "utf8");
+  const BatchEditor = vm.runInNewContext(`${source}\nBatchEditor`, { BatchImport: require("../public/import"), supportedInputReferenceTypes: new Set(["image/png"]), inputReferenceMimeType: (file) => file.type, document: { querySelector: () => ({ value: "Scene {{index}}: {{stem}}" }) }, promptInput: { value: "" }, t: (key) => key, formMessage() {} });
+  const editor = Object.create(BatchEditor.prototype); editor.activate = () => {};
+  const file = (name) => ({ name, type: "image/png", size: 10 });
+  const manualFirst = file("start.png"), manualLast = file("end.png"), oldAuto = file("auto.png"), newAuto = file("auto.png");
+  editor.rows = [{ prompt: "Retain edits", params: {}, firstFrame: manualFirst, firstFrameName: "start.png", firstFrameSource: "manual", lastFrame: manualLast, lastFrameName: "end.png", lastFrameSource: "manual" }, { prompt: "Relink automatic match", params: {}, firstFrame: oldAuto, firstFrameName: "auto.png", firstFrameSource: "folder" }];
+  editor.importFolder({ files: [file("start.png"), newAuto], value: "chosen" });
+  assert.equal(editor.rows.length, 2); assert.equal(editor.rows[0].prompt, "Retain edits"); assert.equal(editor.rows[0].firstFrame, manualFirst); assert.equal(editor.rows[0].lastFrame, manualLast); assert.equal(editor.rows[1].firstFrame, newAuto);
+  editor.rows = []; editor.importFolder({ files: [file("img10.png"), file("img2.png"), file("img1.png")], value: "chosen" });
+  assert.deepEqual(Array.from(editor.rows, (row) => row.prompt), ["Scene 1: img1", "Scene 2: img2", "Scene 3: img10"]);
+  assert.deepEqual(Array.from(editor.rows, (row) => row.firstFrame.name), ["img1.png", "img2.png", "img10.png"]);
 });

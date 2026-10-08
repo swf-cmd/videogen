@@ -2,7 +2,7 @@
 
 ## Current and target system
 
-Version 2.1.0 is a local, zero-dependency, multi-provider render queue. The browser
+Version 2.1.1 is a local, zero-dependency, multi-provider render queue. The browser
 observes work owned by the service process. It replaces v1.0.2's monolithic
 OpenAI Videos/Batch server, where jobs lived only inside request handlers.
 
@@ -94,8 +94,13 @@ cover the durable queue and release artifacts.
   exclusive hard-link publication as lock. This retains exclusive creation
   while eliminating the empty-lock crash window. Stale-lock takeover claims an
   immutable generation before deletion. Dead reclaimers have successor claims;
-  contenders never race to unlink a shared claim. Release checks ownership.
-  Malformed or externally altered owner metadata fails closed. Data directories
+  contenders never race to unlink a shared claim. Canonical locks and reclaim
+  markers include a kernel-backed process creation identity, cached only for the
+  current process. A live PID with a verified different identity is stale; missing,
+  failed or incompatible identity checks remain locked. Legacy records can still
+  recover when their PID no longer exists. Native queries have a two-second timeout
+  and bounded output, and neither request nor save command lines. Release checks
+  the immutable file generation. Malformed or externally altered metadata fails closed. Data directories
   must support hard links; unsupported filesystems fail with an actionable startup
   message instead of weakening exclusive locking.
 - Journals compact automatically after bounded growth. Version 2 snapshots use

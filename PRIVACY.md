@@ -1,6 +1,6 @@
 # Privacy notes
 
-videogen 2.1.0 runs locally. It has no telemetry, update checks, project-operated cloud service or npm runtime dependencies. The HTTP server listens only on `127.0.0.1`. Submitting work sends prompts, model parameters and optional first-frame images to the provider, region and endpoint you selected. Provider-side retention and account terms apply independently.
+videogen 2.1.1 runs locally. It has no telemetry, update checks, project-operated cloud service or npm runtime dependencies. The HTTP server listens only on `127.0.0.1`. Submitting work sends prompts, model parameters and optional first-frame images to the provider, region and endpoint you selected. Provider-side retention and account terms apply independently.
 
 ## Data saved on this computer
 
@@ -23,7 +23,7 @@ The default directory is `~/Library/Application Support/videogen/` on macOS, `${
 | `settings.json` | Nonsecret lane configuration |
 | `catalog.local.json` | Optional user model/region/pricing overrides |
 | `openrouter-models.cache.json` | Public model metadata from an explicit refresh |
-| `lock` | Process/instance information preventing concurrent dispatch from the same data directory |
+| `lock` | PID and a hashed process creation identity preventing concurrent dispatch from the same data directory; no command line or executable path |
 
 Directories use mode 0700 and data files 0600 where supported. These files are not encrypted by videogen. Other processes with the same account's access, operating-system backups and disk-recovery tools are outside this boundary. Result/recovery URLs may grant access to generated media while valid; treat the task store as private. Credentials entered through the key form are not persisted; user-authored text is preserved verbatim, including any secret the user places in a prompt.
 

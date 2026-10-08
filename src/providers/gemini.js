@@ -169,7 +169,7 @@ module.exports = {
     const file = video?.uri && ctx.redact(video.uri) === video.uri ? fileResource(video.uri, ctx.lane) : null;
     return { remoteId, ...(file ? { pollingUrl: file.metadataUrl } : {}), status: base.normalizeStatus(data.status, { phase: "create" }) };
   },
-  async poll(ctx, job, { signal } = {}) {
+  async poll(ctx, job, { signal, onRemote } = {}) {
     const file = fileResource(job.remote.pollingUrl || job.remote.id, ctx.lane);
     if (file) return pollFile(ctx, file, signal);
     if (!INTERACTION_ID.test(job.remote.id)) throw invalidFile("geminiFileIdRequired");
@@ -185,7 +185,14 @@ module.exports = {
       if (error.status === 404) return { status: "expired" };
       error.category = classifyError(error); throw error;
     }
-    if (result.file) return pollFile(ctx, result.file, signal);
+    if (result.file) {
+      // Persist the validated Files address before any further network await.
+      // A processing file or a failed metadata request must not send recovery
+      // back through the interaction stream on every subsequent poll.
+      const pollingUrl = result.file.metadataUrl;
+      onRemote?.({ pollingUrl });
+      return { ...await pollFile(ctx, result.file, signal), pollingUrl };
+    }
     const data = result.data;
     if (["incomplete", "requires_action"].includes(data.status)) throw invalidFile("invalidProviderResponse", "transient");
     const status = base.normalizeStatus(data.status);

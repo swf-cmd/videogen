@@ -192,3 +192,31 @@ test("a second launcher reports a localized lock error without advertising an un
     assert.doesNotMatch(result.stdout, /http:\/\//);
   } finally { lock.release(); fs.rmSync(directory, { recursive: true, force: true }); }
 });
+
+test("Windows source version failures pause visibly and preserve status, with noninteractive opt-outs", { skip: process.platform !== "win32", timeout: 20000 }, () => {
+  const { spawnSync } = require("node:child_process");
+  const root = path.resolve(__dirname, "..");
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "videogen source runtime failure "));
+  try {
+    fs.copyFileSync(path.join(root, "Start videogen.cmd"), path.join(directory, "Start videogen.cmd"));
+    fs.writeFileSync(path.join(directory, "server.js"), "");
+    fs.mkdirSync(path.join(directory, "scripts"));
+    fs.writeFileSync(path.join(directory, "scripts/check-runtime.cjs"), 'console.error("synthetic unsupported Node version");process.exit(37);');
+    fs.writeFileSync(path.join(directory, "scripts/launcher.cjs"), 'require("node:fs").writeFileSync("unexpected-launch", "1");');
+    const systemRoot = process.env.SystemRoot || "C:\\Windows";
+    for (const [mode, overrides] of [["interactive", {}], ["noninteractive", { VIDEOGEN_NO_PAUSE: "1" }], ["smoke", { OPEN_BROWSER: "0" }]]) {
+      const env = { ...process.env, PATH: `${path.dirname(process.execPath)};${path.join(systemRoot, "System32")}`, OPEN_BROWSER: "1", VIDEOGEN_NO_PAUSE: "0", ...overrides };
+      delete env.SOURCE_NODE;
+      const result = spawnSync(process.env.ComSpec || path.join(systemRoot, "System32/cmd.exe"), ["/d", "/s", "/c", `""${path.join(directory, "Start videogen.cmd")}""`], {
+        cwd: directory, env, input: "\r\n", encoding: "utf8", timeout: 5000, windowsVerbatimArguments: true,
+      });
+      assert.ifError(result.error);
+      assert.equal(result.status, 37, `${mode}: ${result.stdout}\n${result.stderr}`);
+      assert.match(result.stderr, /synthetic unsupported Node version/);
+      // The pause prompt is localized by cmd.exe; any additional stdout proves
+      // it was displayed without depending on the machine's display language.
+      assert.equal(Boolean(result.stdout.trim()), mode === "interactive", mode);
+      assert.equal(fs.existsSync(path.join(directory, "unexpected-launch")), false);
+    }
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});

@@ -1,6 +1,7 @@
 const crypto = require("node:crypto");
 
 const knownSecrets = new Set();
+const proxyCredentials = new Set();
 const sensitiveFields = new Set([
   "authorization", "proxyauthorization", "xgoogapikey", "xapikey", "apikey",
   "accesstoken", "refreshtoken", "clientsecret", "password",
@@ -105,12 +106,34 @@ for (const name of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "htt
   try {
     const url = new URL(process.env[name]);
     for (const value of [url.username, url.password]) {
-      rememberSecret(value);
-      rememberSecret(decodeURIComponent(value));
+      for (const credential of [value, decodeURIComponent(value)]) {
+        rememberSecret(credential);
+        if (credential) proxyCredentials.add(credential);
+      }
     }
   } catch {
     // Missing or malformed proxy settings have nothing to redact here.
   }
+}
+
+// Short proxy credentials are only matched as complete tokens in diagnostic
+// text. They must never affect prompts, remote IDs, URLs, or error categories.
+function redactDiagnostics(value) {
+  function visit(item, diagnostic = false) {
+    if (typeof item === "string" && diagnostic) {
+      for (const credential of [...proxyCredentials].sort((a, b) => b.length - a.length)) {
+        const escaped = credential.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        item = item.replace(new RegExp(`(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, "gu"), "[REDACTED]");
+      }
+      return item;
+    }
+    if (!item || typeof item !== "object") return item;
+    if (Array.isArray(item)) return item.map(entry => visit(entry, diagnostic));
+    return Object.fromEntries(Object.entries(item).map(([name, entry]) => [name,
+      visit(entry, diagnostic || ["message", "providerMessage", "providerCode", "details"].includes(name)),
+    ]));
+  }
+  return visit(redact(value), typeof value === "string");
 }
 
 // Only diagnostic/provider-owned content receives substring redaction. User
@@ -123,9 +146,9 @@ function sanitizeRecord(value, seen = new WeakSet()) {
     if (Array.isArray(value)) return value.map(item => sanitizeRecord(item, seen));
     return Object.fromEntries(Object.entries(value).map(([name, item]) => [name,
       sensitiveFields.has(name.toLowerCase().replace(/[-_\s]/g, "")) ? "[REDACTED]"
-        : ["error", "details", "message", "providerMessage"].includes(name) ? redact(item)
+        : ["error", "details", "message", "providerMessage"].includes(name) ? redactDiagnostics(item)
         : sanitizeRecord(item, seen),
     ]));
   } finally { seen.delete(value); }
 }
-module.exports = { normalizeLane, KeyStore, rememberSecret, redact, sanitizeRecord };
+module.exports = { normalizeLane, KeyStore, rememberSecret, redact, redactDiagnostics, sanitizeRecord };

@@ -12,10 +12,12 @@ async function startServer() {
   const { PORT } = require("./src/config");
   const { Application } = require("./src/application");
   const { configureApplication, handleRequest, localizedError } = require("./src/http/router");
-  const { normalizeLanguage } = require("./src/i18n/server-messages");
+  const { normalizeLanguage, languageFromRequest, st } = require("./src/i18n/server-messages");
   const language = normalizeLanguage(String(process.env.VIDEOGEN_LANGUAGE || process.env.LC_ALL || process.env.LC_MESSAGES || process.env.LANG || "en").slice(0, 2).toLowerCase());
   const report = (error) => {
-    if (error?.syscall === "link" && ["ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EPERM"].includes(error.code)) {
+    if (error?.code === "dataRecoveryRequired") {
+      console.error(st(language, error.code, { directory: error.directory }));
+    } else if (error?.syscall === "link" && ["ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EPERM"].includes(error.code)) {
       const messages = {
         en: "The data directory must allow hard links (exFAT is unsupported). Choose a writable directory on a local system disk with VIDEOGEN_DATA_DIR.",
         zh: "数据目录必须允许硬链接（不支持 exFAT）。请通过 VIDEOGEN_DATA_DIR 选择本地系统磁盘上的可写目录。",
@@ -29,7 +31,7 @@ async function startServer() {
   const server = http.createServer((req, res) => {
     if (ready) return handleRequest(req, res);
     res.writeHead(503, { "content-type": "application/json; charset=utf-8", "retry-after": "1", "X-Frame-Options": "DENY", "Content-Security-Policy": "frame-ancestors 'none'" });
-    res.end(JSON.stringify({ error: { code: "serviceStarting" } }));
+    res.end(JSON.stringify({ error: localizedError({ code: "serviceStarting" }, languageFromRequest(req)) }));
   });
   async function shutdown(code = 0) {
     if (closing) return;

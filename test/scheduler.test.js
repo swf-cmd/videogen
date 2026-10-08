@@ -434,3 +434,63 @@ test("fatal health blocks retry and resume authorizations while allowing review 
   await f.scheduler.jobAction("review", "resolve", { action: "abandon" });
   assert.equal(f.store.get("review").state, "cancelled");
 });
+
+test("unchanged running polls write one request checkpoint and restore its next dispatch time after restart", async (t) => {
+  const f = fixture(t, { async poll(ctx, job) { f.calls.poll.push(job.attempts.poll); return { status: "running", progress: 50 }; } });
+  const job = f.add("paid", "a", { state: "running", remote: { id: "paid-remote", lastStatus: "running" }, progress: 50,
+    modelConfig: { concurrencyDefault: 1, pollIntervalSec: 10 }, startedAt: new Date(f.clock.now()).toISOString() });
+  const before = f.store.seq;
+  f.scheduler.start(); await settle();
+  assert.equal(f.store.seq - before, 1, "unchanged status/progress needs no second journal record");
+  assert.deepEqual(f.calls.poll, [1]);
+  const nextPollAt = f.store.get(job.id).nextPollAt;
+  assert.equal(Date.parse(nextPollAt), f.clock.now() + 10000);
+  await f.scheduler.close(0); f.store.close();
+  const store = new JobStore(f.directory);
+  const scheduler = new Scheduler({ store, keys: f.keys, adapters: { mock: f.adapter }, context: () => ({}), now: f.clock.now,
+    random: () => 0.5, setTimer: f.clock.setTimer, clearTimer: f.clock.clearTimer, logger: { warn() {}, error() {} } });
+  t.after(async () => { await scheduler.close(0); store.close(); });
+  scheduler.keysChanged(job); scheduler.start(); await settle();
+  assert.deepEqual(f.calls.poll, [1], "restoring credentials must not ignore persisted cadence");
+  await f.clock.advance(9999); assert.deepEqual(f.calls.poll, [1]);
+  await f.clock.advance(1); assert.deepEqual(f.calls.poll, [1, 2]);
+  assert.equal(store.get(job.id).attempts.poll, 2);
+});
+
+test("poll request counts exclude context failures and unchanged responses still clear prior errors", async (t) => {
+  let badContext = true;
+  const f = fixture(t, { async poll(ctx, job) { f.calls.poll.push(job.id); return { status: "running", progress: 50 }; } }, {
+    context: () => { if (badContext) throw Object.assign(new Error("context not available"), { category: "transient" }); return {}; },
+  });
+  f.add("paid", "a", { state: "running", remote: { id: "paid-remote", lastStatus: "running" }, progress: 50 });
+  f.scheduler.start(); await settle();
+  assert.equal(f.store.get("paid").attempts.poll, 0);
+  assert.equal(f.calls.poll.length, 0);
+  assert.ok(f.store.get("paid").error);
+  badContext = false; await f.clock.advance(1100);
+  assert.equal(f.store.get("paid").attempts.poll, 1);
+  assert.equal(f.store.get("paid").error, null);
+  assert.equal(f.calls.poll.length, 1);
+});
+
+test("a processing Files URL is durably saved before the provider continues and survives a metadata failure", async (t) => {
+  const pollingUrl = "https://a.example/v1/files/result";
+  const f = fixture(t, { async poll(ctx, job, { onRemote }) {
+    f.calls.poll.push(job.remote.pollingUrl || "interaction");
+    if (!job.remote.pollingUrl) {
+      onRemote({ pollingUrl });
+      const journal = fs.readFileSync(path.join(f.directory, "jobs.ndjson"), "utf8");
+      assert.ok(journal.includes(pollingUrl), "remote metadata is written before the next provider await");
+      throw Object.assign(new Error("metadata temporarily unavailable"), { category: "transient" });
+    }
+    return success;
+  } });
+  f.add("paid", "a", { state: "running", remote: { id: "interaction", lastStatus: "running" } });
+  f.scheduler.start(); await settle();
+  assert.equal(f.store.get("paid").remote.pollingUrl, pollingUrl);
+  await f.clock.advance(1100);
+  assert.deepEqual(f.calls.poll, ["interaction", pollingUrl]);
+  assert.equal(f.store.get("paid").state, "succeeded");
+  assert.equal(f.store.get("paid").nextPollAt, null);
+  assert.equal(f.calls.create.length, 0);
+});

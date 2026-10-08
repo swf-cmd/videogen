@@ -10,7 +10,7 @@ A local AI video batch studio: per-shot frames, CSV imports, gallery selection, 
 
 The recording uses local fixtures with no paid generation. The short preview is a synthetic playback test, **not an AI-generated quality sample**. Real provider samples are deferred until a user authorizes paid generation or supplies publishable clips.
 
-**Sora is retired.** Version **2.1.0** builds on the persistent queue introduced in 2.0.0, which replaces Sora2App's discontinued integration with a persistent queue. Jobs continue when you close the browser, and survive service restarts. The old OpenAI Batch workflow and discount are gone.
+**Sora is retired.** Version **2.1.1** builds on the persistent queue introduced in 2.0.0, which replaces Sora2App's discontinued integration with a persistent queue. Jobs continue when you close the browser, and survive service restarts. The old OpenAI Batch workflow and discount are gone.
 
 ## Start
 

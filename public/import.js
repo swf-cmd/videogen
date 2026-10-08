@@ -9,8 +9,25 @@
       return text;
     } catch { throw failure("csvEncoding"); }
   }
+  const csvHeaders = new Map(["prompt", "model", "provider", "region", "baseUrl", "filename", "resolution", "aspectRatio", "requestFormat", "durationSeconds", "seed", "audio", "firstFrame", "lastFrame"].map((key) => [key.toLowerCase(), key]));
+  function canonicalHeader(value) { const key = String(value).trim().normalize("NFC").toLowerCase(); return csvHeaders.get(key) || key; }
+  function csvDelimiter(text) {
+    let quoted = false, commas = 0, semicolons = 0, started = false;
+    for (let index = 0; index < text.length; index += 1) {
+      const char = text[index];
+      if (!/\s/.test(char)) started = true;
+      if (char === '"') { if (quoted && text[index + 1] === '"') index += 1; else quoted = !quoted; }
+      else if (!quoted && (char === "\r" || char === "\n")) { if (started) break; }
+      else if (!quoted && char === ",") commas += 1;
+      else if (!quoted && char === ";") semicolons += 1;
+    }
+    return semicolons > commas ? ";" : ",";
+  }
   function parseCSV(source) {
-    const text = String(source).replace(/^\uFEFF/, "");
+    let text = String(source).replace(/^\uFEFF/, "");
+    const directive = /^sep=([,;])\r?\n/i.exec(text);
+    if (directive) text = text.slice(directive[0].length);
+    const delimiter = directive?.[1] || csvDelimiter(text);
     const records = []; let record = [], field = "", quoted = false, closed = false;
     const endField = () => { record.push(field); field = ""; closed = false; };
     const endRecord = () => { endField(); if (record.some((value) => value.trim())) records.push(record); record = []; };
@@ -19,7 +36,7 @@
       if (quoted) {
         if (char === '"') { if (text[i + 1] === '"') { field += '"'; i += 1; } else { quoted = false; closed = true; } }
         else field += char;
-      } else if (char === ',') endField();
+      } else if (char === delimiter) endField();
       else if (char === '\r' || char === '\n') { if (char === '\r' && text[i + 1] === '\n') i += 1; endRecord(); }
       else if (char === '"' && !field && !closed) quoted = true;
       else if (closed && /\s/.test(char)) continue;
@@ -28,7 +45,7 @@
     if (quoted) throw failure("csvMalformed");
     if (field || record.length || closed) endRecord();
     if (!records.length) return [];
-    const headers = records.shift().map((value) => value.trim());
+    const headers = records.shift().map(canonicalHeader);
     if (headers.some((value) => !value) || new Set(headers).size !== headers.length) throw failure("csvHeaders");
     return records.map((values, index) => {
       if (values.length > headers.length) throw failure("csvColumns", { row: index + 2 });
@@ -39,16 +56,20 @@
   }
   function renderTemplate(template, values) {
     const missing = new Set();
+    const keys = new Map(Object.keys(values).map((key) => [canonicalHeader(key), key]));
     const text = String(template).replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_, name) => {
-      if (!Object.prototype.hasOwnProperty.call(values, name)) { missing.add(name); return `{{${name}}}`; }
-      return String(values[name] ?? "");
+      const key = keys.get(canonicalHeader(name));
+      if (key === undefined) { missing.add(name); return `{{${name}}}`; }
+      return String(values[key] ?? "");
     });
     return { text, missing: [...missing] };
   }
-  function rowsFromCSV(source, template = "") {
+  function rowsFromCSV(source, template = "", { templatePrompts = false } = {}) {
     return parseCSV(source).map((data, index) => {
-      const rendered = renderTemplate(data.prompt?.trim() || template, { ...data, index: index + 1 });
-      const row = { prompt: rendered.text, params: {}, errors: rendered.missing.map((name) => ({ code: "templateMissing", values: { name } })) };
+      const prompt = data.prompt?.trim() || "";
+      const templateMode = prompt ? templatePrompts : Boolean(template.trim());
+      const rendered = templateMode ? renderTemplate(prompt || template, { ...data, index: index + 1 }) : { text: prompt, missing: [] };
+      const row = { prompt: rendered.text, templateMode, params: {}, errors: rendered.missing.map((name) => ({ code: "templateMissing", values: { name } })) };
       for (const key of ["model", "provider", "region", "baseUrl", "filename"]) if (data[key]?.trim()) row[key] = data[key].trim();
       for (const key of ["resolution", "aspectRatio", "requestFormat"]) if (data[key]?.trim()) row.params[key] = data[key].trim();
       for (const key of ["durationSeconds", "seed"]) if (data[key]?.trim()) {
@@ -66,27 +87,28 @@
       return row;
     });
   }
-  function normalizePath(value) { return String(value).replace(/\\/g, "/").replace(/^\.\//, ""); }
+  function normalizePath(value) { return String(value).normalize("NFC").replace(/\\/g, "/").replace(/^\.\//, ""); }
   function findImageFile(name, files) {
     const target = normalizePath(name);
     const exact = files.filter((file) => normalizePath(file.webkitRelativePath || file.name) === target);
     if (exact.length === 1) return { file: exact[0] };
-    const suffix = files.filter((file) => normalizePath(file.webkitRelativePath || file.name).endsWith(`/${target}`) || file.name === target);
+    const suffix = files.filter((file) => normalizePath(file.webkitRelativePath || file.name).endsWith(`/${target}`) || normalizePath(file.name) === target);
     if (suffix.length === 1) return { file: suffix[0] };
     return { error: suffix.length || exact.length ? "imageAmbiguous" : "imageMissing" };
   }
+  function compareImageFiles(a, b) { return normalizePath(a.webkitRelativePath || a.name).localeCompare(normalizePath(b.webkitRelativePath || b.name), "en", { numeric: true, sensitivity: "base" }); }
   function imageVariables(file, index) { return { filename: file.name, stem: file.name.replace(/\.[^.]+$/, ""), index: index + 1 }; }
-  function promptErrors(prompt, errors = []) {
+  function promptErrors(prompt, errors = [], templateMode = false) {
     const result = errors.filter((error) => !["missingPrompt", "templateMissing"].includes(error.code));
     if (!String(prompt).trim()) result.push({ code: "missingPrompt" });
-    for (const name of renderTemplate(prompt, {}).missing) result.push({ code: "templateMissing", values: { name } });
+    for (const name of templateMode ? renderTemplate(prompt, {}).missing : []) result.push({ code: "templateMissing", values: { name } });
     return result;
   }
   function audioChoices(row) {
     const invalid = row.errors?.some((error) => error.code === "csvBoolean" && error.values?.name === "audio");
     return { values: [...(invalid ? ["__invalid__"] : []), "", "true", "false"], selected: invalid ? "__invalid__" : row.params.audio === undefined ? "" : String(row.params.audio) };
   }
-  const api = { decodeCSV, parseCSV, renderTemplate, rowsFromCSV, findImageFile, imageVariables, promptErrors, audioChoices };
+  const api = { decodeCSV, parseCSV, renderTemplate, rowsFromCSV, findImageFile, compareImageFiles, imageVariables, promptErrors, audioChoices };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.BatchImport = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);

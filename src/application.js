@@ -1,3 +1,4 @@
+const path = require("node:path");
 const { JobStore, cursorPosition } = require("./store/job-store");
 const { AssetStore } = require("./store/asset-store");
 const { readSettings, normalizeSettings, writeJson } = require("./store/settings");
@@ -6,6 +7,7 @@ const { Scheduler } = require("./queue/scheduler");
 const { EventStream } = require("./http/handlers/events");
 const { loadCatalog, validateCatalog, normalizeOpenRouterModels } = require("./catalog/catalog");
 const { createContext } = require("./providers/base");
+const { normalizePublicModels } = require("./providers/models");
 const { planBatch, prepareBatch } = require("./queue/batches");
 const { Gallery } = require("./queue/gallery");
 const outputFiles = require("./files/output");
@@ -24,10 +26,24 @@ class Application {
     this.catalog = loadCatalog(directory);
     this.adapters = adapters();
     this.keys = new KeyStore();
-    this.store = new JobStore(directory, { port, supportsIdempotencyKey: (job) => this.adapters[job.provider]?.supportsIdempotencyKey === true });
+    try {
+      this.store = new JobStore(directory, {
+        port, supportsIdempotencyKey: (job) => this.adapters[job.provider]?.supportsIdempotencyKey === true,
+        validatePersisted: (store) => {
+          // Validate before interrupted-create recovery or compaction changes any
+          // records. Old substring redaction may have damaged endpoint fields.
+          for (const job of store.jobs.values()) normalizeLane(job);
+          this.settings = readSettings(directory);
+        },
+      });
+    } catch (cause) {
+      if (cause instanceof SyntaxError || ["invalidStore", "invalidAttempts", "invalidRemoteId", "invalidLane", "invalidSettings"].includes(cause.code || cause.message)) {
+        throw Object.assign(new Error("dataRecoveryRequired", { cause }), { code: "dataRecoveryRequired", directory: path.resolve(directory) });
+      }
+      throw cause;
+    }
     try {
       this.assets = new AssetStore(directory);
-      this.settings = readSettings(directory);
       this.events = new EventStream(this.store);
       this.scheduler = new Scheduler({ store: this.store, keys: this.keys, adapters: this.adapters, context: (job, phase) => this.context(job, phase), settings: this.settings, onSettings: (settings) => {
         this.settings = normalizeSettings(settings);
@@ -154,7 +170,7 @@ class Application {
     const ctx = createContext({ lane, key: this.keys.get(lane) || "", redact });
     try {
       const data = await this.adapters[providerId].listModels(ctx);
-      if (providerId !== "openrouter") return { models: data.data || data, refreshed: true };
+      if (providerId !== "openrouter") return { models: normalizePublicModels(data, ctx.redact), refreshed: true };
       const asOf = new Date().toISOString().slice(0, 10);
       const refreshed = validateCatalog({ ...provider, asOf, models: normalizeOpenRouterModels(data, asOf) });
       if (!refreshed.models.length) throw new Error("invalidProviderResponse");

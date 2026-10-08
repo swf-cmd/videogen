@@ -94,6 +94,8 @@ def smoke(archive):
                     except (OSError, urllib.error.URLError):
                         time.sleep(.1)
                 assert catalog is not None, "Service not ready"
+                with opener.open("http://127.0.0.1:%d/api/health" % port, timeout=2) as response:
+                    assert response.status == 200 and json.load(response).get("healthy") is True, "Unhealthy portable service"
                 assert (app / "portable-data").is_dir(), "Portable data not created"
                 assert (app / "portable-output").is_dir(), "Portable outputs not created"
                 assert Path(catalog.get("defaultOutputDir", "")).resolve() == (app / "portable-output").resolve(), "Wrong default output directory"
