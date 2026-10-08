@@ -139,6 +139,15 @@ test("queue HTTP contracts preserve local security and keyless restart semantics
   let batch;
   let jobs;
 
+  await t.test("retired stream and one-shot endpoints are unavailable", async () => {
+    for (const route of ["/api/generate", "/api/generate-stream", "/api/generate-batch-stream", "/api/recover", "/api/download"]) {
+      const result = await app.api(route, { method: "POST", payload: {} });
+      assert.equal(result.status, 405);
+      assert.notEqual(result.headers["content-type"], "application/x-ndjson; charset=utf-8");
+    }
+    for (const route of ["/api/options", "/api/status"]) assert.equal((await app.api(route)).status, 404);
+  });
+
   await t.test("GET endpoints neither contact the provider nor mutate persistent jobs", async () => {
     const before = (await app.api("/api/jobs")).data.seq;
     for (const route of ["/api/catalog", "/api/jobs", "/api/batches", "/api/keys", "/api/lanes"]) {

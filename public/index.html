@@ -19,13 +19,14 @@
           </div>
         </header>
         <p class="notice retirement-note" data-i18n="soraRetired">Sora 已停用。请选择其他供应商或兼容端点。</p>
-        <form id="generateForm" class="layout">
-          <section class="panel controls-panel" aria-label="生成选项">
-            <div class="section-head span-full"><div><p class="section-kicker" data-i18n="generateKicker">生成</p><h2 data-i18n="generationSettings">生成参数</h2></div></div>
+        <div class="layout">
+          <form id="generateForm" method="post" class="panel controls-panel" aria-label="生成选项" autocomplete="off">
+            <div class="section-head span-full"><div><p class="section-kicker" data-i18n="generateKicker">生成</p><h2 data-i18n="newBatch">新建批次</h2></div></div>
             <label class="field span-full"><span data-i18n="providerLabel">供应商 · 区域</span><select id="provider" name="provider"></select></label>
-            <label class="field span-full"><span data-i18n="baseUrl">端点地址</span><input id="baseUrl" name="baseUrl" type="url" spellcheck="false" required /><small class="field-meta" data-i18n="baseUrlNote">请填写 API 根地址。</small></label>
-            <label class="field span-full secret-field"><span data-i18n="apiKeyLabel">API key</span><div class="input-row"><input id="apiKey" name="apiKey" type="password" autocomplete="off" spellcheck="false" /><button id="toggleApiKey" type="button" class="icon-button" data-i18n="showApiKey">显示</button></div><small class="field-meta" data-i18n="trustNote">密钥仅存在本机服务内存中，服务停止即清除</small></label>
-            <div class="field span-full"><label for="model" data-i18n="modelLabel">模型</label><select id="model" name="model"></select><small id="modelNote" class="field-meta"></small></div>
+            <label class="field span-full"><span data-i18n="baseUrl">端点地址</span><input id="baseUrl" name="baseUrl" type="url" spellcheck="false" required /><small class="field-meta" data-i18n="baseUrlNote">请填写 API 根地址。</small><small id="availabilityNote" class="field-meta"></small></label>
+            <label class="field span-full secret-field"><span data-i18n="apiKeyLabel">API key</span><div class="input-row"><input id="apiKey" type="password" autocomplete="off" spellcheck="false" /><button id="toggleApiKey" type="button" class="icon-button" data-i18n="showApiKey">显示</button></div><small class="field-meta" data-i18n="trustNote">密钥仅存在本机服务内存中，服务停止即清除</small><div class="inline-actions"><button id="saveKeyButton" type="button" class="secondary" data-i18n="saveKey">保存密钥</button><button id="deleteKeyButton" type="button" class="secondary" data-i18n="deleteKey">清除密钥</button><span id="selectedKeyStatus" class="field-meta"></span></div></label>
+            <p id="transportWarning" class="notice warning-note span-full" data-i18n="plaintextKeyWarning" hidden></p>
+            <div class="field span-full"><label for="model" data-i18n="modelLabel">模型</label><select id="model" name="model"></select><small id="modelNote" class="field-meta"></small><button id="refreshCatalogButton" type="button" class="text-button" data-i18n="refreshCatalog">刷新目录</button><p id="modelWarning" class="notice warning-note" hidden></p><small id="pricingNote" class="field-meta"></small></div>
             <div id="customModelFields" class="span-full custom-options" hidden>
               <label class="field"><span data-i18n="customModelId">模型 ID</span><input id="customModelId" type="text" spellcheck="false" /></label>
               <details id="customCapabilitiesPanel"><summary data-i18n="customCapabilities">兼容端点能力（由你提供）</summary><p class="field-meta" data-i18n="customCapabilityNote"></p>
@@ -48,13 +49,17 @@
             <label id="batchCountField" class="field"><span data-i18n="repeatLabel">重复次数</span><input id="batchCount" name="batchCount" type="number" min="1" step="1" value="1" inputmode="numeric" /><small class="field-meta" data-i18n="repeatNote">只有一条提示词时可重复生成</small></label>
             <div class="field span-full reference-field"><span data-i18n="inputReferenceLabel">首帧图片</span><div class="reference-input-row"><input id="inputReference" name="input_reference" type="file" accept="image/jpeg,image/png,image/webp" /><button id="clearInputReference" type="button" class="icon-button reference-clear" disabled data-i18n="inputReferenceClear">移除</button></div><div id="inputReferencePreview" class="reference-preview" hidden><img id="inputReferenceImage" alt="" /><strong id="inputReferenceName">-</strong></div><small id="inputReferenceMeta" class="field-meta"></small></div>
             <label class="field span-full"><span data-i18n="outputDirLabel">输出目录</span><div class="input-row output-dir-row"><input id="outputDir" name="outputDir" type="text" placeholder="~/Downloads/videogen" /><button id="selectOutputDir" type="button" class="icon-button output-dir-button" data-i18n="selectOutputDir">选择</button></div></label>
-            <label class="field span-full"><span data-i18n="filenameLabel">文件名</span><input id="filename" name="filename" type="text" /></label>
+            <label class="field span-full"><span data-i18n="filenamePrefix">文件名前缀</span><input id="filename" name="filename" type="text" /></label>
+            <label class="field span-full"><span data-i18n="budgetLabel">预算上限（可选）</span><input id="budget" type="number" min="0.000001" step="any" /><small id="budgetNote" class="field-meta"></small></label>
             <p class="notice privacy-note span-full" data-i18n="privacyNote">任务数据保存在本机，密钥不写入磁盘。</p>
-            <div class="actions span-full"><button id="generateButton" type="submit" class="primary-action" data-i18n="generateButton">估算并提交</button><button id="clearButton" type="button" class="secondary" data-i18n="clearStatus">清空状态</button></div>
-          </section>
+            <div class="actions span-full"><button id="generateButton" type="submit" class="primary-action" data-i18n="generateButton">估算并提交</button></div>
+            <p id="formMessage" class="form-message span-full" role="status" aria-live="polite"></p>
+          </form>
           <aside class="panel monitor-panel" aria-label="任务状态">
-            <div class="section-head compact"><div><p class="section-kicker" data-i18n="statusKicker">状态</p><h2 data-i18n="taskStatus">任务状态</h2></div></div>
-            <div class="progress-wrap"><div class="progress-meta"><span id="statusText">等待提交</span><span id="progressText">0%</span></div><div class="progress-track" aria-hidden="true"><div id="progressBar" class="progress-bar"></div></div></div>
+            <div class="section-head compact"><div><p class="section-kicker" data-i18n="queueKicker">本机持久化</p><h2 data-i18n="queueTitle">渲染队列</h2></div><button id="refreshQueueButton" type="button" class="secondary" data-i18n="refreshQueue">刷新</button></div>
+            <p class="field-meta" data-i18n="queuePersists">关闭页面不影响队列。服务重启后，请重新输入所需密钥。</p>
+            <section class="lane-section" aria-labelledby="lanesHeading"><h3 id="lanesHeading" data-i18n="lanesTitle">供应商车道</h3><div id="laneList" class="lane-list"></div></section>
+            <details class="estimate-summary"><summary data-i18n="summaryAria">当前参数</summary>
             <div class="summary-grid" aria-label="当前参数">
               <div class="summary-item span-summary"><span data-i18n="providerLabel">供应商 · 区域</span><strong id="summaryMode">-</strong></div>
               <div class="summary-item"><span data-i18n="summaryModel">模型</span><strong id="summaryModel">-</strong></div>
@@ -65,17 +70,37 @@
               <div class="summary-item"><span data-i18n="summaryReference">首帧</span><strong id="summaryReference">未设置</strong></div>
               <div class="summary-item span-summary"><span data-i18n="summarySize">分辨率</span><strong id="summarySize">-</strong></div>
             </div>
-            <div class="job-card"><span data-i18n="resultVideoId">视频 ID</span><strong id="videoId">-</strong></div>
-            <div class="job-card"><span data-i18n="outputFile">输出文件</span><strong id="outputPath">-</strong></div>
-            <section class="recovery-panel"><h2 data-i18n="recoverTitle">找回已有任务</h2><p class="field-meta" data-i18n="recoverNote"></p><label class="field"><span data-i18n="remoteId">远端任务 ID</span><input id="remoteId" type="text" autocomplete="off" /></label><button id="recoverButton" type="button" class="secondary" data-i18n="recoverButton">找回并下载</button></section>
-            <div class="log-panel"><div class="log-head"><span data-i18n="runLog">运行日志</span><span id="logCount">0 条</span></div><div class="log-box" id="logBox" aria-live="polite"></div></div>
+            </details>
+            <section class="batch-section" aria-labelledby="batchesHeading"><div class="section-head compact"><h3 id="batchesHeading" data-i18n="batchesTitle">批次</h3><div class="pager"><button id="batchPrevious" type="button" class="secondary" data-i18n="previousPage">上一页</button><span id="batchPage"></span><button id="batchNext" type="button" class="secondary" data-i18n="nextPage">下一页</button></div></div><div id="batchList" class="batch-list"></div></section>
+            <section class="jobs-section" aria-labelledby="jobsHeading"><div class="section-head compact"><h3 id="jobsHeading" data-i18n="jobsTitle">任务</h3><span id="jobsCount" class="field-meta"></span></div>
+              <div class="queue-filters"><label><span data-i18n="filterBatch">批次</span><select id="batchFilter"></select></label><label><span data-i18n="filterState">状态</span><select id="stateFilter"></select></label></div>
+              <div class="table-scroll"><table class="jobs-table"><thead><tr><th data-i18n="jobPrompt">任务 / 提示词</th><th data-i18n="jobProgress">状态 / 进度</th><th data-i18n="jobCost">预估成本</th><th data-i18n="jobResult">输出 / 错误</th><th data-i18n="jobActions">操作</th></tr></thead><tbody id="jobsBody"></tbody></table></div>
+              <div class="pager jobs-pager"><button id="jobsPrevious" type="button" class="secondary" data-i18n="previousPage">上一页</button><span id="jobsPage"></span><button id="jobsNext" type="button" class="secondary" data-i18n="nextPage">下一页</button></div>
+            </section>
+            <p id="queueMessage" class="form-message" role="status" aria-live="polite"></p>
             <button id="clearHistoryButton" type="button" class="secondary" data-i18n="clearHistory">清除历史和素材</button>
           </aside>
-        </form>
+        </div>
       </section>
     </main>
+    <dialog id="reviewDialog" aria-labelledby="reviewTitle">
+      <div class="dialog-head"><h2 id="reviewTitle" data-i18n="reviewTitle">确认创建结果</h2><button id="closeReview" type="button" class="secondary" data-i18n="close">关闭</button></div>
+      <p id="reviewJob" class="review-job"></p><p class="notice warning-note" data-i18n="reviewExplanation">供应商可能已接受并收费，系统不会自动重新提交。</p>
+      <section class="review-choice"><h3 data-i18n="attachTitle">关联已有远端任务</h3><p data-i18n="attachRisk"></p><p id="manualRecoveryNote" class="notice warning-note" hidden></p><label class="field"><span data-i18n="remoteId">远端任务 ID</span><input id="reviewRemoteId" type="text" autocomplete="off" spellcheck="false" /></label><button id="attachRemoteButton" type="button" class="primary-action" data-i18n="attachRemote">关联并继续</button></section>
+      <section class="review-choice"><h3 data-i18n="resubmitTitle">确认未创建成功后重新提交</h3><p data-i18n="resubmitRisk"></p><button id="resubmitReviewButton" type="button" class="secondary danger-action" data-i18n="resubmitReview">我确认未创建成功 → 重新提交</button></section>
+      <section class="review-choice"><h3 data-i18n="abandonTitle">放弃跟踪</h3><p data-i18n="abandonRisk"></p><button id="abandonReviewButton" type="button" class="secondary" data-i18n="abandonReview">放弃此任务</button></section>
+      <p id="reviewMessage" class="form-message" role="status"></p>
+    </dialog>
+    <dialog id="confirmDialog" aria-labelledby="confirmTitle" aria-describedby="confirmMessage">
+      <h2 id="confirmTitle" data-i18n="confirmTitle">请确认操作</h2>
+      <p id="confirmMessage" class="confirmation-message"></p>
+      <div class="confirmation-actions"><button id="confirmCancel" type="button" class="secondary" data-i18n="cancel" autofocus>取消</button><button id="confirmAccept" type="button" class="primary-action" data-i18n="confirmProceed">确认</button></div>
+    </dialog>
     <script src="./i18n.js"></script>
     <script src="./image-reference.js"></script>
+    <script src="./api.js"></script>
+    <script src="./dialog.js"></script>
+    <script src="./queue-view.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>

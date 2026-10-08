@@ -30,17 +30,9 @@ const inputReferenceMeta = document.querySelector("#inputReferenceMeta");
 const outputDirInput = document.querySelector("#outputDir");
 const filenameInput = document.querySelector("#filename");
 const generateButton = document.querySelector("#generateButton");
-const clearButton = document.querySelector("#clearButton");
 const toggleApiKeyButton = document.querySelector("#toggleApiKey");
 const selectOutputDirButton = document.querySelector("#selectOutputDir");
 const languageInput = document.querySelector("#languageSelect");
-const statusText = document.querySelector("#statusText");
-const progressText = document.querySelector("#progressText");
-const progressBar = document.querySelector("#progressBar");
-const videoId = document.querySelector("#videoId");
-const outputPath = document.querySelector("#outputPath");
-const logBox = document.querySelector("#logBox");
-const logCount = document.querySelector("#logCount");
 const connectionState = document.querySelector("#connectionState");
 const promptMetaText = document.querySelector("#promptMetaText");
 const summaryMode = document.querySelector("#summaryMode");
@@ -51,25 +43,19 @@ const summaryEta = document.querySelector("#summaryEta");
 const summaryBatchCount = document.querySelector("#summaryBatchCount");
 const summaryReference = document.querySelector("#summaryReference");
 const summarySize = document.querySelector("#summarySize");
-const remoteIdInput = document.querySelector("#remoteId");
-const recoverButton = document.querySelector("#recoverButton");
-const clearHistoryButton = document.querySelector("#clearHistoryButton");
+const budgetInput = document.querySelector("#budget");
+const saveKeyButton = document.querySelector("#saveKeyButton");
+const deleteKeyButton = document.querySelector("#deleteKeyButton");
+
 const isFilePreview = window.location.protocol === "file:";
-const MAX_LOG_LINES = 500;
-const MAX_DISPLAYED_OUTPUT_PATHS = 20;
 const preferenceNames = ["language", "provider", "model", "seconds", "size", "aspectRatio", "batchCount"];
 const privateStorageKeys = ["sora2app.apiKey", "sora2app.outputDir", "videogen.apiKey", "videogen.outputDir"];
-const previewCatalog = [{ provider: "openai-compatible", regions: [{ id: "custom", baseUrl: "http://127.0.0.1:8000/v1" }], models: [] }];
+const previewCatalog = [{ provider: "openai-compatible", regions: [{ id: "custom", labelKey: "regionCustom", baseUrl: "http://127.0.0.1:8000/v1", keyFormatHint: "optional" }], models: [] }];
 let providers = previewCatalog;
 let lanes = [];
 let platform = "";
 let activeLanguage = "zh";
-let connectionStateKey = isFilePreview ? "connectionPreview" : "ready";
-let currentStatus = "idle";
-let currentProgress = 0;
-let progressTarget = 0;
-let progressAnimationFrame = 0;
-let logScrollAnimationFrame = 0;
+let connectionStateKey = isFilePreview ? "connectionPreview" : "connectionReconnecting";
 let inputReferenceInfo = null;
 let inputReferenceInfoKey = "";
 let inputReferenceError = "";
@@ -79,116 +65,70 @@ let lastEstimate = null;
 let estimateTimer;
 let estimateRevision = 0;
 let busy = false;
+let disabledControls = new Map();
+let queueView;
 
 function normalizeLanguage(language) {
   const base = String(language || "").toLowerCase().split("-")[0];
   return supportedLanguages.includes(base) ? base : "zh";
 }
-
-function storageGet(key) {
-  try { return window.localStorage.getItem(key); } catch { return null; }
-}
-
-function storageSet(key, value) {
-  try { window.localStorage.setItem(key, value); } catch { /* Preferences are optional. */ }
-}
-
-function storageRemove(key) {
-  try { window.localStorage.removeItem(key); } catch { /* Storage may be unavailable in previews. */ }
-}
-
+function storageGet(key) { try { return window.localStorage.getItem(key); } catch { return null; } }
+function storageSet(key, value) { try { window.localStorage.setItem(key, value); } catch {} }
+function storageRemove(key) { try { window.localStorage.removeItem(key); } catch {} }
 function t(key, replacements = {}) {
-  return String(translations[activeLanguage]?.[key] ?? translations.zh[key] ?? key)
-    .replace(/\{(\w+)\}/g, (_, name) => String(replacements[name] ?? ""));
+  return String(translations[activeLanguage]?.[key] ?? translations.zh[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => String(replacements[name] ?? ""));
 }
-
 function currentLocale() { return t("locale"); }
 function formatInteger(value) { return new Intl.NumberFormat(currentLocale()).format(value); }
 function setConnectionState(key) { connectionStateKey = key; connectionState.textContent = t(key); }
-
-function applyTranslations() {
-  document.documentElement.lang = t("htmlLang");
-  document.title = t("documentTitle");
-  languageInput.value = activeLanguage;
-  languageInput.setAttribute("aria-label", t("languageLabel"));
-  document.querySelectorAll("[data-i18n]").forEach((element) => { element.textContent = t(element.dataset.i18n); });
-  document.querySelector(".controls-panel").setAttribute("aria-label", t("controlsAria"));
-  document.querySelector(".monitor-panel").setAttribute("aria-label", t("monitorAria"));
-  document.querySelector(".summary-grid").setAttribute("aria-label", t("summaryAria"));
-  promptInput.placeholder = t("promptPlaceholder");
-  outputDirInput.placeholder = t("outputDirPlaceholder");
-  filenameInput.placeholder = t("filenamePlaceholder");
-  inputReferenceInput.setAttribute("aria-label", t("inputReferenceLabel"));
-  logBox.dataset.empty = t("emptyLog");
-  toggleApiKeyButton.textContent = t(apiKeyInput.type === "password" ? "showApiKey" : "hideApiKey");
-  toggleApiKeyButton.setAttribute("aria-label", t(apiKeyInput.type === "password" ? "showApiKeyAria" : "hideApiKeyAria"));
-  setConnectionState(connectionStateKey);
-  setProgress(currentStatus, currentProgress);
-  renderProviders(providerInput.value);
-  const hint = selectedLane()?.region.keyFormatHint;
-  apiKeyInput.placeholder = hint === "optional" ? t("keyOptional") : hint || "";
-  renderModels(modelInput.value);
-  syncOptionControls();
-  updateLogCount();
+function formMessage(text, error = false) {
+  const element = document.querySelector("#formMessage");
+  element.textContent = text;
+  element.classList.toggle("is-error", error);
 }
-
-function setLanguage(language, shouldPersist = true) {
-  activeLanguage = normalizeLanguage(language);
-  applyTranslations();
-  if (shouldPersist) storageSet("videogen.language", activeLanguage);
+function providerName(id) {
+  const keys = { openrouter: "providerOpenRouter", "openai-compatible": "providerOpenAICompatible", mock: "providerMock", gemini: "providerGemini", dashscope: "providerDashScope", ark: "providerArk" };
+  return keys[id] ? t(keys[id]) : id;
 }
-
-function laneLabel(lane) {
-  if (lane.provider.provider === "openai-compatible") return t("customProvider");
-  const names = { openrouter: "OpenRouter", mock: "Mock", gemini: "Gemini API", dashscope: "Alibaba Cloud", ark: "ModelArk" };
-  const regionKeys = { global: "global", local: "local", custom: "local", beijing: "beijing", cn: "beijing", singapore: "singapore", international: "overseas", byteplus: "overseas" };
-  const region = t(regionKeys[lane.region.id] || lane.region.labelKey || lane.region.id);
-  return `${names[lane.provider.provider] || lane.provider.provider} · ${region}`;
+function laneName(lane) {
+  const provider = providers.find((item) => item.provider === lane.provider);
+  const region = provider?.regions.find((item) => item.id === lane.region);
+  const fallback = { global: "regionGlobal", local: "regionLocal", custom: "regionCustom", beijing: "regionBeijing", singapore: "regionSingapore", byteplus: "regionBytePlus" };
+  return `${providerName(lane.provider)} · ${t(region?.labelKey || fallback[lane.region] || lane.region)}`;
 }
-
+function laneLabel(lane) { return laneName({ provider: lane.provider.provider, region: lane.region.id }); }
 function selectedLane() { return lanes.find((lane) => lane.id === providerInput.value) || lanes[0]; }
 function selectedModelConfig() { return selectedLane()?.provider.models?.find((model) => model.id === modelInput.value); }
 function isCustomModel() { return modelInput.value === "__custom__"; }
 function splitValues(input) { return input.value.split(/[,，]/).map((item) => item.trim()).filter(Boolean); }
-
-function customCapabilities() {
-  return { durations: splitValues(customDurationsInput).map(Number), resolutions: splitValues(customResolutionsInput), aspectRatios: splitValues(customAspectRatiosInput), firstFrame: customFirstFrameInput.checked, lastFrame: false, audio: customAudioInput.checked, seed: false };
-}
-
+function customCapabilities() { return { durations: splitValues(customDurationsInput).map(Number), resolutions: splitValues(customResolutionsInput), aspectRatios: splitValues(customAspectRatiosInput), firstFrame: customFirstFrameInput.checked, lastFrame: false, audio: customAudioInput.checked, seed: false }; }
 function selectedCapabilities() { return selectedModelConfig()?.capabilities || customCapabilities(); }
-
+function formLane() { const lane = selectedLane(); return { provider: lane?.provider.provider, region: lane?.region.id, baseUrl: baseUrlInput.value.trim() }; }
 function fillSelect(select, values, selected, label = (value) => value) {
   select.textContent = "";
-  for (const item of values) {
-    const value = String(typeof item === "object" ? item.value : item);
-    const option = document.createElement("option");
-    option.value = value;
-    option.textContent = label(value, item);
-    select.appendChild(option);
-  }
+  for (const item of values) { const option = document.createElement("option"); option.value = String(item); option.textContent = label(String(item)); select.append(option); }
   select.value = [...select.options].some((option) => option.value === String(selected)) ? String(selected) : select.options[0]?.value || "";
 }
-
 function renderProviders(selected) {
-  lanes = providers.flatMap((provider) => provider.regions.map((region) => ({ id: `${provider.provider}:${region.id}`, provider, region })));
+  const order = ["openrouter", "gemini", "dashscope", "ark", "openai-compatible", "mock"];
+  const ranked = (id) => order.includes(id) ? order.indexOf(id) : order.length;
+  lanes = [...providers].sort((a, b) => ranked(a.provider) - ranked(b.provider)).flatMap((provider) => provider.regions.map((region) => ({ id: `${provider.provider}:${region.id}`, provider, region })));
   fillSelect(providerInput, lanes.map((lane) => lane.id), selected, (id) => laneLabel(lanes.find((lane) => lane.id === id)));
 }
-
 function renderModels(selected) {
   const lane = selectedLane();
   if (!selected && lane?.provider.provider === "openai-compatible") selected = "__custom__";
   const models = (lane?.provider.models || []).filter((model) => !model.regions || model.regions.includes(lane.region.id));
-  const allowCustom = lane?.provider.provider === "openai-compatible" || models.length === 0;
+  const allowCustom = lane?.provider.provider === "openai-compatible";
   fillSelect(modelInput, [...models.map((model) => model.id), ...(allowCustom ? ["__custom__"] : [])], selected, (id) => {
     if (id === "__custom__") return `${t("customModel")} · ${t("experimental")}`;
     const model = models.find((item) => item.id === id);
-    const suffixes = [!model.verified && t("experimental"), model.deprecatedAt && t("retiring")].filter(Boolean);
-    return [model.label || id, ...suffixes].join(" · ");
+    return [model.label || id, !model.verified && t("experimental"), modelRetiring(model) && t("retiring")].filter(Boolean).join(" · ");
   });
 }
-
 function syncOptionControls() {
   const lane = selectedLane();
+  const model = selectedModelConfig();
   const capabilities = selectedCapabilities();
   customModelFields.hidden = !isCustomModel();
   customCapabilitiesPanel.hidden = !isCustomModel();
@@ -196,86 +136,86 @@ function syncOptionControls() {
   fillSelect(secondsInput, capabilities.durations || [], secondsInput.value, (value) => `${value} ${t("secondUnit")}`);
   fillSelect(sizeInput, capabilities.resolutions || [], sizeInput.value);
   fillSelect(aspectRatioInput, capabilities.aspectRatios || [], aspectRatioInput.value);
-  document.querySelector("#aspectRatioField").hidden = !(capabilities.aspectRatios?.length);
+  document.querySelector("#aspectRatioField").hidden = !capabilities.aspectRatios?.length;
   document.querySelector("#audioField").hidden = !capabilities.audio;
   document.querySelector("#seedField").hidden = !capabilities.seed;
-  audioInput.disabled = !capabilities.audio;
+  seedInput.disabled = !capabilities.seed || busy;
+  audioInput.disabled = !capabilities.audio || Boolean(capabilities.audioFixed);
   if (!capabilities.audio) audioInput.checked = false;
+  if (capabilities.audioFixed) audioInput.checked = true;
   inputReferenceInput.disabled = !capabilities.firstFrame;
   if (!capabilities.firstFrame && selectedInputReferenceFile()) clearInputReference();
-  modelNote.textContent = isCustomModel() || !selectedModelConfig()?.verified ? t("experimental") : "";
+  modelNote.textContent = [isCustomModel() || !model?.verified ? t("experimental") : "", lane?.provider.asOf ? t("catalogAsOf", { date: lane.provider.asOf }) : ""].filter(Boolean).join(" · ");
+  document.querySelector("#availabilityNote").textContent = lane?.region.availabilityNoteKey ? t(lane.region.availabilityNoteKey) : "";
+  document.querySelector("#modelWarning").hidden = !model?.warningKey;
+  document.querySelector("#modelWarning").textContent = model?.warningKey ? t(model.warningKey) : "";
+  document.querySelector("#pricingNote").textContent = model?.pricingNoteKey ? t(model.pricingNoteKey) : "";
   updateInputReferenceMeta();
-  if (!capabilities.firstFrame) inputReferenceMeta.textContent = t("unsupportedReference");
-  updatePromptMeta();
-  updateSummary();
+  if (capabilities.firstFrame && model?.firstFrameNoteKey) inputReferenceMeta.textContent += ` ${t(model.firstFrameNoteKey)}`;
+  updatePromptMeta(); updateSummary(); updateSelectedKeyStatus();
+  if (busy) for (const element of disabledControls.keys()) element.disabled = true;
 }
-
 function chooseLane() {
   const lane = selectedLane();
-  apiKeyInput.value = "";
+  apiKeyInput.value = ""; apiKeyInput.type = "password";
   baseUrlInput.value = lane?.region.baseUrl || "";
-  baseUrlInput.readOnly = !["openai-compatible", "mock"].includes(lane?.provider.provider);
-  apiKeyInput.placeholder = lane?.region.keyFormatHint === "optional" ? t("keyOptional") : lane?.region.keyFormatHint || "";
-  apiKeyInput.required = false;
-  renderModels();
-  syncOptionControls();
-  scheduleEstimate();
+  baseUrlInput.readOnly = !lane?.region.requireBaseUrl && !["openai-compatible", "mock"].includes(lane?.provider.provider);
+  baseUrlInput.placeholder = lane?.region.baseUrlTemplate || "";
+  apiKeyInput.placeholder = lane?.region.keyFormatHint === "optional" ? t("keyOptional") : t("replacementKey");
+  renderModels(); syncOptionControls(); scheduleEstimate();
 }
-
-function parsePromptItems() {
-  return promptInput.value.trim().split(/\n\s*\n+/).map((item) => item.trim()).filter(Boolean);
+function selectExistingLane(lane) {
+  if (busy) return;
+  providerInput.value = `${lane.provider}:${lane.region}`;
+  chooseLane();
+  baseUrlInput.value = lane.baseUrl;
+  updateSelectedKeyStatus(); scheduleEstimate();
+  apiKeyInput.focus();
 }
-
-function requestCountForEstimate() {
-  const count = parsePromptItems().length;
-  return count > 1 ? count : Math.max(1, Number(batchCountInput.value) || 1);
+function updateSelectedKeyStatus() {
+  const present = queueView?.keyPresent(formLane()) || false;
+  document.querySelector("#selectedKeyStatus").textContent = t(present ? "keyPresent" : "keyAbsent");
+  deleteKeyButton.disabled = !present || busy;
+  document.querySelector("#transportWarning").hidden = !insecureCredentialLane(formLane(), present || Boolean(apiKeyInput.value));
 }
-
+async function saveSelectedKey() {
+  try { await apiRequest("/api/keys", { lane: formLane(), key: apiKeyInput.value }); }
+  finally { apiKeyInput.value = ""; }
+  await queueView.loadLanes();
+  formMessage(t("keySaved"));
+}
+function parsePromptItems() { return promptInput.value.trim().split(/\n\s*\n+/).map((item) => item.trim()).filter(Boolean); }
+function requestCountForEstimate() { const count = parsePromptItems().length; return count > 1 ? count : Math.max(1, Number(batchCountInput.value) || 1); }
 function updatePromptMeta() {
   const count = parsePromptItems().length;
   batchCountField.hidden = count > 1;
+  batchCountInput.disabled = count > 1 || busy;
   promptMetaText.textContent = t("promptCount", { count: formatInteger(count), chars: formatInteger(promptInput.value.trim().length), action: t("willSubmit", { count: formatInteger(requestCountForEstimate()) }) });
 }
-
 function selectedImageSize(params = {}) {
   const resolution = params.resolution || sizeInput.value;
   if (parseSizeValue(resolution)) return resolution;
-  const height = resolution === "4k" ? 2160 : Number(/^(\d+)p$/.exec(resolution)?.[1]);
+  const height = /^4k$/i.test(resolution) ? 2160 : Number(/^(\d+)p$/i.exec(resolution)?.[1]);
   const ratio = /^(\d+):(\d+)$/.exec(params.aspectRatio || aspectRatioInput.value);
   if (!height || !ratio) return "";
-  const widthRatio = Number(ratio[1]);
-  const heightRatio = Number(ratio[2]);
-  const short = Math.min(widthRatio, heightRatio);
-  return `${Math.round(height * widthRatio / short / 2) * 2}x${Math.round(height * heightRatio / short / 2) * 2}`;
+  const [a, b] = ratio.slice(1).map(Number); const short = Math.min(a, b);
+  return `${Math.round(height * a / short / 2) * 2}x${Math.round(height * b / short / 2) * 2}`;
 }
-
-function estimateText(estimate = lastEstimate) {
-  const cost = estimate?.cost;
-  let amount = t("unknown");
-  if (cost?.amount !== null && cost?.amount !== undefined && Number.isFinite(Number(cost.amount))) {
-    try { amount = new Intl.NumberFormat(currentLocale(), { style: "currency", currency: cost.currency || "USD", maximumFractionDigits: 4 }).format(cost.amount); } catch { amount = `${cost.amount} ${cost.currency || ""}`; }
-  }
-  return { cost: amount, eta: Number.isFinite(estimate?.etaSeconds) ? t("etaValue", { seconds: formatInteger(Math.ceil(estimate.etaSeconds)) }) : t("unknown") };
-}
-
+function estimateText(estimate = lastEstimate) { return { cost: formatCost(estimate?.cost), eta: Number.isFinite(estimate?.etaSeconds) ? t("etaValue", { seconds: formatInteger(Math.ceil(estimate.etaSeconds)) }) : t("unknown") }; }
 function updateSummary() {
-  const lane = selectedLane();
-  const estimate = estimateText();
-  summaryMode.textContent = lane ? laneLabel(lane) : "-";
-  summaryModel.textContent = isCustomModel() ? customModelInput.value || "-" : selectedModelConfig()?.label || modelInput.value || "-";
-  summarySeconds.textContent = secondsInput.value ? `${secondsInput.value} ${t("secondUnit")}` : "-";
-  summaryPrice.textContent = estimate.cost;
-  summaryEta.textContent = estimate.eta;
+  const lane = selectedLane(); const estimate = estimateText();
+  summaryMode.textContent = lane ? laneLabel(lane) : "—";
+  summaryModel.textContent = isCustomModel() ? customModelInput.value || "—" : selectedModelConfig()?.label || modelInput.value || "—";
+  summarySeconds.textContent = secondsInput.value ? `${secondsInput.value} ${t("secondUnit")}` : "—";
+  summaryPrice.textContent = estimate.cost; summaryEta.textContent = estimate.eta;
   summaryBatchCount.textContent = `${formatInteger(requestCountForEstimate())} ${t("requestUnit")}`;
-  summarySize.textContent = [sizeInput.value, aspectRatioInput.value].filter(Boolean).join(" · ") || "-";
+  summarySize.textContent = [sizeInput.value, aspectRatioInput.value].filter(Boolean).join(" · ") || "—";
+  const priced = Number.isFinite(lastEstimate?.cost?.amount);
+  budgetInput.disabled = busy || !priced;
+  document.querySelector("#budgetNote").textContent = priced ? t("budgetCurrency", { currency: lastEstimate.cost.currency }) : t("budgetUnknown");
   updateInputReferenceSummary();
 }
 
-function updateLogCount() { logCount.textContent = t("logCount", { count: formatInteger(logBox.children.length) }); }
-
-const statusLabels = {
-  idle: "statusIdle", submitting: "statusSubmitting", queued: "statusQueued", running: "statusInProgress", in_progress: "statusInProgress", downloading: "statusDownloading", completed: "statusCompleted", succeeded: "statusCompleted", failed: "statusFailed", partial: "statusPartial", cancelled: "statusCancelled", expired: "statusExpired", result_expired: "statusExpired", needs_review: "needsReview",
-};
 function selectedInputReferenceFile() {
   return inputReferenceInput.files?.[0] || null;
 }
@@ -466,393 +406,129 @@ function clearInputReference() {
   updateSummary();
 }
 
-function formatStatus(status) {
-  return statusLabels[status] ? t(statusLabels[status]) : status;
-}
 
-function shouldResetProgress(status) {
-  return status === "idle" || status === "submitting";
-}
-
-function shouldFreezeProgress(status) {
-  return ["failed", "cancelled", "expired", "result_expired", "needs_review", "completed", "succeeded", "partial"].includes(status);
-}
-
-function paintProgress(value) {
-  progressText.textContent = `${Math.round(value)}%`;
-  progressBar.style.width = `${value}%`;
-}
-
-function stopProgressAnimation() {
-  if (!progressAnimationFrame) return;
-  cancelAnimationFrame(progressAnimationFrame);
-  progressAnimationFrame = 0;
-}
-
-function animateProgress(targetValue) {
-  stopProgressAnimation();
-  progressTarget = targetValue;
-  const startValue = currentProgress;
-  const delta = targetValue - startValue;
-  if (delta <= 0) {
-    currentProgress = targetValue;
-    paintProgress(currentProgress);
-    return;
-  }
-
-  const startTime = performance.now();
-  const duration = Math.min(1800, Math.max(450, delta * 24));
-  const step = (now) => {
-    const elapsed = Math.min(1, (now - startTime) / duration);
-    const eased = 1 - Math.pow(1 - elapsed, 3);
-    currentProgress = startValue + delta * eased;
-    paintProgress(currentProgress);
-    if (elapsed < 1) {
-      progressAnimationFrame = requestAnimationFrame(step);
-      return;
-    }
-    progressAnimationFrame = 0;
-    currentProgress = targetValue;
-    paintProgress(currentProgress);
-  };
-  progressAnimationFrame = requestAnimationFrame(step);
-}
-
-function setProgress(status, progress = 0) {
-  const value = Math.max(0, Math.min(100, Number(progress) || 0));
-  const displayValue = shouldResetProgress(status)
-    ? value
-    : shouldFreezeProgress(status)
-      ? Math.max(value, currentProgress)
-      : Math.max(value, currentProgress, progressTarget);
-  currentStatus = status;
-  statusText.textContent = formatStatus(status);
-  if (shouldResetProgress(status) || shouldFreezeProgress(status) || displayValue <= currentProgress + 1) {
-    stopProgressAnimation();
-    progressTarget = displayValue;
-    currentProgress = displayValue;
-    paintProgress(currentProgress);
-    return;
-  }
-  animateProgress(displayValue);
-}
-
-function appendLog(message, tone = "") {
-  const line = document.createElement("div");
-  line.className = tone ? `log-line-${tone}` : "";
-  line.textContent = `[${new Date().toLocaleTimeString(currentLocale())}] ${message}`;
-  logBox.appendChild(line);
-  while (logBox.children.length > MAX_LOG_LINES) {
-    logBox.firstElementChild?.remove();
-  }
-  if (!logScrollAnimationFrame) {
-    logScrollAnimationFrame = requestAnimationFrame(() => {
-      logScrollAnimationFrame = 0;
-      logBox.scrollTop = logBox.scrollHeight;
-    });
-  }
-  updateLogCount();
-}
-
-function outputDisplayPath(output) {
-  const paths = Array.isArray(output?.displayPaths) && output.displayPaths.length > 0
-    ? output.displayPaths
-    : output?.paths;
-  if (Array.isArray(paths) && paths.length > 0) {
-    const displayedPaths = paths.slice(0, MAX_DISPLAYED_OUTPUT_PATHS);
-    const totalCount = Number.isInteger(Number(output?.count))
-      ? Math.max(paths.length, Number(output.count))
-      : paths.length;
-    const remaining = totalCount - displayedPaths.length;
-    const suffix = remaining > 0 ? `\n… (+${formatInteger(remaining)})` : "";
-    return `${displayedPaths.join("\n")}${suffix}`;
-  }
-  return output?.displayPath || output?.path || "-";
-}
 
 function readForm() {
-  const lane = selectedLane();
   const capabilities = selectedCapabilities();
-  const payload = {
-    language: activeLanguage,
-    provider: lane?.provider.provider,
-    region: lane?.region.id,
-    baseUrl: baseUrlInput.value.trim(),
-    apiKey: apiKeyInput.value,
-    model: isCustomModel() ? customModelInput.value.trim() : modelInput.value,
-    params: {
-      durationSeconds: Number(secondsInput.value),
-      resolution: sizeInput.value,
-      aspectRatio: aspectRatioInput.value,
-      audio: Boolean(capabilities.audio && audioInput.checked),
-      requestFormat: requestFormatInput.value,
-    },
-    prompt: promptInput.value.trim(),
-    batchCount: requestCountForEstimate(),
-    outputDir: outputDirInput.value.trim(),
-    filename: filenameInput.value.trim(),
-  };
+  const payload = { ...formLane(), language: activeLanguage, model: isCustomModel() ? customModelInput.value.trim() : modelInput.value,
+    params: { durationSeconds: Number(secondsInput.value), resolution: sizeInput.value, aspectRatio: aspectRatioInput.value, audio: Boolean(capabilities.audio && audioInput.checked) },
+    prompt: promptInput.value.trim(), batchCount: requestCountForEstimate(), outputDir: outputDirInput.value.trim(), filename: filenameInput.value.trim() };
+  if (payload.provider === "openai-compatible") payload.params.requestFormat = requestFormatInput.value;
   if (capabilities.seed && seedInput.value !== "") payload.params.seed = Number(seedInput.value);
   if (isCustomModel()) payload.customCapabilities = customCapabilities();
-  if (!payload.apiKey) delete payload.apiKey;
+  if (!budgetInput.disabled && budgetInput.value !== "") payload.budget = { amount: Number(budgetInput.value), currency: lastEstimate?.cost?.currency };
   return payload;
 }
-
-function validateSelection(payload, recovery = false) {
+function validateSelection(payload) {
+  if (!normalizedBaseUrl(payload.baseUrl)) throw new Error(t("invalidEndpoint"));
   if (!payload.model) throw new Error(t("missingModel"));
-  if (!recovery && !payload.prompt) throw new Error(t("missingPrompt"));
+  if (!payload.prompt) throw new Error(t("missingPrompt"));
   if (!Number.isSafeInteger(payload.batchCount) || payload.batchCount < 1) throw new Error(t("invalidRepeat"));
-  if (isCustomModel()) {
-    const capabilities = payload.customCapabilities;
-    if (!capabilities.durations.length || capabilities.durations.some((duration) => !Number.isFinite(duration) || duration <= 0) || !capabilities.resolutions.length || !capabilities.aspectRatios.length) throw new Error(t("invalidCapabilities"));
-  }
+  if (payload.budget && (!Number.isFinite(payload.budget.amount) || payload.budget.amount <= 0)) throw new Error(t("invalidBudgetInput"));
+  if (isCustomModel()) { const caps = payload.customCapabilities; if (!caps.durations.length || caps.durations.some((duration) => !Number.isInteger(duration) || duration <= 0) || !caps.resolutions.length || !caps.aspectRatios.length) throw new Error(t("invalidCapabilities")); }
 }
-
 function persistSettings() {
   const values = { language: activeLanguage, provider: providerInput.value, model: modelInput.value, seconds: secondsInput.value, size: sizeInput.value, aspectRatio: aspectRatioInput.value, batchCount: batchCountInput.value };
   for (const key of preferenceNames) storageSet(`videogen.${key}`, values[key]);
 }
-
 function restoreSettings() {
   for (const key of privateStorageKeys) storageRemove(key);
   if (!storageGet("videogen.migrated")) {
-    for (const key of preferenceNames) {
-      const old = storageGet(`sora2app.${key}`);
-      if (old && !storageGet(`videogen.${key}`)) storageSet(`videogen.${key}`, old);
-      storageRemove(`sora2app.${key}`);
-    }
-    storageRemove("sora2app.mode");
-    storageSet("videogen.migrated", "1");
+    for (const key of preferenceNames) { const old = storageGet(`sora2app.${key}`); if (old && !storageGet(`videogen.${key}`)) storageSet(`videogen.${key}`, old); storageRemove(`sora2app.${key}`); }
+    storageRemove("sora2app.mode"); storageSet("videogen.migrated", "1");
   }
   return Object.fromEntries(preferenceNames.map((key) => [key, storageGet(`videogen.${key}`)]));
 }
-
-async function requestJson(endpoint, payload) {
-  if (isFilePreview) throw new Error(t("filePreviewGenerateError"));
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-videogen-language": activeLanguage },
-    body: JSON.stringify(payload),
-  });
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(result.error?.message || t("requestFailed", { status: response.status }));
-  return result;
-}
-
-async function estimate(payload) {
-  const { apiKey, ...publicPayload } = payload;
-  return requestJson("/api/estimate", publicPayload);
-}
-
 function scheduleEstimate() {
-  clearTimeout(estimateTimer);
-  const revision = ++estimateRevision;
-  lastEstimate = null;
-  updateSummary();
+  clearTimeout(estimateTimer); const revision = ++estimateRevision;
+  lastEstimate = null; updateSummary();
   if (isFilePreview || busy) return;
   estimateTimer = setTimeout(async () => {
-    const payload = readForm();
-    if (!payload.model || !payload.prompt) return;
-    try {
-      const result = await estimate(payload);
-      if (revision !== estimateRevision) return;
-      lastEstimate = result;
-      updateSummary();
-    } catch { /* Submission surfaces validation errors; unknown estimates stay visible. */ }
+    const payload = readForm(); if (!payload.model || !payload.prompt) return;
+    try { const result = await apiRequest("/api/estimate", payload); if (revision !== estimateRevision) return; lastEstimate = result; updateSummary(); }
+    catch { /* Final submission reports validation errors. */ }
   }, 400);
 }
-
-function applyStreamEvent(event) {
-  if (event.id || event.remoteId || event.remote?.id) videoId.textContent = event.remoteId || event.remote?.id || event.id;
-  if (event.status || event.state) setProgress(event.status || event.state, event.progress ?? currentProgress);
-  if (event.output) outputPath.textContent = outputDisplayPath(event.output);
-  if (event.message) appendLog(event.message);
-  if (event.type === "error") {
-    if (event.state === "needs_review" || event.error?.category === "unknown_outcome") appendLog(t("needsReview"), "error");
-    throw new Error(event.error?.message || t("streamError"));
-  }
-  if (event.type === "done") {
-    videoId.textContent = event.video?.id || event.videos?.[0]?.id || event.remoteId || videoId.textContent;
-    outputPath.textContent = outputDisplayPath(event.output);
-    const hasFailures = Number(event.output?.failedCount || event.failedCount || 0) > 0;
-    setProgress(hasFailures ? "partial" : "completed", 100);
-    const failedSuffix = hasFailures ? t("failedSuffix", { count: formatInteger(event.output?.failedCount || event.failedCount) }) : "";
-    const count = event.output?.count ?? event.output?.paths?.length;
-    appendLog(count !== undefined ? t("savedMany", { count: formatInteger(count), failedSuffix }) : t("savedOne", { path: outputDisplayPath(event.output) }), hasFailures ? "error" : "ok");
-    setConnectionState(hasFailures ? "connectionError" : "connectionCompleted");
-  }
-}
-
-function generateRequestBody(payload, inputReferenceFile) {
-  if (!inputReferenceFile) return { headers: { "content-type": "application/json", "x-videogen-language": activeLanguage }, body: JSON.stringify(payload) };
-  const body = new FormData();
-  body.append("payload", JSON.stringify(payload));
-  body.append("input_reference", inputReferenceFile, inputReferenceFile.name);
-  return { headers: { "x-videogen-language": activeLanguage }, body };
-}
-
-async function streamRequest(endpoint, payload, inputReferenceFile = null) {
-  if (isFilePreview) throw new Error(t("filePreviewGenerateError"));
-  const response = await fetch(endpoint, { method: "POST", ...generateRequestBody(payload, inputReferenceFile) });
-  if (!response.ok || !response.body) {
-    const data = await response.json().catch(() => ({}));
-    throw new Error(data.error?.message || t("requestFailed", { status: response.status }));
-  }
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let receivedDone = false;
-  const processLine = (line) => {
-    if (!line.trim()) return;
-    const event = JSON.parse(line);
-    applyStreamEvent(event);
-    if (event.type === "done") receivedDone = true;
-  };
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      lines.forEach(processLine);
-    }
-    buffer += decoder.decode();
-    processLine(buffer);
-  } finally {
-    reader.releaseLock();
-  }
-  if (!receivedDone) throw new Error(t("needsReview"));
-}
-
 function setBusy(value) {
   busy = value;
-  for (const element of [generateButton, recoverButton, clearButton, clearHistoryButton, providerInput, baseUrlInput, modelInput]) element.disabled = value;
+  if (value) {
+    disabledControls = new Map([...form.querySelectorAll("input, select, textarea, button")].map((element) => [element, element.disabled]));
+    for (const element of disabledControls.keys()) element.disabled = true;
+  } else {
+    for (const [element, disabled] of disabledControls) element.disabled = disabled;
+    disabledControls.clear();
+    syncOptionControls();
+  }
+  updateSelectedKeyStatus();
 }
-
 async function generateVideo(event) {
-  event.preventDefault();
-  if (busy) return;
-  const payload = readForm();
-  setBusy(true);
+  event.preventDefault(); if (busy) return;
+  const payload = readForm(); setBusy(true); clearTimeout(estimateTimer); estimateRevision += 1;
   try {
     validateSelection(payload);
-    const inputReference = await validateInputReferenceSelection(payload);
-    lastEstimate = await estimate(payload);
-    updateSummary();
-    const text = estimateText();
-    if (!window.confirm(t("confirmGenerate", { count: formatInteger(lastEstimate.count ?? payload.batchCount), cost: text.cost, eta: text.eta }))) return;
-    persistSettings();
-    clearStatus();
-    setConnectionState("generating");
-    setProgress("submitting", 0);
-    appendLog(t("submittingLog"));
-    await streamRequest("/api/generate-batch-stream", payload, inputReference?.file || null);
-  } catch (error) {
-    setProgress("failed", currentProgress);
-    appendLog(error.message, "error");
-    setConnectionState("connectionError");
-  } finally { setBusy(false); }
-}
-
-async function recoverVideo() {
-  if (busy) return;
-  const payload = readForm();
-  payload.remoteId = remoteIdInput.value.trim();
-  delete payload.prompt;
-  delete payload.batchCount;
-  setBusy(true);
-  try {
-    if (!payload.remoteId) throw new Error(t("missingRemoteId"));
-    if (!payload.model) throw new Error(t("missingModel"));
-    clearStatus();
-    setConnectionState("generating");
-    await streamRequest("/api/recover", payload);
-  } catch (error) { appendLog(error.message, "error"); setConnectionState("connectionError"); }
+    const reference = await validateInputReferenceSelection(payload);
+    lastEstimate = await apiRequest("/api/estimate", payload); updateSummary();
+    const estimate = estimateText();
+    const budget = payload.budget ? `\n${t("budgetLabel")}: ${formatCost(payload.budget)}` : "";
+    if (!await confirmAction(t("confirmGenerate", { count: formatInteger(lastEstimate.count), cost: estimate.cost, eta: estimate.eta }) + budget)) return;
+    if (apiKeyInput.value) await saveSelectedKey();
+    const result = await apiRequest("/api/batches", payload, "POST", reference?.file);
+    persistSettings(); formMessage(t("batchEnqueued", { count: result.count }));
+    queueView.batchFilter = result.id; queueView.jobPage = 0; queueView.jobCursors = [null];
+    await queueView.refresh();
+  } catch (error) { formMessage(error.message, true); }
   finally { setBusy(false); }
 }
-
-function clearStatus() {
-  logBox.textContent = "";
-  updateLogCount();
-  videoId.textContent = "-";
-  outputPath.textContent = "-";
-  setConnectionState(isFilePreview ? "connectionPreview" : "ready");
-  setProgress("idle", 0);
+function applyTranslations() {
+  document.documentElement.lang = t("htmlLang"); document.title = t("documentTitle");
+  languageInput.value = activeLanguage; languageInput.setAttribute("aria-label", t("languageLabel"));
+  document.querySelectorAll("[data-i18n]").forEach((element) => { element.textContent = t(element.dataset.i18n); });
+  document.querySelector(".controls-panel").setAttribute("aria-label", t("controlsAria"));
+  document.querySelector(".monitor-panel").setAttribute("aria-label", t("queueTitle"));
+  document.querySelector(".summary-grid").setAttribute("aria-label", t("summaryAria"));
+  promptInput.placeholder = t("promptPlaceholder"); outputDirInput.placeholder = t("outputDirPlaceholder"); filenameInput.placeholder = t("filenamePlaceholder");
+  inputReferenceInput.setAttribute("aria-label", t("inputReferenceLabel"));
+  toggleApiKeyButton.textContent = t(apiKeyInput.type === "password" ? "showApiKey" : "hideApiKey");
+  setConnectionState(connectionStateKey); renderProviders(providerInput.value); renderModels(modelInput.value); syncOptionControls();
+  queueView?.render();
 }
-
-async function clearHistory() {
-  if (!window.confirm(t("clearHistoryConfirm"))) return;
-  clearHistoryButton.disabled = true;
-  try { await requestJson("/api/history/clear", {}); appendLog(t("historyCleared"), "ok"); }
-  catch (error) { appendLog(error.message, "error"); }
-  finally { clearHistoryButton.disabled = false; }
+function setLanguage(language) { activeLanguage = normalizeLanguage(language); applyTranslations(); storageSet("videogen.language", activeLanguage); }
+async function refreshCatalog() {
+  const button = document.querySelector("#refreshCatalogButton"); button.disabled = true;
+  try { const lane = formLane(); const result = await apiRequest(`/api/catalog/refresh/${lane.provider}`, lane); if (result.providers) providers = result.providers; renderProviders(providerInput.value); renderModels(modelInput.value); syncOptionControls(); scheduleEstimate(); formMessage(t(result.refreshed ? "catalogRefreshed" : "catalogFallback")); }
+  catch (error) { formMessage(error.message, true); }
+  finally { button.disabled = false; }
 }
-
-function toggleApiKeyVisibility() {
-  const hidden = apiKeyInput.type === "password";
-  apiKeyInput.type = hidden ? "text" : "password";
-  toggleApiKeyButton.textContent = t(hidden ? "hideApiKey" : "showApiKey");
-  toggleApiKeyButton.setAttribute("aria-label", t(hidden ? "hideApiKeyAria" : "showApiKeyAria"));
-}
-
-async function selectOutputDirectory() {
-  selectOutputDirButton.disabled = true;
-  try {
-    const data = await requestJson("/api/select-output-dir", {});
-    if (!data.path) return;
-    outputDirInput.value = data.displayPath || data.path;
-    appendLog(t("selectedOutputDir", { path: data.displayPath || data.path }), "ok");
-  } catch (error) { appendLog(error.message, "error"); }
-  finally { selectOutputDirButton.disabled = false; }
-}
-
 async function init() {
-  const restored = restoreSettings();
-  activeLanguage = normalizeLanguage(restored.language || "zh");
+  const restored = restoreSettings(); activeLanguage = normalizeLanguage(restored.language || "zh");
+  let loadError = null;
   if (!isFilePreview) {
-    try {
-      const response = await fetch("/api/catalog", { headers: { "x-videogen-language": activeLanguage } });
-      if (!response.ok) throw new Error(t("requestFailed", { status: response.status }));
-      const data = await response.json();
-      if (!Array.isArray(data.providers) || !data.providers.length) throw new Error(t("noModels"));
-      providers = data.providers;
-      platform = data.platform;
-    } catch (error) { appendLog(t("loadCatalogError", { message: error.message }), "error"); }
+    try { const data = await apiRequest("/api/catalog"); if (!Array.isArray(data.providers) || !data.providers.length) throw new Error(t("noModels")); providers = data.providers; platform = data.platform; }
+    catch (error) { loadError = error; }
   }
-  renderProviders(restored.provider);
-  chooseLane();
-  renderModels(restored.model);
-  syncOptionControls();
-  for (const [name, input] of [["seconds", secondsInput], ["size", sizeInput], ["aspectRatio", aspectRatioInput]]) {
-    if ([...input.options].some((option) => option.value === restored[name])) input.value = restored[name];
-  }
+  renderProviders(restored.provider); chooseLane(); renderModels(restored.model); syncOptionControls();
+  for (const [name, input] of [["seconds", secondsInput], ["size", sizeInput], ["aspectRatio", aspectRatioInput]]) if ([...input.options].some((option) => option.value === restored[name])) input.value = restored[name];
   batchCountInput.value = String(Number.isSafeInteger(Number(restored.batchCount)) && Number(restored.batchCount) > 0 ? restored.batchCount : 1);
-  selectOutputDirButton.hidden = !isFilePreview && platform !== "darwin";
-  applyTranslations();
-  appendLog(t(isFilePreview ? "previewReadyLog" : "readyLog"), "ok");
+  selectOutputDirButton.hidden = isFilePreview || platform !== "darwin";
+  queueView = new QueueView(); applyTranslations();
+  if (loadError) formMessage(t("loadCatalogError", { message: loadError.message }), true);
+  else formMessage(t(isFilePreview ? "previewReadyLog" : "readyLog"));
+  await queueView.run(() => queueView.start());
 }
-
 form.addEventListener("submit", generateVideo);
-clearButton.addEventListener("click", clearStatus);
-recoverButton.addEventListener("click", recoverVideo);
-clearHistoryButton.addEventListener("click", clearHistory);
-toggleApiKeyButton.addEventListener("click", toggleApiKeyVisibility);
-selectOutputDirButton.addEventListener("click", selectOutputDirectory);
+saveKeyButton.addEventListener("click", async () => { saveKeyButton.disabled = true; try { await saveSelectedKey(); } catch (error) { formMessage(error.message, true); } finally { saveKeyButton.disabled = false; } });
+deleteKeyButton.addEventListener("click", async () => { const existing = queueView.keys.find((item) => sameLane(item.lane, formLane())); if (!existing) return; try { await apiRequest(`/api/keys/${existing.lane.id}`, undefined, "DELETE"); await queueView.loadLanes(); } catch (error) { formMessage(error.message, true); } });
+toggleApiKeyButton.addEventListener("click", () => { apiKeyInput.type = apiKeyInput.type === "password" ? "text" : "password"; toggleApiKeyButton.textContent = t(apiKeyInput.type === "password" ? "showApiKey" : "hideApiKey"); });
+selectOutputDirButton.addEventListener("click", async () => { selectOutputDirButton.disabled = true; try { const data = await apiRequest("/api/select-output-dir", {}); if (data.path) outputDirInput.value = data.displayPath || data.path; } catch (error) { formMessage(error.message, true); } finally { selectOutputDirButton.disabled = false; } });
+document.querySelector("#refreshCatalogButton").addEventListener("click", refreshCatalog);
 inputReferenceInput.addEventListener("change", handleInputReferenceChange);
 clearInputReferenceButton.addEventListener("click", clearInputReference);
 languageInput.addEventListener("change", () => setLanguage(languageInput.value));
 providerInput.addEventListener("change", () => { chooseLane(); persistSettings(); });
-baseUrlInput.addEventListener("input", () => { apiKeyInput.value = ""; scheduleEstimate(); });
+baseUrlInput.addEventListener("input", () => { apiKeyInput.value = ""; updateSelectedKeyStatus(); scheduleEstimate(); });
+apiKeyInput.addEventListener("input", updateSelectedKeyStatus);
 modelInput.addEventListener("change", () => { syncOptionControls(); scheduleEstimate(); persistSettings(); });
-for (const input of [customDurationsInput, customResolutionsInput, customAspectRatiosInput, customFirstFrameInput, customAudioInput]) {
-  input.addEventListener("change", () => { syncOptionControls(); scheduleEstimate(); });
-}
-for (const input of [promptInput, batchCountInput, customModelInput]) {
-  input.addEventListener("input", () => { updatePromptMeta(); scheduleEstimate(); });
-}
-for (const input of [secondsInput, sizeInput, aspectRatioInput, audioInput, seedInput, requestFormatInput]) {
-  input.addEventListener("change", () => { updateInputReferenceMeta(); scheduleEstimate(); persistSettings(); });
-}
-
+for (const input of [customDurationsInput, customResolutionsInput, customAspectRatiosInput, customFirstFrameInput, customAudioInput]) input.addEventListener("change", () => { syncOptionControls(); scheduleEstimate(); });
+for (const input of [promptInput, batchCountInput, customModelInput]) input.addEventListener("input", () => { updatePromptMeta(); scheduleEstimate(); });
+for (const input of [secondsInput, sizeInput, aspectRatioInput, audioInput, seedInput, requestFormatInput]) input.addEventListener("change", () => { updateInputReferenceMeta(); scheduleEstimate(); persistSettings(); });
 init();

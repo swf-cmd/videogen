@@ -8,8 +8,6 @@ const { handleSelectOutputDir } = require("./handlers/select-dir");
 const { readBody } = require("./body");
 const { languageFromRequest, st, SERVER_MESSAGES } = require("../i18n/server-messages");
 const { MAX_BATCH_BYTES } = require("../config");
-const { writeNdjson } = require("./responses");
-const { redact } = require("../queue/keys");
 let application;
 function configureApplication(value) { application = value; }
 
@@ -82,7 +80,7 @@ async function handleRequest(req, res) {
     }
 
     if (req.method === "POST" && url.pathname === "/api/select-output-dir") return await handleSelectOutputDir(req, res);
-    if (req.method === "GET" && ["/api/catalog", "/api/options"].includes(url.pathname)) {
+    if (req.method === "GET" && url.pathname === "/api/catalog") {
       return sendJson(res, 200, { ...application.catalog, platform: process.platform });
     }
     if (req.method === "GET" && url.pathname === "/api/jobs") return sendJson(res, 200, application.store.list(Object.fromEntries(url.searchParams)));
@@ -129,19 +127,6 @@ async function handleRequest(req, res) {
     if (req.method === "POST" && refresh) {
       const { payload } = await readBody(req, languageFromRequest(req));
       return sendJson(res, 200, await application.refreshCatalog(refresh[1], payload));
-    }
-    if (req.method === "POST" && ["/api/generate-batch-stream", "/api/generate-stream", "/api/generate", "/api/recover", "/api/download"].includes(url.pathname)) {
-      const language = languageFromRequest(req);
-      const { payload, file } = await readBody(req, language, MAX_BATCH_BYTES);
-      payload.language = language;
-      res.writeHead(200, { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" });
-      const emit = (event) => { if (!res.destroyed) writeNdjson(res, redact(event)); };
-      const operation = application.generate(payload, file, emit, ["/api/recover", "/api/download"].includes(url.pathname));
-      application.work.add(operation);
-      try { await operation; }
-      catch (error) { emit({ type: "error", error: localizedError(error, language) }); }
-      finally { application.work.delete(operation); res.end(); }
-      return;
     }
     if (req.method === "POST" && url.pathname === "/api/estimate") {
       const { payload } = await readBody(req, languageFromRequest(req));

@@ -19,7 +19,7 @@ function loadLegacyServer(overrides = {}) {
   return {
     ...require("../../src/media/image"),
     ...require("../../src/files/output"),
-    ...require("../../src/http/handlers/legacy"),
+    ...require("../../src/http/handlers/prompts"),
     ...require("../../src/http/router"),
     ...context.module.exports,
   };

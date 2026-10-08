@@ -9,9 +9,8 @@ const { loadCatalog, validateCatalog, normalizeOpenRouterModels } = require("./c
 const { createContext } = require("./providers/base");
 const { normalizeInputReference } = require("./media/image");
 const outputFiles = require("./files/output");
-const { resolveBatchOutputPath, displayPathForUser } = outputFiles;
-const { parseBatchPrompts } = require("./http/handlers/legacy");
-const { st } = require("./i18n/server-messages");
+const { resolveBatchOutputPath } = outputFiles;
+const { parseBatchPrompts } = require("./http/handlers/prompts");
 const { dataDirectory, MAX_BATCH_BYTES } = require("./config");
 
 function adapters() {
@@ -45,10 +44,7 @@ class Application {
       } });
     } catch (error) { this.store.close(); throw error; }
     this.stopping = false;
-    this.work = new Set();
   }
-
-  error(category, language = "zh", extra = {}) { return { category, code: category, message: st(language, category), ...extra }; }
 
   async start() {
     if (this.starting) return this.starting;
@@ -129,16 +125,15 @@ class Application {
     return { cost: { ...selected.cost, amount }, count: prompts.length, etaSeconds: Math.ceil(prompts.length / concurrency) * typical, concurrency };
   }
 
-  async prepare(payload, file, recover = false) {
+  async prepare(payload, file) {
     if (this.stopping) throw new Error("serviceStopping");
     const selected = this.selection(payload);
     const { lane, adapter, model, params } = selected;
     const image = file?.size ? await normalizeInputReference(file, pixelSize(params), payload.language) : null;
     if (image && !model.capabilities.firstFrame) throw new Error("unsupportedFirstFrame");
     const assets = image ? [this.assets.put(image)] : [];
-    const prompts = recover ? [""] : this.prompts(payload);
+    const prompts = this.prompts(payload);
     const batchId = crypto.randomUUID();
-    if (recover && (!payload.remoteId || /[\s\x00-\x1f\x7f]/.test(payload.remoteId) || String(payload.remoteId).length > 512)) throw new Error("invalidRemoteId");
     let budget = null;
     if (payload.budget !== undefined && payload.budget !== null && payload.budget !== "") {
       const amount = Number(typeof payload.budget === "object" ? payload.budget.amount : payload.budget);
@@ -151,8 +146,8 @@ class Application {
       return {
         id, batchId, index, provider: lane.provider, region: lane.region, baseUrl: lane.baseUrl, laneId: lane.id,
         model: model.id, modelConfig: model, params, prompt, assets,
-        state: recover ? "running" : "queued", progress: 0,
-        remote: recover ? { id: String(payload.remoteId), lastStatus: "running" } : null,
+        state: "queued", progress: 0,
+        remote: null,
         attempts: { create: 0, poll: 0, download: 0 }, costEstimate: selected.cost,
         targetPath: resolveBatchOutputPath(payload.outputDir, payload.filename, index, prompts.length, id).filePath,
         createdAt: new Date().toISOString(), language: payload.language || "zh", requiresKey: Boolean(this.keys.get(lane)) || adapter.validateKey("") !== null,
@@ -207,32 +202,6 @@ class Application {
       this.catalog.providers = this.catalog.providers.map((entry) => entry.provider === providerId ? refreshed : entry);
       return { ...this.catalog, refreshed: true };
     } catch { return { ...this.catalog, refreshed: false, error: { code: "catalogFallback" } }; }
-  }
-
-  async generate(payload, file, emit, recover = false) {
-    const selected = this.selection(payload);
-    if (payload.apiKey !== undefined) this.setKey({ lane: selected.lane, key: String(payload.apiKey) });
-    await this.start();
-    const { jobs } = await this.prepare(payload, file, recover);
-    const ids = new Set(jobs.map((job) => job.id));
-    await new Promise((resolve) => {
-      const terminal = new Set(["succeeded", "failed", "cancelled", "needs_review", "result_expired"]);
-      const check = () => {
-        const current = [...ids].map((id) => this.store.get(id));
-        const lanes = this.scheduler.laneList();
-        const halted = lanes.find((entry) => entry.id === selected.lane.id && ["paused", "needs_key"].includes(entry.state));
-        if (this.stopping || halted || current.every((job) => terminal.has(job.state))) { cleanup(); resolve(); }
-      };
-      const listener = (event) => {
-        if (ids.has(event.jobId)) { const job = this.store.get(event.jobId); emit({ type: "status", localId: job.id, id: job.remote?.id, status: job.state, progress: job.progress, message: job.error?.message }); check(); }
-      };
-      const timer = setInterval(check, 100);
-      const cleanup = () => { clearInterval(timer); this.store.off("event", listener); };
-      this.store.on("event", listener);
-      check();
-    });
-    const saved = [...ids].map((id) => this.store.get(id)).filter((job) => job.state === "succeeded");
-    emit({ type: "done", output: { count: saved.length, failedCount: jobs.length - saved.length, paths: saved.map((job) => displayPathForUser(job.output.path)) }, message: st(payload.language, "batchDone", { count: saved.length }) });
   }
 
   clearHistory() { const count = this.store.clearHistory(); this.assets.collect(this.store.jobs.values()); return { count }; }

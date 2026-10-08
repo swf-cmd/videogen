@@ -9,10 +9,6 @@ function sendJson(res, status, data) {
   res.end(JSON.stringify(redactLocalPaths(redact(data))));
 }
 
-function writeNdjson(res, event) {
-  res.write(`${JSON.stringify({ at: new Date().toISOString(), ...event })}\n`);
-}
-
 function sendText(res, status, message) {
   res.writeHead(status, {
     "content-type": "text/plain; charset=utf-8",
@@ -23,6 +19,5 @@ function sendText(res, status, message) {
 
 module.exports = {
   sendJson,
-  writeNdjson,
   sendText,
 };
