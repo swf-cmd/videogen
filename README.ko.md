@@ -1,18 +1,44 @@
+<div align="center">
+
 # videogen
 
-로컬에서 실행하는 AI 동영상 일괄 작업 도구입니다. 작업별 시작·끝 프레임, CSV와 템플릿 변수, 갤러리 선별, 자동 다운로드, 재시작 복구를 지원합니다. 사용할 공급자의 API 키를 직접 준비하세요.
+**프롬프트 목록이나 CSV를, 골라 둔 AI 동영상 묶음으로. 내 컴퓨터에서, 내 공급자 키로.**
 
-[English](README.md) · [中文](README.zh-CN.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
+[![최신 릴리스](https://img.shields.io/github/v/release/swf-cmd/videogen?label=release)](https://github.com/swf-cmd/videogen/releases/latest)
+[![테스트와 포터블 패키지](https://github.com/swf-cmd/videogen/actions/workflows/portable.yml/badge.svg?branch=main)](https://github.com/swf-cmd/videogen/actions/workflows/portable.yml)
+[![MIT 라이선스](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+![Node.js ^22.21 또는 24.5 이상](https://img.shields.io/badge/node-%5E22.21%20%7C%7C%20%E2%89%A524.5-339933?logo=nodedotjs&logoColor=white)
+![npm 의존성 0개](https://img.shields.io/badge/npm%20dependencies-0-brightgreen)
+![Windows·macOS·Linux](https://img.shields.io/badge/platform-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-lightgrey)
 
-[![오프라인 사용 시연](docs/media/videogen-workflow.gif)](docs/media/videogen-workflow.webm)
+[English](README.md) · [中文](README.zh-CN.md) · [日本語](README.ja.md) · **한국어**
 
-[사용 화면 녹화](docs/media/videogen-workflow.webm) · [재생 테스트용 영상](docs/media/offline-preview.mp4) · [Sora 2에서 이전하기](docs/MIGRATING_FROM_SORA.md)
+</div>
 
-녹화에는 로컬 테스트 자료를 사용했습니다. 샘플은 재생 확인용으로 만든 영상이며 **AI 모델의 생성 품질을 보여 주는 샘플이 아닙니다**. 유료 API로 샘플을 생성하지 않았습니다.
+[![사용 시연: CSV와 이미지 폴더 가져오기, 비용 확인, 대기열 진행, 키보드로 선별](docs/media/videogen-workflow.gif)](docs/media/videogen-workflow.webm)
+
+<sub>로컬 대체 엔드포인트에 연결해 오프라인으로 녹화했습니다. 영상은 프로그램으로 그린 테스트용 애니메이션이며 **AI 생성 결과가 아닙니다**. 초당 $0.05 가격은 로컬 예시 카탈로그 값이며 공급자 견적이 아닙니다. 유료 API는 호출하지 않았습니다.</sub>
+
+**[Windows / macOS 버전 다운로드](https://github.com/swf-cmd/videogen/releases/latest)** · [소스로 실행](#시작) · [원본 크기 녹화](docs/media/videogen-workflow.webm) · [Sora 2에서 이전하기](docs/MIGRATING_FROM_SORA.md)
+
+> [!NOTE]
+> **OpenAI는 2026-09-24에 Sora 2 API를 종료했습니다**([지원 중단 목록](https://developers.openai.com/api/docs/deprecations)). videogen은 Sora2App의 후속 프로젝트로, 같은 로컬 일괄 작업 흐름을 OpenRouter, Gemini, Alibaba Cloud Model Studio, Volcengine / BytePlus Ark 또는 직접 운영하는 OpenAI 호환 서버에서 이어 갑니다. 이전 Sora 작업은 자동으로 옮길 수 없으니 [이전 안내](docs/MIGRATING_FROM_SORA.md)에서 보관할 항목을 확인하세요.
+
+## videogen의 특징
+
+- **한 편씩이 아니라 한꺼번에.** 빈 줄로 구분한 프롬프트를 붙여 넣거나, 템플릿 변수가 있는 UTF-8 CSV와 이미지 폴더를 가져옵니다. 행마다 시작 프레임(모델이 지원하면 끝 프레임도)을 지정할 수 있고, ‘프롬프트당 테이크 수’로 각 행을 1~20번 생성합니다.
+- **가장 좋은 테이크를 빠르게.** 완성된 영상은 샷·테이크별로 갤러리에 모입니다. **J/K** 이동, **Space** 재생, **1** 보관, **2** 제외. 보관한 테이크는 경로·프롬프트·설정·SHA-256이 담긴 CSV/JSON으로 내보내 편집 프로그램에 넘길 수 있습니다.
+- **제출 전에 비용 확인.** 각 행을 모델 지원 기능으로 검증하고 비용을 추정한 뒤에야 전송합니다. 배치 예산과 보관한 영상 한 편당 추정 비용도 볼 수 있습니다. 모르는 가격은 추측하지 않고 ‘알 수 없음’으로 표시합니다.
+- **중복 과금을 막는 설계.** 대기열은 로컬 서비스가 관리하므로 브라우저를 닫아도 상관없고, 충돌이나 재시작 뒤에도 알려진 작업을 계속 추적합니다. 결과가 불확실한 생성 요청은 자동으로 다시 보내지 않고 사용자의 판단을 기다립니다. SIGKILL 재시작을 포함한 100개 작업 시험에서 중복 생성은 0건이었습니다.
+- **로컬 실행, 개인정보 보호.** 서비스는 `127.0.0.1`에서만 동작합니다. 키는 메모리에만 있고 프롬프트·이미지·기록은 내 데이터 폴더에 남습니다. 계정, 원격 분석, 업데이트 확인, npm 의존성이 없습니다.
+- **여러 공급자, 하나의 흐름.** 날짜가 표시된 내장 카탈로그에 OpenRouter·Gemini·Model Studio·Ark의 동영상 모델 31종(Veo 3.1, Kling 3.0, Seedance 2.5, Wan 3.0, Runway Gen-4.5 등)이 있으며, 직접 운영하는 OpenAI 호환 서버도 쓸 수 있습니다. [자세히(영어)](README.md#providers-and-estimates)
+
+<p align="center"><img src="docs/media/videogen-review.png" width="680" alt="샷과 테이크별로 묶인 갤러리. 보관·제외·미검토 상태, 총비용과 보관 영상당 추정 비용, 내보내기 버튼과 키보드 단축키 안내"></p>
+<p align="center"><sub>같은 오프라인 실행의 선별 화면(테스트용 애니메이션, 예시 가격).</sub></p>
 
 ## 시작
 
-**설치 없는 ZIP:** [Releases](https://github.com/swf-cmd/videogen/releases)에서 Windows x64 또는 macOS universal 파일을 받아 쓰기 가능한 폴더에 전체 압축을 풉니다. Windows에서는 **Start videogen.cmd**, Mac에서는 **Start videogen.command**를 두 번 클릭하세요. Node 24 LTS가 포함되어 있으며 Apple Silicon과 Intel Mac을 모두 지원합니다. 아직 파일이 게시되지 않았다면 소스 실행 방법을 사용하세요.
+**설치 없는 ZIP:** [Releases](https://github.com/swf-cmd/videogen/releases/latest)에서 Windows x64 또는 macOS universal 파일을 받아 쓰기 가능한 폴더에 전체 압축을 풉니다. Windows에서는 **Start videogen.cmd**, Mac에서는 **Start videogen.command**를 두 번 클릭하세요. Node 24 LTS가 포함되어 있으며 Apple Silicon과 Intel Mac을 모두 지원합니다.
 
 운영체제가 첫 실행 확인을 요청할 수 있습니다. macOS에서는 **시스템 설정 → 개인정보 보호 및 보안 → 확인 없이 열기**를 확인하세요. 이 ZIP은 공증된 `.app` 설치 파일이 아닙니다. 자세한 방법과 체크섬은 [포터블 패키지 설명](docs/PORTABLE.md)에 있습니다.
 

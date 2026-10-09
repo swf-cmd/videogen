@@ -1,6 +1,6 @@
 # 从 Sora2App／Sora 2 迁移到 videogen
 
-videogen 2.x 提供本机持久化队列，支持 OpenRouter、Gemini、阿里云百炼、火山方舟／BytePlus Ark 以及明确配置的 OpenAI 兼容端点。它不能恢复已停用的 Sora 集成，也不再假定旧 OpenAI Batch 的折扣。[English](MIGRATING_FROM_SORA.md)
+videogen 2.x 提供本机持久化队列，支持 OpenRouter、Gemini、阿里云百炼、火山方舟／BytePlus Ark 以及明确配置的 OpenAI 兼容端点。它不能恢复已停用的 Sora 集成（OpenAI 已于 2026-09-24 关停 Sora 2 模型和 Videos API，未指定替代，见[弃用公告](https://developers.openai.com/api/docs/deprecations)），也不再假定旧 OpenAI Batch 的折扣。[English](MIGRATING_FROM_SORA.md)
 
 ## 五步迁移
 
@@ -8,9 +8,9 @@ videogen 2.x 提供本机持久化队列，支持 OpenRouter、Gemini、阿里�
 2. **启动新版。** Windows／macOS 免安装 ZIP 完整解压后双击启动器；或使用 Node `^22.21.0 || >=24.5.0`，在源码目录执行 `npm start`。macOS 启动器改名为 **Start videogen.command**，Windows 为 **Start videogen.cmd**。
 3. **选择供应商、区域和模型。** 原提示词可以复用，但要重新检查模型支持的时长、尺寸、音频和首尾帧。OpenAI 密钥不能用于其他供应商。百炼还需填写实际的工作空间专属域名。详见[供应商说明](providers/)。
 4. **导入并检查。** 粘贴提示词，或导入 CSV／模板变量和图片文件夹。逐条指定首帧，模型支持时可增加尾帧。修复行错误、核对估价，再明确确认批次。迁移和导入本身不会生成视频。
-5. **预览、挑片、保留。** 服务下载原始结果；画廊可直接预览并标记保留或淘汰，查看每条保留片的估算成本。重新生成属于新的可能收费任务，每次都需单独确认。
+5. **预览、挑片、保留。** 服务下载原始结果；需要比较时可让每条提示词生成多个 take，画廊按镜头分组预览，用键盘标记保留或淘汰，查看每条保留片的估算成本，并把保留片导出为 CSV/JSON。重新生成属于新的可能收费任务，每次都需单独确认。
 
-| 旧使用习惯 | videogen 2.1 的对应方式 |
+| 旧使用习惯 | videogen 2.x 的对应方式 |
 | --- | --- |
 | 一把 OpenAI 密钥、固定 Sora 模型 | 每个供应商／区域／端点使用自己的密钥与能力 |
 | 预期 Batch 折扣 | 按供应商估价，不假定折扣、不混加不同币种 |

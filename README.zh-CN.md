@@ -1,24 +1,52 @@
+<div align="center">
+
 # videogen
 
-本机运行的 AI 视频批量工作台：逐条首尾帧、CSV 导入、画廊挑片、崩溃恢复、自动下载，自带供应商密钥。
+**把提示词列表或 CSV 变成一批挑好片的 AI 视频——在你自己的电脑上，用你自己的供应商密钥。**
 
-[English](README.md) · [中文](README.zh-CN.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
+[![最新版本](https://img.shields.io/github/v/release/swf-cmd/videogen?label=release)](https://github.com/swf-cmd/videogen/releases/latest)
+[![测试与免安装包](https://github.com/swf-cmd/videogen/actions/workflows/portable.yml/badge.svg?branch=main)](https://github.com/swf-cmd/videogen/actions/workflows/portable.yml)
+[![MIT 许可](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+![Node.js ^22.21 或 24.5+](https://img.shields.io/badge/node-%5E22.21%20%7C%7C%20%E2%89%A524.5-339933?logo=nodedotjs&logoColor=white)
+![npm 依赖：0](https://img.shields.io/badge/npm%20dependencies-0-brightgreen)
+![Windows、macOS、Linux](https://img.shields.io/badge/platform-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-lightgrey)
 
-[![离线操作录屏：导入、逐条首尾帧与画廊](docs/media/videogen-workflow.gif)](docs/media/videogen-workflow.webm)
+[English](README.md) · **中文** · [日本語](README.ja.md) · [한국어](README.ko.md)
 
-[观看操作录屏](docs/media/videogen-workflow.webm) · [播放离线预览样片](docs/media/offline-preview.mp4) · [免安装包说明](docs/PORTABLE.md) · [从 Sora 2 迁移](docs/MIGRATING_FROM_SORA.zh-CN.md)
+</div>
 
-录屏使用本机测试素材，没有进行付费生成。预览样片是程序生成的播放测试，**不代表 AI 模型的生成效果**。真实供应商样片等待明确授权付费生成，或提供允许公开的现有视频。
+[![操作录屏：导入 CSV 与图片文件夹、确认费用、实时队列、键盘挑片](docs/media/videogen-workflow.gif)](docs/media/videogen-workflow.webm)
 
-**Sora 已停用。** **2.2.0** 在 2.0.0 的持久化队列上扩展批量工作流，接替 Sora2App 已失效的集成。关闭浏览器后任务继续运行，重启服务后任务记录仍在。旧 OpenAI Batch 流程及折扣已移除。
+<sub>录屏在本机离线完成，连接的是本地模拟端点。画面中的视频是程序绘制的测试动画，**不是 AI 生成结果**；每秒 $0.05 的价格来自本地示例目录，不是供应商报价。全程没有调用付费接口。</sub>
+
+**[下载 Windows / macOS 免安装包](https://github.com/swf-cmd/videogen/releases/latest)** · [从源码运行](#快速开始) · [原尺寸录屏](docs/media/videogen-workflow.webm) · [从 Sora 2 迁移](docs/MIGRATING_FROM_SORA.zh-CN.md)
+
+> [!NOTE]
+> **OpenAI 已于 2026-09-24 关停 Sora 2 API**（[弃用公告](https://developers.openai.com/api/docs/deprecations)）。videogen 是 Sora2App 的后继版本：保留同样的本机批量工作流，改为接入 OpenRouter、Gemini、阿里云百炼、火山方舟 / BytePlus ModelArk，或你自己的 OpenAI 兼容服务器。旧的 Sora 任务无法自动迁移，需要保留哪些内容见[迁移说明](docs/MIGRATING_FROM_SORA.zh-CN.md)。
 
 **2.2.0 新增：**每条提示词生成多个 take、按镜头分组的键盘审片、可导入剪辑软件的保留片清单（CSV/JSON）、对卡住的远端任务“停止跟踪”、可选桌面通知和手机布局。同时修复了重新输入密钥导致服务卡死、取消／预算／暂停边界情况下可能派发不需要的付费创建，以及慢速网络下下载失败等问题。详见[更新日志](CHANGELOG.md)。
 
-## 启动
+## 为什么用 videogen
 
-**免安装 ZIP：**从 [Releases](https://github.com/swf-cmd/videogen/releases) 选择 Windows x64 或 macOS 通用包，完整解压后双击 **Start videogen.cmd** 或 **Start videogen.command**。已内置 Node 24 LTS；任务数据与默认输出分别放在旁边的 `portable-data/`、`portable-output/`。系统首次打开可能要求确认，详见[整合包说明及校验](docs/PORTABLE.md)。若尚未发布附件，可先按下方从源码启动。
+- **批量，而不是一条条点。** 用空行分隔粘贴多条提示词，或导入带模板变量的 UTF-8 CSV 和图片文件夹。每一行都能单独设置首帧（模型支持时还有尾帧），**每条生成次数**可让每行渲染 1–20 次。
+- **快速挑出最好的一条。** 完成的视频按镜头和 take 分组进入画廊。全程键盘操作——**J/K** 切换、**空格**播放、**1** 保留、**2** 淘汰——再把保留片导出为 CSV 或 JSON（含路径、提示词、参数和 SHA-256），直接交给剪辑软件。
+- **提交前先看费用。** 每一行都会先按模型能力校验并估价，什么都不会提前发出。可设置批次预算，查看每条保留片的估算成本。缺少价格时显示**未知**，不会瞎猜。
+- **设计上避免重复扣费。** 队列由本机服务持有：关掉浏览器没有影响，崩溃或重启后继续跟踪已知任务。创建请求被打断时绝不会自动重发，而是等你决定。100 个任务、多次 SIGKILL 重启的崩溃测试中，重复创建为 0。
+- **本机运行，保护隐私。** 服务只监听 `127.0.0.1`。密钥只在内存中，提示词、参考图和任务记录留在你的数据目录。无需注册账号，没有遥测、更新检查，也没有 npm 依赖。
+- **多家供应商，一套流程。** 带日期的内置目录收录 OpenRouter、Gemini、百炼和方舟的 31 个视频模型，包括 Veo 3.1、可灵 3.0、Seedance 2.5、万相 3.0、Runway Gen-4.5，另可接入你自己运行的 OpenAI 兼容服务器。[详情](#供应商与估算)
 
-**从源码启动：**使用 **Node.js 22.21.0 起的 22.x 版本，或 Node.js 24.5.0 及以上版本**（`^22.21.0 || >=24.5.0`）。不支持 Node 18、20、23，无需执行 `npm install`。
+<p align="center"><img src="docs/media/videogen-review.png" width="680" alt="按镜头和 take 分组的画廊：保留、淘汰、未审状态，总成本与每条保留片成本，导出按钮和键盘快捷键"></p>
+<p align="center"><sub>同一次离线运行中的审片画廊（测试动画，示例价格）。</sub></p>
+
+## 快速开始
+
+**免安装 ZIP：Windows x64 与 macOS（Apple Silicon 和 Intel），无需安装任何东西**
+
+1. 从 [Releases](https://github.com/swf-cmd/videogen/releases/latest) 下载 `videogen-<版本>-windows-x64.zip` 或 `videogen-<版本>-macos-universal.zip`，**完整**解压整个文件夹。
+2. 双击 **Start videogen.cmd**（Windows）或 **Start videogen.command**（macOS）。已内置 Node 24 LTS。系统首次打开可能要求确认，详见[整合包说明及校验](docs/PORTABLE.md)。
+3. 浏览器会自动打开应用。任务运行期间请保持终端窗口打开。任务数据与默认输出分别放在启动器旁边的 `portable-data/`、`portable-output/`。
+
+**从源码运行：任意系统，Node.js `^22.21.0 || >=24.5.0`**（22.x 需 22.21.0 及以上，或 24.5.0 及以上；不支持 Node 18、20、23）。无需执行 `npm install`。
 
 ```bash
 git clone https://github.com/swf-cmd/videogen.git
@@ -26,7 +54,32 @@ cd videogen
 npm start
 ```
 
-打开服务打印的地址，默认 `http://127.0.0.1:5177`。可用 `PORT` 更换端口；服务始终只监听 `127.0.0.1`。默认端口被占用时，启动器自动选择其他本地端口。旧名 `Start Sora2App.command` 已废弃；保持启动器、运行时和应用文件完整。Linux 从源码运行；Windows 和 Linux 手动填写输出目录。直接打开 `public/index.html` 可预览界面，但不能生成。即使使用不同端口，同一个数据目录也只允许一个服务实例。按 Ctrl+C 后最多等待 15 秒，让正在进行的请求完成持久化再退出。数据和输出目录须支持硬链接；请使用本地系统磁盘，勿使用 exFAT。
+打开服务打印的地址，默认 `http://127.0.0.1:5177`。选择供应商和模型、保存密钥、粘贴提示词或导入 CSV，确认估价后提交。从源码运行时视频默认保存到 `~/Downloads/videogen`。
+
+<details>
+<summary><b>第一次提交前值得知道的事</b></summary>
+
+- 可用 `PORT` 更换端口；服务始终只监听 `127.0.0.1`。默认端口被占用时，启动器自动选择其他本地端口。
+- 按 Ctrl+C 后最多等待 15 秒，让正在进行的请求完成持久化再退出。即使使用不同端口，同一个数据目录也只允许一个服务实例。
+- 数据和输出目录须支持硬链接；请使用本地系统磁盘，勿使用 exFAT。
+- Linux 从源码运行；Windows 和 Linux 手动填写输出目录。
+- 保持启动器、运行时和应用文件完整。旧名 `Start Sora2App.command` 已废弃。
+- 直接打开 `public/index.html` 可预览界面，但不能生成。
+
+</details>
+
+## 工作原理
+
+```mermaid
+flowchart LR
+  B["浏览器标签页<br/>（随时可以关）"] <-->|"HTTP + 实时事件<br/>仅 127.0.0.1"| S["本机服务<br/>队列 · 车道 · 预算"]
+  S <-->|"每次创建前后落盘"| J[("数据目录<br/>任务日志 · 参考图")]
+  S -->|"创建 · 轮询"| P["供应商 API<br/>（密钥仅在内存）"]
+  P -->|"原始视频字节"| S
+  S -->|"流式写盘，不覆盖"| O[("输出目录")]
+```
+
+供应商 + 区域 + base URL 构成一条**车道**，各自拥有密钥、并发和暂停状态。任务在发出创建请求之前先写入磁盘，拿到远端 ID 后立即保存，因此重启后会继续轮询和下载，而不是再创建一次。创建结果不明时，任务停在**待核实**。状态机与不变式见[架构说明](docs/ARCHITECTURE.md)。
 
 ## 提交批次
 
@@ -64,11 +117,11 @@ npm start
 
 | 供应商 · 区域 | 内置模型与限制 |
 | --- | --- |
-| OpenRouter · 全球 | 有日期的回退快照含 Veo 3.1 Lite、Seedance 2.5、Wan 等目录模型；显式刷新可获取当前视频目录。模型声明支持时，本地首帧转换成 base64 data URL 传入 `frame_images`；控件、逐行校验和估价随 `/videos/models` 返回的能力变化，不假定缺失能力。按美元 SKU 估算；Seedance 的 token 价格按 OpenRouter 公布的公式（高 × 宽 × 秒数 × 24 / 1024）估算，4K 等未公布尺寸仍显示未知。结果保留期及账号限额未知。请求带有 OpenRouter 应用署名请求头（设置 `VIDEOGEN_OPENROUTER_ATTRIBUTION=0` 可关闭）。[协议](docs/providers/openrouter.md) |
+| OpenRouter · 全球 | 有日期的回退快照列出 26 个视频模型，包括 Google Veo 3.1（标准、Fast、Lite）、可灵 3.0、字节 Seedance 2.5、阿里万相 3.0、Runway Gen-4.5、MiniMax H3、Grok Imagine Video 和 FLUX.3 Video；显式刷新可获取当前视频目录。模型声明支持时，本地首帧转换成 base64 data URL 传入 `frame_images`；控件、逐行校验和估价随 `/videos/models` 返回的能力变化，不假定缺失能力。按美元 SKU 估算；Seedance 的 token 价格按 OpenRouter 公布的公式（高 × 宽 × 秒数 × 24 / 1024）估算，4K 等未公布尺寸仍显示未知。结果保留期及账号限额未知。请求带有 OpenRouter 应用署名请求头（设置 `VIDEOGEN_OPENROUTER_ATTRIBUTION=0` 可关闭）。[协议](docs/providers/openrouter.md) |
 | Gemini API · 支持地区 | `gemini-omni-1.1-flash`，3–10 秒，360p/720p/1080p/4K，首尾帧及原生音频。音频固定开启，不提供 seed。仅核实了 720p 视频输出 token 系数，约 USD 0.10136/秒，另计输入、思考等费用；其他分辨率估算未知。Google 将于 2026-10-22 从 Gemini API 下线 Veo 3.1 预览模型，并以 Omni 作为替代；Veo 仍可通过 OpenRouter 使用。[协议](docs/providers/gemini.md) |
-| 阿里云百炼 · 北京 / 新加坡 | `wan3.0-video`、`wan3.0-video-prime`，2–30 秒，480p/720p/1080p，支持首尾帧、音频开关及 seed。必须填写**工作空间专属域名**；占位符、旧通用域名和区域不匹配会被拒绝。按区域使用人民币列表价，不假定促销折扣；国际站（alibabacloud.com）新加坡账号按美元计费，见协议说明。[协议](docs/providers/dashscope.md) |
+| 阿里云百炼 · 北京 / 新加坡 | `wan3.0-video`、`wan3.0-video-prime`，2–30 秒，480p/720p/1080p，支持首尾帧、音频开关及 seed。必须填写**工作空间专属域名**；占位符、旧通用域名和区域不匹配会被拒绝。按区域使用人民币列表价，不假定促销折扣；国际站（alibabacloud.com）新加坡账号按美元计费，可在 `catalog.local.json` 中覆盖价格，见协议说明。[协议](docs/providers/dashscope.md) |
 | 火山方舟 · 北京 / BytePlus ModelArk · 海外 | Seedance 2.5：`doubao-seedance-2-5-260628` / `dreamina-seedance-2-5-260628`，4–30 秒，480p/720p/1080p，首尾帧及音频开关。未核实 2.5 支持 seed，因此禁用。国内价格未知；BytePlus 按已核实的美元 token/像素公式估算。自适应输出尺寸的成本未知。1080p HEVC 不保证所有浏览器都能播放。[协议](docs/providers/ark.md) |
-| OpenAI 兼容端点 · 自定义 | 配置本地或可信服务器的准确模型与能力，默认标记实验性。选定服务器支持的请求格式，不预置 Sora 模型或假定价格。[协议](docs/providers/openai-compatible.md) |
+| OpenAI 兼容端点 · 自定义 | 配置本地或可信服务器（例如 SGLang、vLLM-Omni 的视频服务）的准确模型与能力，默认标记实验性。选定服务器支持的请求格式，不预置 Sora 模型或假定价格。[协议](docs/providers/openai-compatible.md) |
 | Mock · 本地 | 仅开发时设置 `VIDEOGEN_DEV=1` 显示；输出确定性测试字节，不是可播放的生成视频。 |
 
 内置目录位于 `data/catalog/`，可通过数据目录中的 `catalog.local.json` 覆盖。OpenRouter 刷新结果会缓存；刷新失败保留可用目录，并有仓库快照作为回退。未知或未核实的配置显示为**实验性**。供应商价格和可用性可能变化。
@@ -129,10 +182,12 @@ npm run test:e2e
 VIDEOGEN_DEV=1 npm start
 ```
 
-测试使用 Node 内置测试器、本机 mock 和临时目录，离线运行，不调用付费接口。100 任务崩溃验收使用两条车道，经历 3 次 SIGKILL 重启、5 次 SSE 断连，结果为 92 成功、5 审核失败、3 待核实；重复创建、未跟踪远端任务、哈希不符和密钥暴露均为 0。观测到的车道并发峰值为 3/5，下载池峰值为 3。这些是 mock 测试结果，不代表真实供应商可用性或账单保证。
+测试使用 Node 内置测试器、本机 mock 和临时目录，离线运行，不调用付费接口。100 任务崩溃验收使用两条车道，经历 3 次 SIGKILL 重启、5 次 SSE 断连，结果为 92 成功、5 审核失败、3 待核实；重复创建、未跟踪远端任务、哈希不符和密钥暴露均为 0。观测到的车道并发峰值为 3/5，下载池峰值为 3。这些是 mock 测试结果，不代表真实供应商可用性或账单保证。CI 在 Linux 和 Windows 上用 Node 22.21.0 与 24.21.0 运行同样的测试，并在 Windows x64、Apple Silicon 和 Intel Mac 上对免安装包做冒烟测试。
 
 应用使用 CommonJS 和浏览器经典脚本。旧生成、状态、下载端点已移除；界面使用持久化批次、任务 API 和 `/api/events`。参见[贡献说明](CONTRIBUTING.md)、[更新日志](CHANGELOG.md)及[发布清单](docs/GITHUB_LAUNCH_CHECKLIST.md)。
 
-[MIT 许可](LICENSE)。不要提交 `runtime/`、生成媒体、本机任务数据或密钥。
-
 旧版本短 Key 导致数据损坏时，请参阅[离线隔离恢复说明](docs/DATA_RECOVERY.md)。
+
+## 许可
+
+[MIT](LICENSE)。供应商条款与计费另行适用。不要提交 `runtime/`、生成媒体、本机任务数据或密钥。
