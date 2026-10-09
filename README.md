@@ -1,24 +1,52 @@
+<div align="center">
+
 # videogen
 
-A local AI video batch studio: per-shot frames, CSV imports, gallery selection, crash recovery and automatic downloads. Bring your own provider key.
+**Turn a prompt list or CSV into a reviewed batch of AI videos — on your own computer, with your own provider keys.**
 
-[English](README.md) · [中文](README.zh-CN.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
+[![Latest release](https://img.shields.io/github/v/release/swf-cmd/videogen?label=release)](https://github.com/swf-cmd/videogen/releases/latest)
+[![Tests and portable bundles](https://github.com/swf-cmd/videogen/actions/workflows/portable.yml/badge.svg?branch=main)](https://github.com/swf-cmd/videogen/actions/workflows/portable.yml)
+[![MIT license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+![Node.js ^22.21 or 24.5+](https://img.shields.io/badge/node-%5E22.21%20%7C%7C%20%E2%89%A524.5-339933?logo=nodedotjs&logoColor=white)
+![npm dependencies: 0](https://img.shields.io/badge/npm%20dependencies-0-brightgreen)
+![Windows, macOS and Linux](https://img.shields.io/badge/platform-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-lightgrey)
 
-[![Offline workflow recording: import, per-shot frames and gallery](docs/media/videogen-workflow.gif)](docs/media/videogen-workflow.webm)
+**English** · [中文](README.zh-CN.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
 
-[Watch the workflow recording](docs/media/videogen-workflow.webm) · [Play the offline preview fixture](docs/media/offline-preview.mp4) · [Portable setup](docs/PORTABLE.md) · [From Sora 2](docs/MIGRATING_FROM_SORA.md)
+</div>
 
-The recording uses local fixtures with no paid generation. The short preview is a synthetic playback test, **not an AI-generated quality sample**. Real provider samples are deferred until a user authorizes paid generation or supplies publishable clips.
+[![Workflow recording: CSV and image-folder import, cost confirmation, live queue and keyboard review](docs/media/videogen-workflow.gif)](docs/media/videogen-workflow.webm)
 
-**Sora is retired.** Version **2.2.0** builds on the persistent queue introduced in 2.0.0, which replaces Sora2App's discontinued integration. Jobs continue when you close the browser, and survive service restarts. The old OpenAI Batch workflow and discount are gone.
+<sub>Recorded offline against a local stand-in endpoint. The clips are synthetic test animations, **not AI output**, and the $0.05/s price is an example catalog entry, not a provider quote. No paid API was called.</sub>
 
-**New in 2.2.0:** several takes per prompt, keyboard-first review grouped by shot, a kept-takes manifest (CSV/JSON) for editors, "stop tracking" for stuck remote jobs, optional desktop notifications and a phone layout. It also fixes a key re-entry hang, cancel/budget/pause edge cases that could dispatch unwanted paid creates, and downloads that failed on slow links. See the [changelog](CHANGELOG.md).
+**[Download for Windows / macOS](https://github.com/swf-cmd/videogen/releases/latest)** · [Run from source](#quick-start) · [Full-size recording](docs/media/videogen-workflow.webm) · [Coming from Sora 2?](docs/MIGRATING_FROM_SORA.md)
 
-## Start
+> [!NOTE]
+> **OpenAI shut down the Sora 2 API on 2026-09-24** ([deprecations](https://developers.openai.com/api/docs/deprecations)). videogen is the successor of Sora2App: the same local batch workflow, now on OpenRouter, Gemini, Alibaba Cloud Model Studio, Volcengine / BytePlus Ark or your own OpenAI-compatible server. Old Sora jobs cannot be moved automatically; the [migration guide](docs/MIGRATING_FROM_SORA.md) explains what to keep.
 
-**No-install ZIP:** choose the Windows x64 or macOS universal archive from [Releases](https://github.com/swf-cmd/videogen/releases), extract the whole folder, then double-click **Start videogen.cmd** or **Start videogen.command**. Node 24 LTS is included. Portable records and default videos stay in `portable-data/` and `portable-output/` beside the launcher. OS first-open confirmation may be required; see [portable setup and checksums](docs/PORTABLE.md). If a bundle has not yet been published, use source startup below.
+**New in 2.2.0:** several takes per prompt, keyboard review grouped by shot, a kept-takes manifest (CSV/JSON) for editors, "stop tracking" for stuck remote jobs, optional desktop notifications and a phone layout — plus fixes for a key re-entry hang, cancel/budget/pause edge cases that could dispatch unwanted paid creates, and downloads that failed on slow links. See the [changelog](CHANGELOG.md).
 
-**From source:** Use **Node.js 22.21.0 or later in the 22.x line, or Node.js 24.5.0 or later** (`^22.21.0 || >=24.5.0`). Node 18, 20 and 23 are unsupported. No `npm install` is needed.
+## Why videogen
+
+- **Batches, not one-offs.** Paste prompts separated by blank lines, or import a UTF-8 CSV with template variables plus a folder of images. Each row gets its own first frame (and last frame where the model supports it). **Takes per prompt** renders every row 1–20 times.
+- **Pick the best take fast.** Finished videos land in a gallery grouped by shot and take. Review from the keyboard — **J/K** move, **Space** plays, **1** keeps, **2** rejects — then export the kept takes as CSV or JSON with paths, prompts, settings and SHA-256 for your editor.
+- **See the cost before you submit.** Rows are checked against the model's capabilities and priced before anything is sent. Set a batch budget and watch the estimated cost per kept clip. Missing prices stay **Unknown** instead of being guessed.
+- **Built not to pay twice.** The queue lives in a local service: closing the browser changes nothing, and crashes or restarts resume known jobs. An interrupted create is never resent on its own — it waits for your decision. A 100-job crash test with SIGKILL restarts produced zero duplicate creates.
+- **Local and private.** The service listens only on `127.0.0.1`. Keys stay in memory; prompts, frames and history stay in your data folder. No account, telemetry, update check or npm dependencies.
+- **Many providers, one workflow.** The dated bundled catalog lists 31 video models across OpenRouter, Gemini, Model Studio and Ark — including Veo 3.1, Kling 3.0, Seedance 2.5, Wan 3.0 and Runway Gen-4.5 — plus any OpenAI-compatible server you run yourself. [Details](#providers-and-estimates)
+
+<p align="center"><img src="docs/media/videogen-review.png" width="680" alt="Gallery grouped by shot and take with Keep, Reject and Unreviewed states, total and per-kept-video estimated cost, export button and keyboard shortcuts"></p>
+<p align="center"><sub>The review gallery from the same offline run (synthetic clips, example price).</sub></p>
+
+## Quick start
+
+**Portable ZIP — Windows x64 and macOS (Apple Silicon and Intel), nothing to install**
+
+1. Download `videogen-<version>-windows-x64.zip` or `videogen-<version>-macos-universal.zip` from [Releases](https://github.com/swf-cmd/videogen/releases/latest) and extract the **whole** folder.
+2. Double-click **Start videogen.cmd** (Windows) or **Start videogen.command** (macOS). Node 24 LTS is bundled. Your OS may ask you to confirm the first open; see [portable setup and checksums](docs/PORTABLE.md).
+3. The app opens in your browser. Keep the terminal window open while jobs run. Records and default videos stay in `portable-data/` and `portable-output/` beside the launcher.
+
+**From source — any OS with Node.js `^22.21.0 || >=24.5.0`** (22.21.0+ in the 22.x line, or 24.5.0+; Node 18, 20 and 23 are unsupported). No `npm install` is needed.
 
 ```bash
 git clone https://github.com/swf-cmd/videogen.git
@@ -26,7 +54,32 @@ cd videogen
 npm start
 ```
 
-Open the printed address, normally `http://127.0.0.1:5177`. `PORT` changes the port; the service binds only to `127.0.0.1`. The launchers choose another local port when the default is busy. Keep the launcher, runtime and application files together. The former `Start Sora2App.command` name is retired. Linux runs from source; Windows and Linux use a manually entered output directory. Opening `public/index.html` directly provides a preview without generation. Only one service may use a data directory, even on different ports. Ctrl+C allows up to 15 seconds to record in-flight work before exit. Data and output folders must support hard links; use a local system disk instead of exFAT.
+Open the printed address, normally `http://127.0.0.1:5177`. Choose a provider and model, save its API key, paste prompts or import a CSV, check the estimate and confirm. Source runs save videos to `~/Downloads/videogen`.
+
+<details>
+<summary><b>Good to know before your first batch</b></summary>
+
+- `PORT` changes the port; the service binds only to `127.0.0.1`. The launchers choose another local port when the default is busy.
+- Ctrl+C allows up to 15 seconds to record in-flight work before exit. Only one service may use a data directory, even on different ports.
+- Data and output folders must support hard links; use a local system disk instead of exFAT.
+- Linux runs from source. Windows and Linux use a manually entered output directory.
+- Keep the launcher, runtime and application files together. The former `Start Sora2App.command` name is retired.
+- Opening `public/index.html` directly provides a preview without generation.
+
+</details>
+
+## How it works
+
+```mermaid
+flowchart LR
+  B["Browser tab<br/>(close it any time)"] <-->|"HTTP + live events<br/>127.0.0.1 only"| S["Local service<br/>queue · lanes · budgets"]
+  S <-->|"saved before and after each create"| J[("Data folder<br/>job journal · frames")]
+  S -->|"create · poll"| P["Provider API<br/>(key in memory)"]
+  P -->|"original video bytes"| S
+  S -->|"stream, never overwrite"| O[("Output folder")]
+```
+
+Each provider + region + base URL is a **lane** with its own key, concurrency and pause state. A job is recorded on disk before its create request is sent, and its remote ID is saved before anything else happens, so a restart resumes polling and downloading instead of creating again. If the outcome of a create is unknown, the job stops at **Needs review**. See [Architecture](docs/ARCHITECTURE.md) for the state machine and invariants.
 
 ## Submit a batch
 
@@ -64,11 +117,11 @@ Catalog/source date: **2026-10-08**; provider facts rechecked **2026-10-09**. Al
 
 | Provider · region | Included models and limitations |
 | --- | --- |
-| OpenRouter · global | The dated fallback snapshot includes Veo 3.1 Lite, Seedance 2.5, Wan and other catalog models. Explicit refresh fetches the current video catalog. Local first frames use base64 data URLs in `frame_images` when the refreshed model advertises support. Controls, validation and estimates follow `/videos/models`; unavailable capabilities are not assumed. USD SKU estimates; Seedance token prices use OpenRouter's published formula (height × width × seconds × 24 / 1024), while undocumented sizes such as 4K stay unknown. Retention and account limits remain unknown. Requests carry OpenRouter app-attribution headers (`VIDEOGEN_OPENROUTER_ATTRIBUTION=0` disables them). [Contract](docs/providers/openrouter.md) |
+| OpenRouter · global | The dated fallback snapshot lists 26 video models, including Google Veo 3.1 (standard, Fast, Lite), Kling 3.0, ByteDance Seedance 2.5, Alibaba Wan 3.0, Runway Gen-4.5, MiniMax H3, Grok Imagine Video and FLUX.3 Video. Explicit refresh fetches the current video catalog. Local first frames use base64 data URLs in `frame_images` when the refreshed model advertises support. Controls, validation and estimates follow `/videos/models`; unavailable capabilities are not assumed. USD SKU estimates; Seedance token prices use OpenRouter's published formula (height × width × seconds × 24 / 1024), while undocumented sizes such as 4K stay unknown. Retention and account limits remain unknown. Requests carry OpenRouter app-attribution headers (`VIDEOGEN_OPENROUTER_ATTRIBUTION=0` disables them). [Contract](docs/providers/openrouter.md) |
 | Gemini API · supported regions | `gemini-omni-1.1-flash`, 3–10 seconds, 360p/720p/1080p/4K, first/last frames and native audio. Audio is fixed on; seed is unavailable. Only the 720p video-output token factor is verified: about USD 0.10136/second, plus input/thinking charges. Other resolution estimates are unknown. Google removes the Veo 3.1 preview models from the Gemini API on 2026-10-22 and names Omni as the replacement; Veo remains available through OpenRouter. [Contract](docs/providers/gemini.md) |
-| Alibaba Cloud Model Studio · Beijing / Singapore | `wan3.0-video`, `wan3.0-video-prime`, 2–30 seconds, 480p/720p/1080p, supported first/last frames, audio toggle and seed. Enter your **workspace-specific hostname**; placeholders, generic legacy hosts and region mismatches are rejected. List prices are CNY and differ by region; no promotional discount is assumed. [Contract](docs/providers/dashscope.md) |
+| Alibaba Cloud Model Studio · Beijing / Singapore | `wan3.0-video`, `wan3.0-video-prime`, 2–30 seconds, 480p/720p/1080p, supported first/last frames, audio toggle and seed. Enter your **workspace-specific hostname**; placeholders, generic legacy hosts and region mismatches are rejected. Bundled estimates use the CNY list prices, which differ by region; no promotional discount is assumed. Singapore accounts on the international site are billed in USD and can override the prices in `catalog.local.json`. [Contract](docs/providers/dashscope.md) |
 | Volcengine Ark · Beijing / BytePlus ModelArk · overseas | Seedance 2.5: `doubao-seedance-2-5-260628` / `dreamina-seedance-2-5-260628`, 4–30 seconds, 480p/720p/1080p, first/last frames and audio toggle. Seed is disabled because 2.5 support was not verified. CN pricing is unknown; BytePlus uses a verified USD token/dimension formula. Adaptive output dimensions have unknown cost. 1080p HEVC may not play in every browser. [Contract](docs/providers/ark.md) |
-| OpenAI-compatible · custom | Configure a local or trusted server's exact model/capabilities; experimental by default. Choose its supported request format. No default Sora model or assumed price. [Contract](docs/providers/openai-compatible.md) |
+| OpenAI-compatible · custom | Configure a local or trusted server's exact model/capabilities (for example an SGLang or vLLM-Omni video server); experimental by default. Choose its supported request format. No default Sora model or assumed price. [Contract](docs/providers/openai-compatible.md) |
 | Mock · local | Development only with `VIDEOGEN_DEV=1`; deterministic test bytes, not playable generated videos. |
 
 `data/catalog/` contains the bundled catalog. `catalog.local.json` in the data directory can override it. OpenRouter refresh results are cached; failures retain a usable catalog, with the bundled snapshot as fallback. Unknown/unverified configurations are marked **Experimental**. Provider prices and access can change.
@@ -129,10 +182,12 @@ npm run test:e2e
 VIDEOGEN_DEV=1 npm start
 ```
 
-Tests use Node's built-in runner, local mock providers and temporary directories. They run offline and make no paid API calls. The 100-job crash acceptance run used two lanes, three SIGKILL restarts and five SSE disconnects: 92 succeeded, 5 moderation failures and 3 review items; zero duplicate creates, untracked remote jobs, hash mismatches or exposed keys. Observed lane maxima were 3/5 and the download pool maximum was 3. These are mock-test results, not a provider uptime or billing guarantee.
+Tests use Node's built-in runner, local mock providers and temporary directories. They run offline and make no paid API calls. The 100-job crash acceptance run used two lanes, three SIGKILL restarts and five SSE disconnects: 92 succeeded, 5 moderation failures and 3 review items; zero duplicate creates, untracked remote jobs, hash mismatches or exposed keys. Observed lane maxima were 3/5 and the download pool maximum was 3. These are mock-test results, not a provider uptime or billing guarantee. CI runs the same suites on Linux and Windows with Node 22.21.0 and 24.21.0, and smoke-tests the portable bundles on Windows x64, Apple Silicon and Intel Macs.
 
 The app uses CommonJS and classic browser scripts. Legacy generation/status/download routes are removed; the UI uses persistent batch/job APIs and `/api/events`. See [Contributing](CONTRIBUTING.md), [Changelog](CHANGELOG.md) and the [release checklist](docs/GITHUB_LAUNCH_CHECKLIST.md).
 
-[MIT license](LICENSE). Keep `runtime/`, generated media, local task data and credentials out of source control.
-
 For records damaged by older short-key redaction, see [offline quarantine recovery](docs/DATA_RECOVERY.md).
+
+## License
+
+[MIT](LICENSE). Provider terms and billing apply separately. Keep `runtime/`, generated media, local task data and credentials out of source control.

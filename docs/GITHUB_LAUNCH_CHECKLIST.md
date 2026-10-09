@@ -7,12 +7,14 @@ Publication checklist for **videogen 2.2.0**, plus historical release notes. Mai
 Description:
 
 ```text
-Local AI video batch studio: per-shot frames, CSV imports, gallery selection, crash recovery and automatic downloads.
+Local AI video batch studio: prompts or CSV in, reviewed takes out. Multi-take renders with per-shot frames, keyboard review, cost estimates and a crash-safe queue on OpenRouter, Gemini, Wan, Seedance or any OpenAI-compatible server. Formerly Sora2App.
 ```
 
-Topics: `ai-video`, `video-generation`, `batch-processing`, `local-first`, `openrouter`, `gemini`, `seedance`, `wan`, `nodejs`, `windows`, `macos`, `csv`.
+Topics: `ai-video`, `video-generation`, `text-to-video`, `image-to-video`, `batch-processing`, `render-queue`, `local-first`, `openrouter`, `gemini`, `veo`, `kling`, `seedance`, `wan`, `sora`, `csv`, `nodejs`, `windows`, `macos`.
 
-Website: [README](https://github.com/swf-cmd/videogen#readme). The first screen links a real local-fixture workflow recording and an explicitly labeled offline playback sample. These do not demonstrate paid model output quality. See the [promotion kit](PROMOTION_KIT.md).
+Website: [README](https://github.com/swf-cmd/videogen#readme). The first screen shows a workflow recording made against a local stand-in endpoint with labeled synthetic clips and an example price, plus a gallery screenshot from the same run. These do not demonstrate paid model output quality. See the [promotion kit](PROMOTION_KIT.md).
+
+Social preview: upload `.github/social-preview.png` (1280×640) under **Settings → General → Social preview**; the API cannot set it.
 
 ## Historical v2.0.0
 

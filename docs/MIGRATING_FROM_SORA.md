@@ -1,6 +1,6 @@
 # From Sora2App / Sora 2 to videogen
 
-videogen 2.x keeps a local queue and supports OpenRouter, Gemini, Alibaba Cloud Model Studio, Volcengine / BytePlus Ark, and explicitly configured OpenAI-compatible endpoints. It does not restore the retired Sora integration. There is no default Sora model, legacy OpenAI Batch upload, or assumed Batch discount.
+videogen 2.x keeps a local queue and supports OpenRouter, Gemini, Alibaba Cloud Model Studio, Volcengine / BytePlus Ark, and explicitly configured OpenAI-compatible endpoints. It does not restore the retired Sora integration: OpenAI shut down the Sora 2 models and the Videos API on 2026-09-24 and named no replacement ([deprecations](https://developers.openai.com/api/docs/deprecations)). There is no default Sora model, legacy OpenAI Batch upload, or assumed Batch discount.
 
 ## Move in five steps
 
@@ -8,9 +8,9 @@ videogen 2.x keeps a local queue and supports OpenRouter, Gemini, Alibaba Cloud 
 2. **Start the new app.** Extract the Windows/macOS portable ZIP and double-click its launcher, or clone the repository and run `npm start` with Node `^22.21.0 || >=24.5.0`. The launcher is now named **Start videogen.command** (macOS) or **Start videogen.cmd** (Windows).
 3. **Choose provider, region and model.** Reuse your prompts, then check the selected model's supported duration, size, audio and frame inputs. An OpenAI key does not authenticate another provider. Enter that provider's key; Model Studio also needs your real workspace-specific hostname. See the [provider contracts](providers/).
 4. **Prepare and inspect.** Paste prompts or import CSV/template rows and an image folder. Assign first/last frames per job where the model supports them. Fix row errors, review each estimate, and confirm the batch. Unsupported inputs are rejected; unknown prices remain unknown. No migration step creates videos automatically.
-5. **Keep and export.** The service downloads results in their original format. Preview them in the gallery, keep/reject takes and review estimated cost per kept clip. Regeneration is a new potentially billable job and requires an explicit confirmation each time.
+5. **Keep and export.** The service downloads results in their original format. Render several takes per prompt if you want to compare, preview them in the gallery grouped by shot, keep/reject from the keyboard, review estimated cost per kept clip and export the kept takes as CSV/JSON. Regeneration is a new potentially billable job and requires an explicit confirmation each time.
 
-| Old Sora2App expectation | videogen 2.1 behavior |
+| Old Sora2App expectation | videogen 2.x behavior |
 | --- | --- |
 | One OpenAI key and fixed Sora models | Key and capabilities belong to the selected provider/region/endpoint |
 | OpenAI Batch discount | Provider-specific estimates; no assumed discount or currency conversion |

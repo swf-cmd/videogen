@@ -1,18 +1,44 @@
+<div align="center">
+
 # videogen
 
-ローカルで動く AI 動画のバッチ制作ツール。ショットごとの開始・終了フレーム、CSV とテンプレート変数、ギャラリーでの選別、自動ダウンロード、再起動からの復旧に対応します。利用するプロバイダーの API キーを用意してください。
+**プロンプトの一覧や CSV から、選別済みの AI 動画バッチを。自分の PC で、自分のプロバイダーキーで。**
 
-[English](README.md) · [中文](README.zh-CN.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
+[![最新リリース](https://img.shields.io/github/v/release/swf-cmd/videogen?label=release)](https://github.com/swf-cmd/videogen/releases/latest)
+[![テストとポータブル版](https://github.com/swf-cmd/videogen/actions/workflows/portable.yml/badge.svg?branch=main)](https://github.com/swf-cmd/videogen/actions/workflows/portable.yml)
+[![MIT ライセンス](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+![Node.js ^22.21 または 24.5 以上](https://img.shields.io/badge/node-%5E22.21%20%7C%7C%20%E2%89%A524.5-339933?logo=nodedotjs&logoColor=white)
+![npm 依存パッケージ 0](https://img.shields.io/badge/npm%20dependencies-0-brightgreen)
+![Windows・macOS・Linux](https://img.shields.io/badge/platform-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-lightgrey)
 
-[![オフライン操作デモ](docs/media/videogen-workflow.gif)](docs/media/videogen-workflow.webm)
+[English](README.md) · [中文](README.zh-CN.md) · **日本語** · [한국어](README.ko.md)
 
-[操作録画](docs/media/videogen-workflow.webm) · [再生テスト用クリップ](docs/media/offline-preview.mp4) · [Sora 2 からの移行](docs/MIGRATING_FROM_SORA.md)
+</div>
 
-録画はローカルのテスト素材を使っています。サンプルは再生確認用に作成した映像で、**AI モデルの生成品質を示すものではありません**。有料 API によるサンプル生成は行っていません。
+[![操作デモ：CSV と画像フォルダーの取り込み、費用の確認、キューの進行、キーボードでの選別](docs/media/videogen-workflow.gif)](docs/media/videogen-workflow.webm)
+
+<sub>ローカルの代替エンドポイントに接続してオフラインで録画しています。映像はプログラムで描いたテスト用アニメーションで、**AI の生成結果ではありません**。1 秒あたり $0.05 の料金はローカルの例示カタログの値で、プロバイダーの見積もりではありません。有料 API は一切呼び出していません。</sub>
+
+**[Windows / macOS 版をダウンロード](https://github.com/swf-cmd/videogen/releases/latest)** · [ソースから起動](#起動) · [録画（原寸）](docs/media/videogen-workflow.webm) · [Sora 2 からの移行](docs/MIGRATING_FROM_SORA.md)
+
+> [!NOTE]
+> **OpenAI は 2026-09-24 に Sora 2 API を終了しました**（[非推奨化の一覧](https://developers.openai.com/api/docs/deprecations)）。videogen は Sora2App の後継で、同じローカルのバッチ作業を OpenRouter、Gemini、Alibaba Cloud Model Studio、Volcengine / BytePlus Ark、または自前の OpenAI 互換サーバーで続けられます。旧 Sora のジョブは自動移行できません。残しておくべきものは[移行ガイド](docs/MIGRATING_FROM_SORA.md)を参照してください。
+
+## videogen の特長
+
+- **1 本ずつではなく、まとめて。** 空行で区切ったプロンプトを貼り付けるか、テンプレート変数入りの UTF-8 CSV と画像フォルダーを取り込みます。行ごとに開始フレーム（モデルが対応していれば終了フレームも）を指定でき、「プロンプトごとのテイク数」で各行を 1〜20 回生成できます。
+- **良いテイクをすばやく選ぶ。** 完成した動画はショット・テイクごとにギャラリーへ並びます。**J/K** で移動、**Space** で再生、**1** で保持、**2** で除外。保持したテイクはパス・プロンプト・設定・SHA-256 付きの CSV / JSON で書き出して編集ソフトへ渡せます。
+- **送信前に費用がわかる。** 各行をモデルの対応機能で検証し、見積もってから送信します。バッチ予算と、保持した 1 本あたりの推定費用も確認できます。不明な料金は推測せず「不明」と表示します。
+- **二重課金を起こさない設計。** キューはローカルのサービスが持つため、ブラウザーを閉じても影響はなく、クラッシュや再起動後も既知のジョブを追跡し続けます。結果が不明な生成要求は自動で再送せず、判断を待ちます。SIGKILL による再起動を含む 100 ジョブの試験で重複作成は 0 件でした。
+- **ローカルで完結、プライバシーを保護。** サービスは `127.0.0.1` だけで待ち受けます。キーはメモリー上だけに保持され、プロンプトや画像、履歴は自分のデータフォルダーに残ります。アカウント登録、テレメトリー、更新チェック、npm 依存はありません。
+- **複数のプロバイダーを同じ手順で。** 日付付きの同梱カタログには OpenRouter・Gemini・Model Studio・Ark の動画モデル 31 種（Veo 3.1、Kling 3.0、Seedance 2.5、Wan 3.0、Runway Gen-4.5 など）が載っており、自前の OpenAI 互換サーバーも使えます。[詳細（英語）](README.md#providers-and-estimates)
+
+<p align="center"><img src="docs/media/videogen-review.png" width="680" alt="ショットとテイクごとにまとまったギャラリー。保持・除外・未選別の状態、合計と保持 1 本あたりの推定費用、書き出しボタン、キーボード操作の案内"></p>
+<p align="center"><sub>同じオフライン実行の選別画面（テスト用アニメーション、例示料金）。</sub></p>
 
 ## 起動
 
-**インストール不要版：** [Releases](https://github.com/swf-cmd/videogen/releases) から Windows x64 または macOS universal の ZIP をダウンロードし、書き込み可能なフォルダーにすべて展開します。Windows は **Start videogen.cmd**、Mac は **Start videogen.command** をダブルクリックしてください。Node 24 LTS が同梱され、Apple Silicon と Intel Mac の両方に対応します。公開前で ZIP がない場合はソース版を使用できます。
+**インストール不要版：** [Releases](https://github.com/swf-cmd/videogen/releases/latest) から Windows x64 または macOS universal の ZIP をダウンロードし、書き込み可能なフォルダーにすべて展開します。Windows は **Start videogen.cmd**、Mac は **Start videogen.command** をダブルクリックしてください。Node 24 LTS が同梱され、Apple Silicon と Intel Mac の両方に対応します。
 
 OS が初回起動の確認を求めることがあります。macOS では「システム設定 → プライバシーとセキュリティ → このまま開く」を確認してください。この ZIP は公証済みの `.app` ではありません。詳細とチェックサムは [ポータブル版の説明](docs/PORTABLE.md) を参照してください。
 
