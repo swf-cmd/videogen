@@ -19,6 +19,8 @@ Access date for every source below: **2026-10-08**. ✅ first-party documentatio
 
 ✅ Published **list** rates, CNY per second in both regions. Do not convert the Singapore table to USD or assume the undated promotional discount applies. [Pricing](https://help.aliyun.com/en/model-studio/model-pricing), accessed 2026-10-08.
 
+ℹ️ Rechecked 2026-10-09: the international site lists Singapore (International) in **USD** per second — `wan3.0-video` 0.05 / 0.10 / 0.20 and `wan3.0-video-prime` 0.068 / 0.14 / 0.28 for 480P / 720P / 1080P ([wan3.0-video](https://www.alibabacloud.com/help/en/model-studio/wan3-0-video), [wan3.0-video-prime](https://www.alibabacloud.com/help/en/model-studio/wan3-0-video-prime), both updated 2026-09-28). The bundled catalog keeps the CNY table above because billing currency follows the account site. Accounts billed in USD can override `pricingByRegion.singapore` in `catalog.local.json`, for example `{"provider":"dashscope","models":[{"id":"wan3.0-video","pricingByRegion":{"beijing":{"currency":"CNY","unit":"second","rates":{"480p":0.3,"720p":0.6,"1080p":1.2}},"singapore":{"currency":"USD","unit":"second","rates":{"480p":0.05,"720p":0.1,"1080p":0.2}}}}]}`.
+
 | Model / region | 480p | 720p | 1080p |
 | --- | ---: | ---: | ---: |
 | `wan3.0-video` / Beijing | 0.30 | 0.60 | 1.20 |

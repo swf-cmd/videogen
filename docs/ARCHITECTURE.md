@@ -2,7 +2,7 @@
 
 ## Current and target system
 
-Version 2.1.4 is a local, zero-dependency, multi-provider render queue. The browser
+Version 2.2.0 is a local, zero-dependency, multi-provider render queue. The browser
 observes work owned by the service process. It replaces v1.0.2's monolithic
 OpenAI Videos/Batch server, where jobs lived only inside request handlers.
 
@@ -67,6 +67,25 @@ cover the durable queue and release artifacts.
   used for substring redaction. User prompts, paths, lane URLs and local IDs are
   persisted unchanged.
 - Phase 0 and phase 1 use the same data directory and event schema.
+- (2.2) A replacement key clears only an authentication stop; manual, quota and
+  model-access pauses persist until an explicit resume. A cancel requested
+  while a create is in flight is honored when the provider definitely rejects
+  that create, instead of re-queueing it.
+- (2.2) After an accepted create, poll/download 4xx responses retry with
+  backoff. Only a 4xx streak lasting at least 15 minutes ends the job:
+  `remote_not_found` for polls, `result_expired` for downloads. Presigned
+  download 401/403 never marks the lane as needing a key. A running job may be
+  abandoned locally; that never cancels or refunds remote work.
+- (2.2) Downloads bound time to headers and then inactivity per chunk, not the
+  whole transfer. JSON phases keep a total deadline. Retry-After is clamped to
+  seven days.
+- (2.2) Clear history records the estimated charges of removed takes on any
+  surviving budgeted batch (`clearedCharges`), so deleting records never
+  re-arms a budget. Frames of an import that is still being persisted are
+  pinned until its jobs exist. A regeneration the batch budget cannot dispatch
+  is refused with 409 instead of waiting forever.
+- (2.2) Takes expand each source row N times at preparation, with `shot`
+  (source row) and `take` fields for grouping; they share one stored frame.
 - No telemetry, automatic update checks or runtime package dependencies. Release
   bundles are built and smoke-tested on their target operating systems; tagged
   builds retain those exact artifacts for a draft GitHub Release.
@@ -226,11 +245,12 @@ routes are removed.
 | --- | --- |
 | `/api/catalog` | GET catalog and runtime metadata; POST `/api/catalog/refresh/:provider` explicitly refreshes supported catalogs. |
 | `/api/keys` | GET lane presence only; POST `{lane,key}` sets an in-memory key; DELETE `/api/keys/:laneId` forgets it. |
-| `/api/estimate` | POST computes count, currency-specific cost and approximate ETA without creating records. |
+| `/api/estimate` | POST computes count, currency-specific cost and approximate ETA without creating records. Optional `takes` (1–20) multiplies every row; row statuses stay per source row. |
 | `/api/batches` | POST enqueues JSON or multipart with one `input_reference`; GET paginates; GET `/:id` reads summary; POST `/:id/pause`, `/resume`, `/cancel` controls work. |
-| `/api/jobs` | GET paginates and filters; GET `/:id` reads details; POST `/:id/cancel`, `/retry`, `/resolve` applies guarded actions; GET `/:id/regenerate/estimate` and POST `/:id/regenerate` estimate and confirm a new paid take; POST `/:id/curate` stores Keep/Reject decisions. |
+| `/api/jobs` | GET paginates and filters by `batch`, `state`, `selection` (`keep`/`reject`/`unreviewed` finished takes) and `order=desc`; GET `/:id` reads details; POST `/:id/cancel`, `/retry`, `/resolve` applies guarded actions (`resolve` with `abandon` also stops tracking a running job without remote cancellation); GET `/:id/regenerate/estimate` and POST `/:id/regenerate` estimate and confirm a new paid take; POST `/:id/curate` stores Keep/Reject decisions. |
 | `/api/gallery/summary` | GET summarizes local gallery results and curation. |
-| `/api/lanes` | GET reads state; POST `/:id` sets concurrency or pause/resume. |
+| `/api/export` | GET downloads a CSV/JSON manifest of finished takes (`batch`, `selection`, `format`); same-origin navigation only. |
+| `/api/lanes` | GET reads state, including a `paused` flag independent of `needs_key`; POST `/:id` sets concurrency or pause/resume. |
 | `/api/events` | GET incremental SSE with sequence replay, resync and heartbeat. |
 | `/api/history/clear` | POST removes finished records and unused assets, preserving unresolved/active jobs and outputs. |
 | `/api/select-output-dir` | POST opens the macOS chooser; other systems use manual paths. |
