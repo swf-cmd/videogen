@@ -72,10 +72,15 @@ cover the durable queue and release artifacts.
   while a create is in flight is honored when the provider definitely rejects
   that create, instead of re-queueing it.
 - (2.2) After an accepted create, poll/download 4xx responses retry with
-  backoff. Only a 4xx streak lasting at least 15 minutes ends the job:
-  `remote_not_found` for polls, `result_expired` for downloads. Presigned
-  download 401/403 never marks the lane as needing a key. A running job may be
-  abandoned locally; that never cancels or refunds remote work.
+  backoff; quota, auth, rate-limit and model-access answers keep their lane
+  handling and never end the job. Only an uninterrupted streak of 404/410
+  answers (or 401/403 from a presigned download) lasting at least 15 minutes
+  ends it: `remote_not_found` for polls, `result_expired` for downloads. Any
+  other failure restarts the streak. Status-less local safety rejections stay
+  terminal. Presigned download 401/403 never marks the lane as needing a key.
+  A running or downloading job may be abandoned locally; that never cancels or
+  refunds remote work. Retry, resubmit and remote-ID attachment clear a stale
+  cancel request; startup finishes cancels left on queued jobs.
 - (2.2) Downloads bound time to headers and then inactivity per chunk, not the
   whole transfer. JSON phases keep a total deadline. Retry-After is clamped to
   seven days.
@@ -83,7 +88,9 @@ cover the durable queue and release artifacts.
   surviving budgeted batch (`clearedCharges`), so deleting records never
   re-arms a budget. Frames of an import that is still being persisted are
   pinned until its jobs exist. A regeneration the batch budget cannot dispatch
-  is refused with 409 instead of waiting forever.
+  after the batch's queued work is refused with 409 instead of waiting
+  forever. Batch cancel finishes all queued jobs synchronously behind one
+  flush, so no retry or resume can interleave and reactivate them.
 - (2.2) Takes expand each source row N times at preparation, with `shot`
   (source row) and `take` fields for grouping; they share one stored frame.
 - No telemetry, automatic update checks or runtime package dependencies. Release
@@ -183,7 +190,8 @@ cover the durable queue and release artifacts.
   reconnects outside that buffer receive a resync instruction and fetch paginated
   snapshots. Disconnecting or throttling a browser cannot cancel queue work.
 - The expanded prompt text is bounded by the batch request byte budget to avoid
-  unbounded allocation through a huge repeat count. There is no 50,000-job cap.
+  unbounded allocation through a huge repeat count. There is no 50,000-job cap;
+  with more than one take, rows × takes may not exceed 100,000 jobs.
   Catalog refresh is an explicit POST; GET endpoints never contact providers.
 - Busy snapshot/journal replacement (EPERM/EBUSY) defers compaction with a
   one-to-thirty-second backoff while writes continue to the verified original

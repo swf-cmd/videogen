@@ -451,3 +451,150 @@ test("OpenRouter requests carry app attribution headers unless disabled, and nev
   assert.equal(seen[3].headers.get("x-openrouter-title"), null);
   assert.equal(seen[3].headers.get("http-referer"), null);
 });
+
+// Findings of the independent review of the first fix round.
+
+test("an out-of-credit poll streak keeps tracking paid work instead of ending it", async (t) => {
+  for (const failure of [{ status: 402, code: "" }, { status: 400, code: "Arrearage" }]) {
+    let broke = true;
+    const f = harness(t, {
+      classifyError,
+      async poll(ctx, job) {
+        f.calls.poll.push(job.id);
+        if (broke) { const error = Object.assign(new Error("no credit"), failure); error.category = classifyError(error, "poll"); throw error; }
+        return { status: "running" };
+      },
+    });
+    f.add("paid", "a", { state: "running", remote: { id: "r" }, attempts: { create: 1, poll: 0, download: 0 }, modelConfig: { concurrencyDefault: 1, pollIntervalSec: 10 } });
+    f.scheduler.start(); await settle();
+    for (let i = 0; i < 60; i += 1) await f.clock.advance(30000);
+    assert.equal(f.store.get("paid").state, "running", `${failure.status} ${failure.code} must not stop tracking`);
+    assert.equal(f.scheduler.laneList()[0].paused, true, "quota pauses new submissions on the lane");
+    broke = false;
+    const polls = f.calls.poll.length;
+    await f.clock.advance(60000);
+    assert.ok(f.calls.poll.length > polls, "polling continues after credit returns");
+  }
+});
+
+test("only an uninterrupted 404 streak ends tracking; other failures restart it", async (t) => {
+  let answer = 404;
+  const f = harness(t, {
+    classifyError,
+    async poll() { const error = Object.assign(new Error("x"), { status: answer }); error.category = classifyError(error, "poll"); throw error; },
+  });
+  f.add("paid", "a", { state: "running", remote: { id: "r" }, attempts: { create: 1, poll: 0, download: 0 }, modelConfig: { concurrencyDefault: 1, pollIntervalSec: 10 } });
+  f.scheduler.start(); await settle();
+  await f.clock.advance(30000);
+  answer = 503;
+  for (let i = 0; i < 40; i += 1) await f.clock.advance(30000);
+  answer = 404;
+  await f.clock.advance(30000);
+  assert.equal(f.store.get("paid").state, "running", "a single 404 after a 5xx outage starts a new streak");
+});
+
+test("a local safety rejection while downloading fails once, and downloading jobs can be abandoned", async (t) => {
+  const { ProviderError } = require("../src/providers/base");
+  const f = harness(t, {
+    async poll() { return { status: "succeeded", result: { url: "https://cdn.example/v.mp4?token=abc", needsAuth: false } }; },
+    async download(ctx, job, result, { signal } = {}) {
+      f.calls.download.push(job.id);
+      if (job.id === "slow") return new Promise((resolve, reject) => signal?.addEventListener("abort", () => reject(signal.reason)));
+      throw new ProviderError("unsafeProviderUrl", { category: "invalid_request", accepted: false });
+    },
+  });
+  f.add("paid", "a", { state: "running", remote: { id: "r" }, attempts: { create: 1, poll: 0, download: 0 } });
+  f.add("slow", "b", { state: "running", remote: { id: "s" }, attempts: { create: 1, poll: 0, download: 0 } });
+  f.store.update("slow", { state: "downloading", result: { url: "https://b.example/v1/content", needsAuth: true } });
+  f.scheduler.start(); await settle();
+  await f.clock.advance(60000);
+  assert.equal(f.store.get("paid").state, "failed");
+  assert.equal(f.calls.download.filter((id) => id === "paid").length, 1);
+  const stopped = await f.scheduler.jobAction("slow", "resolve", { action: "abandon" });
+  assert.equal(stopped.state, "cancelled");
+  assert.equal(stopped.remote.id, "s");
+});
+
+test("a job cancelled during its create can still be retried or resubmitted later", async (t) => {
+  const gate = deferred();
+  let mode = "reset";
+  const f = harness(t, {
+    async create(ctx, job) {
+      f.calls.create.push(job.id);
+      if (f.calls.create.length === 1) { await gate.promise; if (mode === "reset") throw Object.assign(new Error("reset"), { code: "ECONNRESET" }); }
+      return { remoteId: `remote-${job.id}-${f.calls.create.length}` };
+    },
+  });
+  f.add("one"); f.scheduler.start(); await settle();
+  await f.scheduler.jobAction("one", "cancel");
+  gate.resolve(); await settle();
+  assert.equal(f.store.get("one").state, "needs_review");
+  await f.scheduler.jobAction("one", "resolve", { action: "resubmit" });
+  assert.equal(f.store.get("one").cancelRequested, false);
+  await f.clock.advance(2000);
+  assert.equal(f.calls.create.length, 2);
+  assert.equal(f.store.get("one").state, "running");
+});
+
+test("startup finishes cancels left on queued jobs by an interrupted cancel", async (t) => {
+  const f = harness(t);
+  f.add("flagged", "a", { cancelRequested: true });
+  f.add("normal");
+  f.scheduler.start(); await settle();
+  assert.equal(f.store.get("flagged").state, "cancelled");
+  assert.ok(!f.calls.create.includes("flagged"));
+  assert.ok(f.calls.create.includes("normal"));
+});
+
+test("batch cancel finishes every queued job before any retry can reopen the batch", async (t) => {
+  const f = harness(t, {
+    async create(ctx, job) {
+      f.calls.create.push(job.id);
+      if (job.id === "review") throw Object.assign(new Error("reset"), { code: "ECONNRESET" });
+      return { remoteId: `remote-${job.id}` };
+    },
+  });
+  f.add("review"); f.scheduler.start(); await settle();
+  assert.equal(f.store.get("review").state, "needs_review");
+  const first = f.store.get("review");
+  f.store.addMany(Array.from({ length: 1500 }, (_, i) => ({ ...first, id: `q${i}`, state: "queued", attempts: { create: 0, poll: 0, download: 0 }, error: null, remote: null })));
+  const cancelling = f.scheduler.batchAction("batch-a", "cancel");
+  assert.equal([...f.store.jobs.values()].filter((job) => job.state === "queued").length, 0, "queued jobs are cancelled synchronously");
+  await f.scheduler.jobAction("review", "resolve", { action: "resubmit" });
+  await cancelling;
+  for (let i = 0; i < 5; i += 1) await f.clock.advance(60000);
+  assert.deepEqual(f.calls.create.filter((id) => id !== "review"), [], "no cancelled job was created");
+  assert.equal(f.calls.create.filter((id) => id === "review").length, 2);
+});
+
+test("a regeneration is refused when queued work already uses the remaining budget", async (t) => {
+  const { app, directory } = application(t);
+  const { jobs } = await app.prepare({ ...geminiPayload(directory), prompt: "p", batchCount: 3, budget: 0.95 });
+  finish(app, jobs[0].id);
+  const { confirmationToken } = app.gallery.estimate(jobs[0].id);
+  assert.throws(() => app.gallery.regenerate(jobs[0].id, { confirmed: true, confirmationToken }), { code: "regenerateExceedsBudget" });
+});
+
+test("an all-batches export keeps batch, shot and take order", async (t) => {
+  const { app, directory } = application(t);
+  const a = await app.prepare({ ...geminiPayload(directory), rows: [{ prompt: "a1" }, { prompt: "a2" }] });
+  const b = await app.prepare({ ...geminiPayload(directory), rows: [{ prompt: "b1" }, { prompt: "b2" }] });
+  for (const job of [...a.jobs, ...b.jobs]) finish(app, job.id);
+  const { confirmationToken } = app.gallery.estimate(a.jobs[0].id);
+  const take = app.gallery.regenerate(a.jobs[0].id, { confirmed: true, confirmationToken });
+  app.store.update(take.id, { state: "submitting", attempts: { create: 1, poll: 0, download: 0 } });
+  app.store.update(take.id, { state: "running", remote: { id: "v1_take" } });
+  app.store.update(take.id, { state: "downloading" });
+  fs.writeFileSync(take.targetPath, "v");
+  app.store.update(take.id, { state: "succeeded", output: { path: take.targetPath, bytes: 1 } });
+  const rows = JSON.parse(app.exportManifest({ selection: "all", format: "json" }).body).takes;
+  assert.deepEqual(rows.map((row) => row.prompt), ["a1", "a1", "a2", "b1", "b2"]);
+  assert.equal(rows[1].parent_job_id, a.jobs[0].id);
+});
+
+test("the ByteDance token formula is not applied to other models' token SKUs", () => {
+  const pricing = require("../src/catalog/openrouter-pricing");
+  const params = { resolution: "720p", aspectRatio: "16:9", durationSeconds: 5, audio: true };
+  assert.equal(pricing.estimate({ video_tokens: "0.0000107" }, params, "bytedance/seedance-2.5").amount, 1.1556);
+  assert.equal(pricing.estimate({ video_tokens: "0.0000107" }, params, "other/video-model").amount, null);
+});

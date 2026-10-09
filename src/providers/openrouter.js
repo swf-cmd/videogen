@@ -38,7 +38,7 @@ module.exports = {
   id: "openrouter", displayNameKey: "providerOpenRouter", createMode: "async", supportsIdempotencyKey: false,
   validateKey: (key) => base.validateKey(key, "sk-or-"),
   validateAssets, validateLocalAssets, normalizeParams: base.normalizeParams,
-  estimateCost: (model, params) => model.pricingSkus ? pricing.estimate(model.pricingSkus, params) : base.estimateCost(model, params), classifyError: base.classifyError,
+  estimateCost: (model, params) => model.pricingSkus ? pricing.estimate(model.pricingSkus, params, model.id) : base.estimateCost(model, params), classifyError: base.classifyError,
   async prepareAssets(ctx, job) { frameImages(ctx, job); return []; },
   async create(ctx, job, { signal } = {}) {
     const images = frameImages(ctx, job);

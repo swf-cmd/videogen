@@ -52,7 +52,7 @@ An interrupted or ambiguous create becomes **Needs review** (`needs_review`). Th
 - **Abandon.** Stop local tracking of that review item; this does not cancel or refund work at the provider.
 - **Attach a remote ID.** Associate the provider's existing task and resume polling/download without a new create.
 
-A running job can also be **stopped tracking** — for example after attaching a mistyped ID or deleting the task at the provider. This frees its lane slot; it does not cancel or refund remote work. If the provider keeps answering 404 for a running task for 15 minutes, the job fails with `remote_not_found` and keeps its remote ID for manual checks. Poll and download 4xx responses on accepted work are retried with backoff instead of discarding a paid render.
+A running job can also be **stopped tracking** — for example after attaching a mistyped ID or deleting the task at the provider. This frees its lane slot; it does not cancel or refund remote work. If the provider answers only 404/410 for a running task for 15 minutes without interruption, the job fails with `remote_not_found` and keeps its remote ID for manual checks. Other poll and download 4xx responses on accepted work, including an empty balance, are retried with backoff instead of discarding a paid render. A running or downloading job can be stopped from tracking at any time.
 
 A failed job can be retried only when the app has evidence that create was not accepted. A timeout, connection reset, malformed response or create 5xx is not such evidence. Rate limits cool the lane; authentication waits for a replacement key; balance/model-access problems pause new submissions while accepted jobs keep polling and downloading. Moderation failures affect only their own jobs.
 

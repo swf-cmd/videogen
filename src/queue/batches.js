@@ -66,7 +66,8 @@ function summarizeCosts(costs) {
 function planBatch(app, payload, { summaryOnly = false } = {}) {
   const takes = parseTakes(payload.takes);
   const inputs = sourceRows(app, payload);
-  if (inputs.length * takes > MAX_BATCH_JOBS) throw failure('requestTooLarge');
+  // Takes multiply rows without adding request bytes, so bound their product.
+  if (takes > 1 && inputs.length * takes > MAX_BATCH_JOBS) throw failure('requestTooLarge');
   // A normal batch shares all settings. Validate/price the model once, even
   // for 50,000 repeated prompts; row mode still validates every override.
   const common = payload.rows === undefined ? selectRow(app, payload, inputs[0]) : null;

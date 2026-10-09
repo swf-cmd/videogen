@@ -84,7 +84,13 @@ class Gallery {
     const filename = `${path.basename(source.targetPath, path.extname(source.targetPath))}-take-${newId.slice(0, 8)}`;
     const job = {
       id: newId, batchId: source.batchId, index: this.app.batch(source.batchId).total,
-      ...(Number.isInteger(source.shot) ? { shot: source.shot } : Number.isInteger(source.index) ? { shot: source.index } : {}),
+      ...(() => {
+        // Older retakes have no shot; their index is the batch total, so use
+        // the original job's index for grouping when it still exists.
+        const root = source.parentJobId ? this.app.store.get(source.rootJobId || source.parentJobId) : source;
+        const shot = Number.isInteger(source.shot) ? source.shot : Number.isInteger(root?.shot) ? root.shot : root?.index;
+        return Number.isInteger(shot) ? { shot } : {};
+      })(),
       parentJobId: id, regenerationToken: confirmationToken, rootJobId: source.rootJobId || id,
       provider: source.provider, region: source.region, baseUrl: source.baseUrl, laneId: source.laneId,
       model: selected.model.id, modelConfig: selected.model, params: selected.params, prompt: source.prompt, assets: source.assets || [],

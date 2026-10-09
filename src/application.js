@@ -222,7 +222,12 @@ class Application {
         created_at: job.createdAt || "", completed_at: job.completedAt || "",
       });
     }
-    rows.sort((a, b) => a.batch_id === b.batch_id ? a.shot - b.shot || a.take - b.take : 0);
+    // Batches in queue order, then shot and take; ties keep creation order.
+    const batchOrder = new Map();
+    for (const row of rows) if (!batchOrder.has(row.batch_id)) batchOrder.set(row.batch_id, batchOrder.size);
+    rows.forEach((row, index) => { row.order = index; });
+    rows.sort((a, b) => batchOrder.get(a.batch_id) - batchOrder.get(b.batch_id) || a.shot - b.shot || a.take - b.take || a.order - b.order);
+    for (const row of rows) delete row.order;
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
     const filename = `videogen-${selection}-${id ? id.slice(0, 8) : "all"}-${stamp}.${format}`;
     if (format === "json") return { filename, contentType: "application/json; charset=utf-8", body: `${JSON.stringify({ exportedAt: new Date().toISOString(), batchId: id, selection, takes: rows }, null, 2)}\n` };

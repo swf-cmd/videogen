@@ -59,10 +59,11 @@ function pricing(skus, resolutions) {
   return Object.keys(rates).length ? { currency: "USD", unit: "second", rates } : null;
 }
 
-function estimate(skus, params) {
+function estimate(skus, params, modelId = "") {
   let perSecond = rate(skus, params.resolution, params.audio === true, params.frameCount > 0);
   let basis = "second";
-  if (perSecond === undefined) {
+  // The token formula is documented for ByteDance models only.
+  if (perSecond === undefined && /^bytedance\//.test(String(modelId))) {
     const price = tokenPrice(skus, params.resolution, params.audio === true);
     const tokens = tokenSeconds(params);
     if (price !== undefined && tokens !== undefined) { perSecond = price * tokens; basis = "token"; }
