@@ -11,17 +11,17 @@ function harness({ preview = false, request = async (endpoint) => endpoint === "
   const listeners = new Map();
   const add = window.addEventListener.bind(window);
   window.addEventListener = (type, callback, options) => { listeners.set(type, (listeners.get(type) || 0) + 1); add(type, callback, options); };
-  const sources = [], intervals = new Map(), timeouts = new Map(), states = [], messages = [];
+  const sources = [], intervals = new Map(), timeouts = new Map(), delays = new Map(), states = [], messages = [];
   let timerId = 0;
   class EventSource extends EventTarget {
     constructor(url) { super(); this.url = url; this.closed = false; sources.push(this); }
-    close() { this.closed = true; }
+    close() { this.closed = true; this.readyState = 2; }
   }
   const QueueView = vm.runInNewContext(`${source}\nQueueView`, {
     window, EventSource, URLSearchParams, isFilePreview: preview, apiRequest: request,
     setConnectionState: (state) => states.push(state), updateSelectedKeyStatus() {},
     setInterval: (callback) => { intervals.set(++timerId, callback); return timerId; }, clearInterval: (id) => intervals.delete(id),
-    setTimeout: (callback) => { timeouts.set(++timerId, callback); return timerId; }, clearTimeout: (id) => timeouts.delete(id),
+    setTimeout: (callback, delay) => { timeouts.set(++timerId, callback); delays.set(timerId, delay); return timerId; }, clearTimeout: (id) => timeouts.delete(id),
   });
   QueueView.prototype.bindControls = function () {};
   QueueView.prototype.render = function () {};
@@ -33,7 +33,7 @@ function harness({ preview = false, request = async (endpoint) => endpoint === "
   view.message = (text, error) => messages.push({ text, error });
   const dispatch = (type, persisted = false) => { const event = new Event(type); Object.defineProperty(event, "persisted", { value: persisted }); window.dispatchEvent(event); };
   const tick = async () => { for (const [id, callback] of [...timeouts]) { timeouts.delete(id); callback(); } await new Promise(setImmediate); };
-  return { view, sources, intervals, timeouts, states, messages, listeners, dispatch, tick };
+  return { view, sources, intervals, timeouts, delays, states, messages, listeners, dispatch, tick };
 }
 
 test("failed initial snapshots are reported and live refresh still recovers", async () => {
@@ -263,4 +263,85 @@ test("event overlays stay bounded without forgetting the safety barrier for evic
   const fresh = app.view.loadJobs(); pending.shift()({ jobs: [], seq: 2001, nextCursor: null }); await fresh;
   assert.equal(app.view.jobEvents.size, 0); assert.equal(app.view.jobs.size, 0);
   app.view.suspendLiveUpdates();
+});
+
+test("a stream closed for good (503 while the service starts) is recreated with growing backoff and returns to ready", async () => {
+  const app = harness();
+  await app.view.start(); await app.sources[0].onopen();
+  assert.equal(app.states.at(-1), "ready");
+  // The browser retries network errors itself (readyState CONNECTING); nothing to do.
+  app.sources[0].readyState = 0; app.sources[0].onerror();
+  assert.equal(app.timeouts.size, 0); assert.equal(app.states.at(-1), "connectionReconnecting");
+  // A non-200 answer leaves EventSource CLOSED forever.
+  app.sources[0].readyState = 2; app.sources[0].onerror();
+  assert.equal(app.timeouts.size, 1);
+  const first = [...app.delays.entries()].find(([id]) => app.timeouts.has(id))[1];
+  await app.tick();
+  assert.equal(app.sources.length, 2); assert.equal(app.sources[0].closed, true);
+  app.sources[1].readyState = 2; app.sources[1].onerror();
+  const second = [...app.delays.entries()].find(([id]) => app.timeouts.has(id))[1];
+  assert.ok(first >= 1000 && second > first && second <= 30000 * 1.2, `${first} then ${second}`);
+  await app.tick();
+  assert.equal(app.sources.length, 3);
+  await app.sources[2].onopen();
+  assert.equal(app.states.at(-1), "ready", "the badge cannot stay on Reconnecting");
+  assert.equal(app.view.reconnectAttempts, 0, "a successful connection resets the backoff");
+  app.sources[2].readyState = 2; app.sources[2].onerror();
+  assert.equal(app.timeouts.size, 1);
+  app.dispatch("pagehide");
+  assert.equal(app.timeouts.size, 0, "leaving the page cancels a pending reconnect");
+  assert.equal(app.sources.length, 3);
+});
+
+test("REST polling runs only while the stream is down, plus a slow safety refresh", async () => {
+  const app = harness();
+  await app.view.start(); await app.sources[0].onopen();
+  const poll = [...app.intervals.values()][0];
+  poll();
+  assert.equal(app.timeouts.size, 0, "a healthy stream needs no polling");
+  app.view.lastRefreshAt = Date.now() - 29000; poll();
+  assert.equal(app.timeouts.size, 0);
+  app.view.lastRefreshAt = Date.now() - 31000; poll();
+  assert.equal(app.timeouts.size, 1, "a safety refresh runs about every 30 seconds");
+  await app.tick();
+  app.sources[0].onerror();
+  app.view.lastRefreshAt = Date.now() - 1000; poll();
+  assert.equal(app.timeouts.size, 0);
+  app.view.lastRefreshAt = Date.now() - 2100; poll();
+  assert.equal(app.timeouts.size, 1, "while the stream is down, snapshots poll as a fallback");
+  app.dispatch("pagehide");
+});
+
+test("connection failures use the localized status pill, and background refresh errors clear after the next success", async () => {
+  let mode = "ok";
+  const request = async (endpoint) => {
+    if (mode === "offline") throw Object.assign(new Error("serviceUnreachable"), { network: true });
+    if (mode === "starting") throw Object.assign(new Error("The service is starting"), { status: 503, code: "serviceStarting" });
+    if (mode === "broken" && endpoint === "/api/lanes") throw Object.assign(new Error("Lane snapshot failed"), { status: 500 });
+    return endpoint === "/api/keys" ? [] : { jobs: [], batches: [], lanes: [], seq: 0 };
+  };
+  const app = harness({ request });
+  await app.view.start(); await app.sources[0].onopen();
+  assert.equal(app.states.at(-1), "ready");
+  mode = "offline"; await app.view.run(() => app.view.refresh());
+  assert.equal(app.states.at(-1), "connectionOffline");
+  assert.deepEqual(app.messages, [], "a background refresh never shows the browser's raw fetch error");
+  mode = "starting"; await app.view.run(() => app.view.refresh());
+  assert.equal(app.states.at(-1), "connectionStarting");
+  app.sources[0].onerror();
+  assert.equal(app.states.at(-1), "connectionStarting", "the stream error does not hide the more specific state");
+  await app.sources[0].onopen();
+  mode = "ok"; await app.view.run(() => app.view.refresh());
+  assert.equal(app.states.at(-1), "ready");
+  mode = "broken"; await app.view.run(() => app.view.refresh());
+  assert.deepEqual(app.messages, [{ text: "Lane snapshot failed", error: true }]);
+  mode = "ok"; await app.view.run(() => app.view.refresh());
+  assert.deepEqual(app.messages.at(-1), { text: "", error: undefined }, "the stale refresh error is cleared");
+  const count = app.messages.length;
+  await app.view.run(() => app.view.refresh());
+  assert.equal(app.messages.length, count, "nothing is rewritten while there is nothing to clear");
+  await app.view.run(async () => { throw new Error("Action failed"); });
+  await app.view.run(() => app.view.refresh());
+  assert.deepEqual(app.messages.at(-1), { text: "Action failed", error: true }, "errors of user actions stay visible");
+  app.dispatch("pagehide");
 });

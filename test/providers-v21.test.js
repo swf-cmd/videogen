@@ -119,12 +119,19 @@ test("pure local asset checks reject provider size and dimension limits before q
   for (const adapter of [dashscope, openrouter]) assert.equal(adapter.validateLocalAssets([{ ...frames[0], buffer: Buffer.alloc(20 * 1024 * 1024 + 1) }]), "invalidAsset");
 });
 
-test("OpenRouter snapshot includes Veo Lite audio-sensitive pricing and keeps Seedance token estimates unknown", () => {
+test("OpenRouter snapshot includes Veo Lite audio-sensitive pricing and documented Seedance token estimates", () => {
   const models = loadCatalog().providers.find((p) => p.provider === "openrouter").models;
   const lite = models.find((m) => m.id === "google/veo-3.1-lite");
   assert.equal(lite.capabilities.firstFrame, true); assert.equal(lite.capabilities.lastFrame, true);
   for (const [resolution, audio, amount] of [["720p", true, 0.4], ["720p", false, 0.24], ["1080p", true, 0.64], ["1080p", false, 0.4]]) assert.equal(openrouter.estimateCost(lite, { resolution, audio, durationSeconds: 8 }).amount, amount);
-  assert.equal(openrouter.estimateCost(models.find((m) => m.id === "bytedance/seedance-2.5"), job.params).amount, null);
+  // OpenRouter: tokens = height × width × duration × 24 / 1024; its page lists
+  // $0.23112/s for 720p (1280×720) and "from $0.1028/s" (480p) at $10.70/M.
+  const seedance = models.find((m) => m.id === "bytedance/seedance-2.5");
+  assert.deepEqual(openrouter.estimateCost(seedance, job.params), { amount: 1.1556, currency: "USD", basis: "token" });
+  assert.equal(openrouter.estimateCost(seedance, { ...job.params, resolution: "480p", durationSeconds: 1 }).amount, 0.1028);
+  const seedance20 = models.find((m) => m.id === "bytedance/seedance-2.0");
+  assert.equal(openrouter.estimateCost(seedance20, { ...job.params, resolution: "4K" }).amount, null, "undocumented 4K output dimensions stay unknown");
+  assert.equal(openrouter.estimateCost(seedance20, { ...job.params, resolution: "1080p" }).amount, Math.round(1920 * 1080 * 24 / 1024 * 5 * 0.0000077 * 1e6) / 1e6, "a resolution-specific token SKU wins");
   const wan = models.find((m) => m.id === "alibaba/wan-2.6");
   assert.equal(openrouter.estimateCost(wan, { ...job.params, frameCount: 1 }).amount, 0.5);
   assert.equal(openrouter.estimateCost(wan, job.params).amount, 0.4);

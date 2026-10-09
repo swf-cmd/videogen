@@ -15,6 +15,7 @@ const modelNote = document.querySelector("#modelNote");
 const promptInput = document.querySelector("#prompt");
 const batchCountField = document.querySelector("#batchCountField");
 const batchCountInput = document.querySelector("#batchCount");
+const takesInput = document.querySelector("#takes");
 const secondsInput = document.querySelector("#seconds");
 const sizeInput = document.querySelector("#size");
 const aspectRatioInput = document.querySelector("#aspectRatio");
@@ -48,7 +49,7 @@ const saveKeyButton = document.querySelector("#saveKeyButton");
 const deleteKeyButton = document.querySelector("#deleteKeyButton");
 
 const isFilePreview = window.location.protocol === "file:";
-const preferenceNames = ["language", "provider", "model", "seconds", "size", "aspectRatio", "batchCount"];
+const preferenceNames = ["language", "provider", "model", "seconds", "size", "aspectRatio", "batchCount", "takes"];
 const privateStorageKeys = ["sora2app.apiKey", "sora2app.outputDir", "videogen.apiKey", "videogen.outputDir"];
 const previewCatalog = [{ provider: "openai-compatible", regions: [{ id: "custom", labelKey: "regionCustom", baseUrl: "http://127.0.0.1:8000/v1", keyFormatHint: "optional" }], models: [] }];
 let providers = previewCatalog;
@@ -202,12 +203,15 @@ async function saveSelectedKey() {
   formMessage(t("keySaved"));
 }
 function parsePromptItems() { return promptInput.value.trim().split(/\n\s*\n+/).map((item) => item.trim()).filter(Boolean); }
+// Source prompts or rows; the service renders each of them `takes` times.
 function requestCountForEstimate() { if (batchEditor?.enabled) return batchEditor.rows.length; const count = parsePromptItems().length; return count > 1 ? count : Math.max(1, Number(batchCountInput.value) || 1); }
+function selectedTakes() { const takes = Number(takesInput.value); return Number.isSafeInteger(takes) && takes >= 1 && takes <= 20 ? takes : 1; }
+function jobCountForEstimate() { return requestCountForEstimate() * selectedTakes(); }
 function updatePromptMeta() {
   const count = parsePromptItems().length;
   batchCountField.hidden = count > 1 || Boolean(batchEditor?.enabled);
   batchCountInput.disabled = count > 1 || Boolean(batchEditor?.enabled) || busy;
-  promptMetaText.textContent = t("promptCount", { count: formatInteger(count), chars: formatInteger(promptInput.value.trim().length), action: t("willSubmit", { count: formatInteger(requestCountForEstimate()) }) });
+  promptMetaText.textContent = t("promptCount", { count: formatInteger(count), chars: formatInteger(promptInput.value.trim().length), action: t("willSubmit", { count: formatInteger(jobCountForEstimate()) }) });
 }
 function selectedImageSize(params = {}) {
   return VideoDimensions.pixelSize({ resolution: params.resolution || sizeInput.value, aspectRatio: params.aspectRatio || aspectRatioInput.value });
@@ -219,7 +223,7 @@ function updateSummary() {
   summaryModel.textContent = isCustomModel() ? customModelInput.value || "—" : selectedModelConfig()?.label || modelInput.value || "—";
   summarySeconds.textContent = secondsInput.value ? `${secondsInput.value} ${t("secondUnit")}` : "—";
   summaryPrice.textContent = estimate.cost; summaryEta.textContent = estimate.eta;
-  summaryBatchCount.textContent = `${formatInteger(requestCountForEstimate())} ${t("requestUnit")}`;
+  summaryBatchCount.textContent = `${formatInteger(jobCountForEstimate())} ${t("requestUnit")}`;
   summarySize.textContent = [sizeInput.value, aspectRatioInput.value].filter(Boolean).join(" · ") || "—";
   const priced = Number.isFinite(lastEstimate?.cost?.amount);
   budgetInput.disabled = busy;
@@ -247,16 +251,23 @@ async function ensureInputReferenceInfo(file) {
 }
 
 function inputReferenceAdjustment(info, file = selectedInputReferenceFile(), sizeValue = selectedImageSize()) {
-  const expected = parseSizeValue(sizeValue);
-  if (!info || !expected) return null;
+  if (!info) return null;
+  // A rotated JPEG (EXIF orientation) is displayed upright but stored sideways;
+  // re-encode it so the provider receives what the user saw.
+  const rotated = info.orientation > 1;
+  const expected = parseSizeValue(sizeValue) || (rotated ? { width: info.width, height: info.height } : null);
+  if (!expected) return null;
   const needsResize = info.width !== expected.width || info.height !== expected.height;
   const needsCompression = Boolean(file && file.size > maxInputReferenceBytes);
-  if (!needsResize && !needsCompression) return null;
+  if (!needsResize && !needsCompression && !rotated) return null;
   return {
     actual: `${info.width} x ${info.height}`,
     expected: `${expected.width} x ${expected.height}`,
     width: expected.width,
     height: expected.height,
+    size: `${expected.width}x${expected.height}`,
+    rotated,
+    resized: needsResize,
   };
 }
 
@@ -288,7 +299,7 @@ function updateInputReferenceSummary() {
   }
   if (inputReferenceInfo) {
     const adjustment = inputReferenceAdjustment(inputReferenceInfo, file);
-    summaryReference.textContent = adjustment ? `${adjustment.actual} -> ${adjustment.expected}` : `${inputReferenceInfo.width} x ${inputReferenceInfo.height}`;
+    summaryReference.textContent = adjustment?.resized ? `${adjustment.actual} -> ${adjustment.expected}` : `${inputReferenceInfo.width} x ${inputReferenceInfo.height}`;
     return;
   }
   summaryReference.textContent = file.name;
@@ -314,6 +325,8 @@ function updateInputReferenceMeta() {
     inputReferenceMeta.textContent = inputReferenceError;
   } else if (isInvalidType) {
     inputReferenceMeta.textContent = t("inputReferenceInvalidType");
+  } else if (adjustment && !adjustment.resized && adjustment.rotated) {
+    inputReferenceMeta.textContent = t("inputReferenceMetaRotated", { name: file.name, width: inputReferenceInfo.width, height: inputReferenceInfo.height });
   } else if (adjustment) {
     inputReferenceMeta.textContent = t("inputReferenceMetaAdjusted", {
       name: file.name,
@@ -381,11 +394,11 @@ async function validateInputReferenceSelection(payload) {
 
   inputReferenceMeta.textContent = t("inputReferenceProcessing");
   let fittedFile;
-  const cacheKey = `${inputReferenceFileKey(file)}:${selectedImageSize(payload.params)}`;
+  const cacheKey = `${inputReferenceFileKey(file)}:${adjustment.size}`;
   try {
     fittedFile = inputReferenceFitCache.get(cacheKey);
     if (!fittedFile) {
-      fittedFile = await fitInputReferenceFile(file, selectedImageSize(payload.params));
+      fittedFile = await fitInputReferenceFile(file, adjustment.size);
       inputReferenceFitCache.set(cacheKey, fittedFile);
     }
   } catch (error) {
@@ -423,7 +436,7 @@ function readForm() {
   const capabilities = selectedCapabilities();
   const payload = { ...formLane(), language: activeLanguage, model: isCustomModel() ? customModelInput.value.trim() : modelInput.value,
     params: { durationSeconds: Number(secondsInput.value), resolution: sizeInput.value, aspectRatio: aspectRatioInput.value, audio: Boolean(capabilities.audio && audioInput.checked) },
-    prompt: promptInput.value.trim(), batchCount: requestCountForEstimate(), outputDir: outputDirInput.value.trim(), filename: filenameInput.value.trim() };
+    prompt: promptInput.value.trim(), batchCount: requestCountForEstimate(), takes: Number(takesInput.value), outputDir: outputDirInput.value.trim(), filename: filenameInput.value.trim() };
   if (payload.provider === "openai-compatible") payload.params.requestFormat = requestFormatInput.value;
   if (capabilities.seed && seedInput.value !== "") payload.params.seed = Number(seedInput.value);
   if (isCustomModel()) payload.customCapabilities = customCapabilities();
@@ -438,11 +451,12 @@ function validateSelection(payload) {
   if (payload.rows) batchEditor.validate();
   else if (!payload.prompt) throw new Error(t("missingPrompt"));
   if (!Number.isSafeInteger(payload.batchCount) || payload.batchCount < 1) throw new Error(t("invalidRepeat"));
+  if (!Number.isSafeInteger(payload.takes) || payload.takes < 1 || payload.takes > 20) throw new Error(t("invalidTakes"));
   if (payload.budget && (!Number.isFinite(payload.budget.amount) || payload.budget.amount <= 0)) throw new Error(t("invalidBudgetInput"));
   if (isCustomModel()) { const caps = payload.customCapabilities; if (!caps.durations.length || caps.durations.some((duration) => !Number.isInteger(duration) || duration <= 0) || !caps.resolutions.length || !caps.aspectRatios.length) throw new Error(t("invalidCapabilities")); }
 }
 function persistSettings() {
-  const values = { language: activeLanguage, provider: providerInput.value, model: modelInput.value, seconds: secondsInput.value, size: sizeInput.value, aspectRatio: aspectRatioInput.value, batchCount: batchCountInput.value };
+  const values = { language: activeLanguage, provider: providerInput.value, model: modelInput.value, seconds: secondsInput.value, size: sizeInput.value, aspectRatio: aspectRatioInput.value, batchCount: batchCountInput.value, takes: takesInput.value };
   for (const key of preferenceNames) storageSet(`videogen.${key}`, values[key]);
 }
 function restoreSettings() {
@@ -455,7 +469,8 @@ function restoreSettings() {
 }
 function scheduleEstimate() {
   clearTimeout(estimateTimer); const revision = ++estimateRevision;
-  lastEstimate = null; batchEditor?.setEstimates(null); updateSummary();
+  // Row statuses were already reset by the row editor's own change handler.
+  lastEstimate = null; if (batchEditor?.estimates?.length) batchEditor.setEstimates(null); updateSummary();
   if (isFilePreview || busy) return;
   estimateTimer = setTimeout(async () => {
     const payload = readForm(); if ((!payload.model && !payload.rows?.every((row) => row.model)) || (!payload.prompt && !payload.rows?.length)) return;
@@ -488,17 +503,20 @@ async function generateVideo(event) {
       if (!Number.isFinite(lastEstimate.cost?.amount) || !lastEstimate.cost?.currency || lastEstimate.costs?.length > 1) throw new Error(t("budgetUnknown"));
       payload.budget.currency = lastEstimate.cost.currency;
     }
-    const files = payload.rows ? await batchEditor.prepareFiles(payload) : {};
+    const progress = (current, total) => formMessage(t("preparingImages", { current: formatInteger(current), total: formatInteger(total) }));
+    const files = payload.rows ? await batchEditor.prepareFiles(payload, { onProgress: progress }) : {};
     if (reference?.file) files.input_reference = reference.file;
-    if (Object.values(files).reduce((total, file) => total + file.size, 0) > 120 * 1024 * 1024) throw new Error(t("batchImagesTooLarge"));
+    if (Object.values(files).reduce((total, file) => total + file.size, 0) > maxBatchImageBytes) throw new Error(t("batchImagesTooLarge"));
+    if (payload.rows) formMessage("");
     const estimate = estimateText();
     const budget = payload.budget ? `\n${t("budgetLabel")}: ${formatCost(payload.budget)}` : "";
-    if (!await confirmAction(t("confirmGenerate", { count: formatInteger(lastEstimate.count), cost: estimate.cost, eta: estimate.eta }) + budget)) return;
+    const takes = payload.takes > 1 ? `\n${t("confirmTakes", { rows: formatInteger(payload.rows?.length ?? payload.batchCount), takes: formatInteger(payload.takes), count: formatInteger(lastEstimate.count) })}` : "";
+    if (!await confirmAction(t("confirmGenerate", { count: formatInteger(lastEstimate.count), cost: estimate.cost, eta: estimate.eta }) + takes + budget)) return;
     if (apiKeyInput.value) await saveSelectedKey();
     const result = await apiRequest("/api/batches", payload, "POST", Object.keys(files).length ? files : null);
     persistSettings(); formMessage(t("batchEnqueued", { count: result.count }));
-    queueView.batchFilter = result.id; queueView.jobPage = 0; queueView.jobCursors = [null];
-    await queueView.refresh();
+    // Show the new batch with every status; a kept status filter could hide all of it.
+    await Promise.all([queueView.showBatch(result.id), queueView.refresh()]);
   } catch (error) { formMessage(error.message, true); }
   finally { setBusy(false); if (previousFocus?.isConnected) previousFocus.focus(); }
 }
@@ -523,19 +541,50 @@ async function refreshCatalog() {
   catch (error) { formMessage(error.message, true); }
   finally { button.disabled = busy || !supportsCatalogRefresh(); }
 }
+async function fetchCatalog() {
+  const data = await apiRequest("/api/catalog");
+  if (!Array.isArray(data.providers) || !data.providers.length) throw new Error(t("noModels"));
+  return data;
+}
+function applyCatalog(data) {
+  providers = data.providers; platform = data.platform; defaultOutputDirectory = data.defaultOutputDir || ""; proxyInfo = data.proxy || null;
+}
+function applyRestoredSelection(restored) {
+  renderProviders(restored.provider); chooseLane(); renderModels(restored.model); syncOptionControls();
+  for (const [name, input] of [["seconds", secondsInput], ["size", sizeInput], ["aspectRatio", aspectRatioInput]]) if ([...input.options].some((option) => option.value === restored[name])) input.value = restored[name];
+  selectOutputDirButton.hidden = isFilePreview || platform !== "darwin";
+}
+// The service answers 503 while it starts and recovers jobs; keep trying
+// instead of leaving the form on the preview stub.
+function retryableLoadError(error) { return Boolean(error?.network) || Number(error?.status) >= 500; }
+function catalogRetryDelay(attempt) { return Math.min(15000, 1000 * 2 ** Math.min(attempt, 4)); }
+async function retryCatalog(restored, attempt = 0) {
+  await new Promise((resolve) => setTimeout(resolve, catalogRetryDelay(attempt)));
+  let data;
+  try { data = await fetchCatalog(); }
+  catch (error) {
+    if (retryableLoadError(error)) return retryCatalog(restored, attempt + 1);
+    formMessage(t("loadCatalogError", { message: error.message }), true);
+    return;
+  }
+  if (busy) return retryCatalog(restored, attempt);
+  applyCatalog(data); applyRestoredSelection(restored); applyTranslations(); scheduleEstimate();
+  formMessage(t("readyLog"));
+}
 async function init() {
   const restored = restoreSettings(); activeLanguage = normalizeLanguage(restored.language || "zh");
   let loadError = null;
   if (!isFilePreview) {
-    try { const data = await apiRequest("/api/catalog"); if (!Array.isArray(data.providers) || !data.providers.length) throw new Error(t("noModels")); providers = data.providers; platform = data.platform; defaultOutputDirectory = data.defaultOutputDir || ""; proxyInfo = data.proxy || null; }
+    try { applyCatalog(await fetchCatalog()); }
     catch (error) { loadError = error; }
   }
-  renderProviders(restored.provider); chooseLane(); renderModels(restored.model); syncOptionControls();
-  for (const [name, input] of [["seconds", secondsInput], ["size", sizeInput], ["aspectRatio", aspectRatioInput]]) if ([...input.options].some((option) => option.value === restored[name])) input.value = restored[name];
+  applyRestoredSelection(restored);
   batchCountInput.value = String(Number.isSafeInteger(Number(restored.batchCount)) && Number(restored.batchCount) > 0 ? restored.batchCount : 1);
-  selectOutputDirButton.hidden = isFilePreview || platform !== "darwin";
-  batchEditor = new BatchEditor(); queueView = new QueueView(); applyTranslations();
-  if (loadError) formMessage(t("loadCatalogError", { message: loadError.message }), true);
+  takesInput.value = String(Number.isSafeInteger(Number(restored.takes)) && Number(restored.takes) >= 1 && Number(restored.takes) <= 20 ? restored.takes : 1);
+  for (const id of ["#exportControls", "#notifyField"]) document.querySelector(id).hidden = isFilePreview;
+  batchEditor = new BatchEditor(); queueView = new QueueView(); queueView.restoreNotifications(); applyTranslations();
+  if (loadError && retryableLoadError(loadError)) { formMessage(t("catalogRetrying")); retryCatalog(restored); }
+  else if (loadError) formMessage(t("loadCatalogError", { message: loadError.message }), true);
   else formMessage(t(isFilePreview ? "previewReadyLog" : "readyLog"));
   await queueView.run(() => queueView.start());
 }
@@ -553,6 +602,7 @@ baseUrlInput.addEventListener("input", () => { apiKeyInput.value = ""; updateSel
 apiKeyInput.addEventListener("input", updateSelectedKeyStatus);
 modelInput.addEventListener("change", () => { syncOptionControls(); scheduleEstimate(); persistSettings(); });
 for (const input of [customDurationsInput, customResolutionsInput, customAspectRatiosInput, customFirstFrameInput, customAudioInput]) input.addEventListener("change", () => { syncOptionControls(); scheduleEstimate(); });
-for (const input of [promptInput, batchCountInput, customModelInput]) input.addEventListener("input", () => { updatePromptMeta(); scheduleEstimate(); });
+for (const input of [promptInput, batchCountInput, takesInput, customModelInput]) input.addEventListener("input", () => { updatePromptMeta(); scheduleEstimate(); });
+takesInput.addEventListener("change", persistSettings);
 for (const input of [secondsInput, sizeInput, aspectRatioInput, audioInput, seedInput, requestFormatInput]) input.addEventListener("change", () => { updateInputReferenceMeta(); scheduleEstimate(); persistSettings(); });
 init();

@@ -8,7 +8,8 @@ const { ROOT, HOME_DIR, DEFAULT_OUTPUT_DIR } = require("../config");
 
 function expandHome(inputPath) {
   if (!inputPath || inputPath === "~") return os.homedir();
-  if (inputPath.startsWith("~/")) return path.join(os.homedir(), inputPath.slice(2));
+  // Windows paths are shown as "~\\Downloads\\videogen"; accept that form there.
+  if (inputPath.startsWith("~/") || process.platform === "win32" && inputPath.startsWith("~\\")) return path.join(os.homedir(), inputPath.slice(2));
   return inputPath;
 }
 
@@ -34,7 +35,9 @@ function sanitizeFilename(name) {
   if (!cleaned) cleaned = fallback;
   if (/^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:[. ]|$)/i.test(cleaned)) cleaned = `_${cleaned}`;
   const extension = /\.(?:mp4|webm)$/i.exec(cleaned)?.[0] || ".mp4";
-  const stem = cleaned.endsWith(extension) ? cleaned.slice(0, -extension.length) : cleaned;
+  let stem = cleaned.endsWith(extension) ? cleaned.slice(0, -extension.length) : cleaned;
+  // ".mp4" alone has no usable stem (and no extname); never publish a dotfile.
+  if (!stem.replace(/^[. ]+/, "")) stem = fallback.slice(0, -".mp4".length);
   return `${truncateUtf8(stem, MAX_FILENAME_BYTES - Buffer.byteLength(extension))}${extension}`;
 }
 
@@ -282,8 +285,10 @@ async function writeOutput(response, desiredPath, { jobId = crypto.randomUUID(),
     handle = null;
     const sha256 = hash.digest("hex");
     const mediaType = contentType.split(";")[0].trim().toLowerCase();
-    const extension = mediaType === "video/webm" ? ".webm" : mediaType === "video/mp4" ? ".mp4" : path.extname(target);
-    const publishTarget = `${target.slice(0, -path.extname(target).length)}${extension}`;
+    const currentExtension = /\.(?:mp4|webm)$/i.exec(target)?.[0] || "";
+    const extension = mediaType === "video/webm" ? ".webm" : mediaType === "video/mp4" ? ".mp4" : currentExtension || ".mp4";
+    const publishTarget = `${currentExtension ? target.slice(0, -currentExtension.length) : target}${extension}`;
+    if (!path.isAbsolute(publishTarget) || path.dirname(publishTarget) !== directory) throw Object.assign(new Error("invalidOutputPath"), { code: "EINVAL" });
     let output;
     for (let index = 1; ; index += 1) {
       checkDownloadSignal(signal);
@@ -305,6 +310,12 @@ async function writeOutput(response, desiredPath, { jobId = crypto.randomUUID(),
     return output;
   } finally {
     if (abortDownload) signal?.removeEventListener("abort", abortDownload);
+    // A failure before the body was read (mkdir, open, recovery) must still
+    // release the provider connection instead of leaving it streaming.
+    if (!source) {
+      if (typeof response?.body?.cancel === "function") await response.body.cancel().catch(() => {});
+      else response?.body?.destroy?.();
+    }
     await handle?.close().catch(() => {});
     if (ownsPartial && !published) await fsp.unlink(partialPath).catch(() => {});
     activePartialPaths.delete(partialPath);

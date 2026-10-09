@@ -11,9 +11,13 @@ async function apiRequest(endpoint, payload, method = payload === undefined ? "G
     headers["content-type"] = "application/json";
     body = JSON.stringify(payload);
   }
-  const response = await fetch(endpoint, { method, headers, body });
+  let response;
+  // A rejected fetch means the local service could not be reached. Never show
+  // the browser's raw English text ("Failed to fetch") to the user.
+  try { response = await fetch(endpoint, { method, headers, body }); }
+  catch (cause) { throw Object.assign(new Error(t("serviceUnreachable")), { network: true, cause }); }
   const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(result.error?.message || t("requestFailed", { status: response.status }));
+  if (!response.ok) throw Object.assign(new Error(result.error?.message || t("requestFailed", { status: response.status })), { status: response.status, code: result.error?.code || null });
   return result;
 }
 

@@ -24,7 +24,7 @@ The public endpoint was fetched without credentials on 2026-10-08. The bundled `
 | `alibaba/wan-2.7` | 2–10 integer seconds | 720p, 1080p | 16:9, 9:16, 1:1, 4:3, 3:4 | true | `duration_seconds: 0.1` |
 | `runway/gen-4.5` | 2–10 integer seconds | 720p | 16:9, 9:16 | false | `cents_per_second_output: 12` |
 | `google/veo-3.1-lite` | 4, 6, 8 seconds | 720p, 1080p | 16:9, 9:16 | true | 720p: USD 0.05/s with audio, 0.03/s silent; 1080p: 0.08/s with audio, 0.05/s silent |
-| `bytedance/seedance-2.5` | 4–30 integer seconds | 480p, 720p | 16:9, 4:3, 1:1, 3:4, 9:16, 21:9 | true | `video_tokens: 0.0000107`; token-count formula unknown |
+| `bytedance/seedance-2.5` | 4–30 integer seconds | 480p, 720p | 16:9, 4:3, 1:1, 3:4, 9:16, 21:9 | true | `video_tokens: 0.0000107`; tokens = height × width × seconds × 24 / 1024 (see below) |
 
 Source for every snapshot row: [public video models endpoint](https://openrouter.ai/api/v1/videos/models), accessed 2026-10-08 (✅). SKU values are strings, and names vary by provider. Do not treat arbitrary SKUs as a single dollar-per-second rate. Unsupported/ambiguous formulas produce an unknown estimate. The guide's illustrative `per-video-second` examples differ from the live names.
 
@@ -36,4 +36,12 @@ No automatic create retry without explicit nonacceptance evidence. `supportsIdem
 
 Refresh maps `supported_frame_images` to first/last-frame controls; missing roles are disabled. Duplicate roles, unsupported roles, and a last frame without a first frame fail validation before create. Frame bytes stay local until the user confirms generation.
 
-Estimates select known resolution/audio/text-to-video/image-to-video SKUs, apply known per-image surcharges and minimum charges, and retain unknown for token pricing without a verified counting formula. Blank/null/negative prices never become zero. Each row passes its frame count to estimation. The live catalog is a dated snapshot and refresh remains an explicit user action. No generation endpoint was called to validate these changes.
+Estimates select known resolution/audio/text-to-video/image-to-video SKUs, apply known per-image surcharges and minimum charges, and retain unknown for token pricing without a verified counting formula.
+
+## ByteDance token estimates (v2.2)
+
+✅ OpenRouter's ByteDance model pages state: "The number of tokens is given by (height of output video × width of output video × duration × 24) / 1024." The Seedance 2.5 page lists the Seed provider at $0.23112/s with $10.70/M tokens, which equals 1280 × 720 × 24 / 1024 × $10.70/M, and "from $0.1028 per second", which equals the 854 × 480 tier ([model page](https://openrouter.ai/bytedance/seedance-2.5), accessed 2026-10-09). Estimates therefore use `video_tokens_<resolution>`, then `video_tokens_without_audio` for silent output, then `video_tokens`, with ByteDance's published output sizes for 480p/720p/1080p and each aspect ratio. First/last-frame renders may adapt their ratio; the pixel area per tier is nearly constant, so the 16:9 size stands in when the ratio is not in the table. Sizes without published dimensions (for example 4K) stay unknown. `video_tokens_with_video_input` is not used because the app sends no reference video.
+
+## App attribution (v2.2)
+
+Create, poll and model-list requests send OpenRouter's documented [app-attribution headers](https://openrouter.ai/docs/app-attribution): `HTTP-Referer: https://github.com/swf-cmd/videogen`, `X-OpenRouter-Title: videogen` (required for apps without a public URL of their own) and `X-OpenRouter-Categories: video-gen`. They identify the client, not the user, and are omitted from result downloads. `VIDEOGEN_OPENROUTER_ATTRIBUTION=0` disables them. Blank/null/negative prices never become zero. Each row passes its frame count to estimation. The live catalog is a dated snapshot and refresh remains an explicit user action. No generation endpoint was called to validate these changes.

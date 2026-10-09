@@ -1,9 +1,26 @@
 const crypto = require('node:crypto');
+const path = require('node:path');
 const { MAX_BATCH_BYTES } = require('../config');
 const { normalizeInputReference } = require('../media/image');
 const { resolveBatchOutputPath, preflightOutputDirectory } = require('../files/output');
 
 function failure(code) { return Object.assign(new Error(code), { code }); }
+const MAX_TAKES = 20;
+const MAX_BATCH_JOBS = 100000;
+// Every source row (or prompt) is rendered this many times. Takes share the
+// row's settings and frames and are grouped by shot for review.
+function parseTakes(value) {
+  if (value === undefined || value === null || value === '') return 1;
+  const takes = Number(value);
+  if (!Number.isSafeInteger(takes) || takes < 1 || takes > MAX_TAKES) throw failure('invalidTakes');
+  return takes;
+}
+function takeFilename(filename, take, takes) {
+  if (takes <= 1 || !filename) return filename;
+  const name = String(filename);
+  const extension = /\.(?:mp4|webm)$/i.exec(name)?.[0] || '';
+  return `${extension ? name.slice(0, -extension.length) : name}-t${take}${extension}`;
+}
 function frameRef(row, payload, key) {
   const value = Object.hasOwn(row, key) ? row[key] : payload[key];
   if (value === undefined || value === null || value === '') return null;
@@ -47,12 +64,15 @@ function summarizeCosts(costs) {
   return [...currencies.values()].map(item => ({ ...item, amount: item.unknownCount ? null : Math.round(item.amount * 1e6) / 1e6 }));
 }
 function planBatch(app, payload, { summaryOnly = false } = {}) {
+  const takes = parseTakes(payload.takes);
   const inputs = sourceRows(app, payload);
+  // Takes multiply rows without adding request bytes, so bound their product.
+  if (takes > 1 && inputs.length * takes > MAX_BATCH_JOBS) throw failure('requestTooLarge');
   // A normal batch shares all settings. Validate/price the model once, even
   // for 50,000 repeated prompts; row mode still validates every override.
   const common = payload.rows === undefined ? selectRow(app, payload, inputs[0]) : null;
   if (summaryOnly && common) {
-    const count = inputs.length;
+    const count = inputs.length * takes;
     const amount = Number.isFinite(common.cost.amount) ? Math.round(common.cost.amount * count * 1e6) / 1e6 : null;
     const cost = { ...common.cost, amount, unknownCount: amount === null ? count : 0 };
     const concurrency = app.settings.lanes[common.lane.id]?.concurrency || common.model.concurrencyDefault;
@@ -71,16 +91,17 @@ function planBatch(app, payload, { summaryOnly = false } = {}) {
       return { index, valid: false, errors: [error.code || error.message], cost: { amount: null, currency: null, basis: 'unknown' } };
     }
   });
-  const costs = summarizeCosts(rows.map(row => row.cost));
+  // Row statuses stay per source row; totals count every take.
+  const costs = summarizeCosts(rows.flatMap(row => Array.from({ length: takes }, () => row.cost)));
   const laneWork = new Map();
   for (const value of selected.filter(Boolean)) {
     const concurrency = app.settings.lanes[value.lane.id]?.concurrency || value.model.concurrencyDefault;
     const typical = app.scheduler.lanes.get(value.lane.id)?.typicalSeconds || value.model.typicalRenderSec;
     const previous = laneWork.get(value.lane.id) || { count: 0, typical: 0, concurrency };
-    previous.count += 1; previous.typical = Math.max(previous.typical, typical); laneWork.set(value.lane.id, previous);
+    previous.count += takes; previous.typical = Math.max(previous.typical, typical); laneWork.set(value.lane.id, previous);
   }
   const cost = costs.length === 1 ? { ...(selected.find(Boolean)?.cost || {}), ...costs[0] } : { amount: null, currency: null, basis: 'mixed' };
-  return { selected, estimate: { valid: rows.every(row => row.valid), rows, costs, cost, count: rows.length,
+  return { selected, takes, estimate: { valid: rows.every(row => row.valid), rows, costs, cost, count: rows.length * takes, takes,
     etaSeconds: Math.max(0, ...[...laneWork.values()].map(lane => Math.ceil(lane.count / lane.concurrency) * lane.typical)),
     concurrency: [...laneWork.values()].reduce((sum, lane) => sum + lane.concurrency, 0) } };
 }
@@ -91,7 +112,7 @@ async function prepareBatch(app, payload, file, files = new Map(), pixelSize) {
   if (file?.size) references.set('input_reference', file);
   const input = { ...payload };
   if (file?.size && input.firstFrame === undefined) input.firstFrame = 'input_reference';
-  const { selected, estimate } = planBatch(app, input);
+  const { selected, estimate, takes } = planBatch(app, input);
   if (!estimate.valid) throw failure('invalidImportRows');
   let budget = null;
   if (payload.budget !== undefined && payload.budget !== null && payload.budget !== '') {
@@ -104,8 +125,9 @@ async function prepareBatch(app, payload, file, files = new Map(), pixelSize) {
   const batchId = crypto.randomUUID();
   const jobs = [];
   // Validate every upload before persisting any batch/job or dispatching paid work.
-  for (const [index, row] of selected.entries()) {
-    if (index && index % 128 === 0) await new Promise(resolve => setImmediate(resolve));
+  const total = selected.length * takes;
+  for (const [shot, row] of selected.entries()) {
+    if (shot && shot % 128 === 0) await new Promise(resolve => setImmediate(resolve));
     if (app.stopping) throw failure('serviceStopping');
     const images = [];
     for (const [role, name] of [['first_frame', row.firstFrame], ['last_frame', row.lastFrame]]) {
@@ -119,38 +141,58 @@ async function prepareBatch(app, payload, file, files = new Map(), pixelSize) {
     }
     const imageError = row.adapter.validateLocalAssets?.(images.map(({ role, image }) => ({ ...image, role })));
     if (imageError) throw failure(imageError);
-    const id = crypto.randomUUID();
-    jobs.push({
-      id, batchId, index, provider: row.lane.provider, region: row.lane.region, baseUrl: row.lane.baseUrl, laneId: row.lane.id,
-      model: row.model.id, modelConfig: row.model, params: row.params, prompt: row.prompt, assets: [], images,
-      state: 'queued', progress: 0, selection: 'unreviewed', remote: null,
-      attempts: { create: 0, poll: 0, download: 0 }, costEstimate: row.cost,
-      targetPath: resolveBatchOutputPath(payload.outputDir, row.filename, index, selected.length, id).filePath,
-      createdAt: new Date().toISOString(), language: payload.language || 'zh', requiresKey: Boolean(app.keys.get(row.lane)) || row.adapter.validateKey('') !== null,
-    });
+    for (let take = 1; take <= takes; take += 1) {
+      const id = crypto.randomUUID();
+      const index = shot * takes + take - 1;
+      // Per-row names keep the row number suffix; takes add "-tN" after it.
+      const rowPath = resolveBatchOutputPath(payload.outputDir, row.filename, shot, selected.length, id).filePath;
+      const targetPath = row.filename && takes > 1 ? path.join(path.dirname(rowPath), takeFilename(path.basename(rowPath), take, takes)) : rowPath;
+      jobs.push({
+        id, batchId, index, shot, ...(takes > 1 ? { take, takes } : {}), provider: row.lane.provider, region: row.lane.region, baseUrl: row.lane.baseUrl, laneId: row.lane.id,
+        model: row.model.id, modelConfig: row.model, params: row.params, prompt: row.prompt, assets: [], images,
+        state: 'queued', progress: 0, selection: 'unreviewed', remote: null,
+        attempts: { create: 0, poll: 0, download: 0 }, costEstimate: row.cost,
+        targetPath,
+        createdAt: new Date().toISOString(), language: payload.language || 'zh', requiresKey: Boolean(app.keys.get(row.lane)) || row.adapter.validateKey('') !== null,
+      });
+    }
   }
-  await preflightOutputDirectory(require('node:path').dirname(jobs[0].targetPath));
+  if (jobs.length !== total) throw failure('invalidParams');
+  await preflightOutputDirectory(path.dirname(jobs[0].targetPath));
   app.scheduler.assertHealthy();
   if (app.stopping) throw failure('serviceStopping');
+  // A frame shared by many rows is stored and verified once, not once per row.
+  const stored = new Map();
   for (const job of jobs) {
-    job.assets = job.images.map(({ role, image }) => app.assets.put(image, role));
+    job.assets = job.images.map(({ role, image }) => {
+      let byRole = stored.get(image);
+      if (!byRole) { byRole = new Map(); stored.set(image, byRole); }
+      if (!byRole.has(role)) byRole.set(role, app.assets.put(image, role));
+      return byRole.get(role);
+    });
     delete job.images;
   }
-  const laneIds = [...new Set(selected.map(row => row.lane.id))];
-  app.store.updateBatch(batchId, { state: 'preparing', laneId: laneIds.length === 1 ? laneIds[0] : null, laneIds, budget, total: jobs.length, createdAt: new Date().toISOString() });
+  // Clearing history while these jobs are being persisted must not collect
+  // the frames they reference.
+  const pending = { assets: [...stored.values()].flatMap((byRole) => [...byRole.values()]) };
+  app.pendingAssets?.add(pending);
   try {
-    await app.store.addManyAsync(jobs, { shouldStop: () => app.stopping });
-    app.scheduler.assertHealthy();
-    if (app.stopping) throw failure('serviceStopping');
-    app.store.updateBatch(batchId, { state: 'active' });
-  } catch (error) {
-    if (!app.store.failed && app.store.fd !== undefined) {
-      const total = jobs.reduce((count, job) => count + Number(Boolean(app.store.get(job.id))), 0);
-      app.store.updateBatch(batchId, { state: 'paused', pauseReason: 'interrupted_enqueue', total });
+    const laneIds = [...new Set(selected.map(row => row.lane.id))];
+    app.store.updateBatch(batchId, { state: 'preparing', laneId: laneIds.length === 1 ? laneIds[0] : null, laneIds, budget, total: jobs.length, ...(takes > 1 ? { takes } : {}), createdAt: new Date().toISOString() });
+    try {
+      await app.store.addManyAsync(jobs, { shouldStop: () => app.stopping });
+      app.scheduler.assertHealthy();
+      if (app.stopping) throw failure('serviceStopping');
+      app.store.updateBatch(batchId, { state: 'active' });
+    } catch (error) {
+      if (!app.store.failed && app.store.fd !== undefined) {
+        const persisted = jobs.reduce((count, job) => count + Number(Boolean(app.store.get(job.id))), 0);
+        app.store.updateBatch(batchId, { state: 'paused', pauseReason: 'interrupted_enqueue', total: persisted });
+      }
+      throw error;
     }
-    throw error;
-  }
+  } finally { app.pendingAssets?.delete(pending); }
   app.scheduler.kick();
   return { ...selected[0], jobs, id: batchId, count: jobs.length };
 }
-module.exports = { planBatch, selectRow, prepareBatch, summarizeCosts, failure };
+module.exports = { planBatch, selectRow, prepareBatch, summarizeCosts, failure, parseTakes, MAX_TAKES };

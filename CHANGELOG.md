@@ -1,5 +1,40 @@
 # Changelog
 
+## 2.2.0 — 2026-10-09
+
+Review workflow
+
+- Render every prompt or CSV row several times with **Takes per prompt** (1–20). Takes keep their row's settings and frames, count in estimates and budgets, and are saved with `-tN` suffixes.
+- Review from the keyboard: J/K or arrow keys move, Space plays, 1 keeps, 2 rejects, 3/U resets, and Keep/Reject advances to the next unreviewed take. Cards are grouped by batch and shot, show "Shot N · Take M", load their first frame near the viewport and announce decisions to screen readers.
+- Export a manifest of kept (or all) finished takes as CSV or JSON with absolute paths, prompts, model settings, shot/take, estimated costs, remote IDs and SHA-256. CSV cells are quoted and formula-neutralized.
+- Stop tracking a running job (for example after attaching a mistyped remote ID) without implying remote cancellation or a refund.
+- Optional desktop notifications for finished batches, new review items and lanes waiting for a key. Batches are labeled by date and first prompt. Below 560 px the job table becomes stacked cards with every action reachable.
+
+Queue and safety fixes
+
+- Saving a key after an authentication error no longer hangs the service in an endless journal-writing loop, and it no longer lifts a manual, quota or model-access pause.
+- A job cancelled while its create was in flight is cancelled, not created again, when the provider definitely rejects that create.
+- Clear history no longer re-arms a batch budget by deleting charged takes, and no longer deletes frames of an import that is still being saved. A regeneration that the batch budget cannot dispatch is refused instead of waiting forever.
+- Downloads time out on inactivity instead of total duration, so large results on slow links finish. A 4xx while polling or downloading accepted work is retried; only a 15-minute 404 streak ends a running job as `remote_not_found`. A presigned-URL 403 no longer marks the lane as needing a key.
+- An explicit retry or resubmit inside a cancelled batch reopens it. Batch cancel uses one durability barrier instead of one fsync per job. An absurd Retry-After is clamped instead of stopping the scheduler.
+- Startup continues when an old output folder became unreadable. The filename ".mp4" can no longer publish outside the output folder. Response bodies are released when an output write fails early. Uploaded frame buffers are freed once a job leaves the queue, and a frame shared by many rows is stored once.
+- Windows `~\` output paths expand to the home folder, and home-path redaction no longer rewrites sibling folders or every separator when the home is a root.
+
+Frontend fixes
+
+- Editing a 1,000-row import no longer freezes for ~1.7 s per keystroke. Rows update in place, keeping focus, typed values and open details.
+- Live updates reconnect after a startup 503 instead of staying on "Reconnecting"; polling runs only while the event stream is down. Connection errors are localized and clear after recovery. Action buttons keep keyboard focus.
+- EXIF-rotated JPEG frames are redrawn upright before upload. The 120 MB image limit fails early with progress. Literal `{{column}}` text in a CSV triggers a warning with one-click template expansion. CSV errors report file line numbers; trailing empty header columns, spaces before quotes and an `index` column are handled.
+- A safe retry no longer depends on the current catalog still containing the model. The catalog is retried during the startup window.
+
+Providers
+
+- OpenRouter Seedance estimates use OpenRouter's published ByteDance token formula instead of showing Unknown; undocumented sizes such as 4K stay unknown.
+- OpenRouter requests carry its documented app-attribution headers; `VIDEOGEN_OPENROUTER_ATTRIBUTION=0` disables them.
+- Documented the 2026-10-22 removal of Veo 3.1 preview models from the Gemini API and the USD list prices shown for Model Studio Singapore on the international site.
+
+All verification uses local fixtures; no paid provider calls were made. The 100-job crash acceptance result is unchanged: zero duplicate paid creates, untracked remote jobs, hash mismatches or exposed secrets.
+
 ## 2.1.4 — 2026-10-08
 
 - Include the startup, quarantine recovery, compaction and frontend fixes prepared for v2.1.2, plus the launcher readiness regression from v2.1.3.
