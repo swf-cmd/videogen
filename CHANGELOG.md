@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Switching the interface language now also re-renders the status lines under the form, the render queue and the review dialog, and the API-key placeholder; they previously stayed in the previous language (for example the "Local service ready" line). Errors returned by the local service are already localized for the language of their request and are kept as they are.
+
 ## 2.2.0 — 2026-10-09
 
 Review workflow

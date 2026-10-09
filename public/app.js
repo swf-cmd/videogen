@@ -79,8 +79,14 @@ function normalizeLanguage(language) {
 function storageGet(key) { try { return window.localStorage.getItem(key); } catch { return null; } }
 function storageSet(key, value) { try { window.localStorage.setItem(key, value); } catch {} }
 function storageRemove(key) { try { window.localStorage.removeItem(key); } catch {} }
+// Remembers which key and values produced each recent text, so status lines that
+// received rendered text can be rendered again after a language switch.
+const recentTranslations = new Map();
 function t(key, replacements = {}) {
-  return String(translations[activeLanguage]?.[key] ?? translations.zh[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => String(replacements[name] ?? ""));
+  const text = String(translations[activeLanguage]?.[key] ?? translations.zh[key] ?? key).replace(/\{(\w+)\}/g, (_, name) => String(replacements[name] ?? ""));
+  if (!recentTranslations.has(text) && recentTranslations.size >= 10000) recentTranslations.delete(recentTranslations.keys().next().value);
+  recentTranslations.set(text, { key, replacements });
+  return text;
 }
 function currentLocale() { return t("locale"); }
 function formatInteger(value) { return new Intl.NumberFormat(currentLocale()).format(value); }
@@ -98,6 +104,48 @@ function formMessage(text, error = false) {
   const element = document.querySelector("#formMessage");
   element.textContent = text;
   element.classList.toggle("is-error", error);
+}
+// Status lines show text that t() has already rendered. When a line changes, the key
+// and values behind its text are captured, and a language switch renders the line
+// again instead of leaving it in the previous language. Text without a known origin,
+// such as an error returned by the local service, is already localized for the
+// language of that request and stays as it is.
+const statusLineSelectors = ["#formMessage", "#queueMessage", "#reviewMessage"];
+const statusOrigins = new Map();
+function translationOrigin(text, depth = 0) {
+  const origin = depth <= 3 ? recentTranslations.get(text) : null;
+  if (!origin) return null;
+  const replacements = {};
+  for (const [name, value] of Object.entries(origin.replacements || {})) replacements[name] = typeof value === "string" ? translationOrigin(value, depth + 1) || value : value;
+  return { key: origin.key, replacements };
+}
+function renderTranslationOrigin(origin) {
+  const replacements = {};
+  for (const [name, value] of Object.entries(origin.replacements)) replacements[name] = value && typeof value === "object" ? renderTranslationOrigin(value) : value;
+  return t(origin.key, replacements);
+}
+function captureStatusLine(element) {
+  const text = element.textContent;
+  if (statusOrigins.get(element)?.text === text) return;
+  statusOrigins.set(element, { text, origin: text ? translationOrigin(text) : null });
+}
+function watchStatusLines() {
+  for (const selector of statusLineSelectors) {
+    const element = document.querySelector(selector);
+    captureStatusLine(element);
+    if (typeof MutationObserver === "function") new MutationObserver(() => captureStatusLine(element)).observe(element, { childList: true, characterData: true, subtree: true });
+  }
+}
+function renderStatusLines() {
+  for (const selector of statusLineSelectors) {
+    const element = document.querySelector(selector);
+    captureStatusLine(element);
+    const { origin } = statusOrigins.get(element) || {};
+    if (!origin) continue;
+    const text = renderTranslationOrigin(origin);
+    element.textContent = text;
+    statusOrigins.set(element, { text, origin });
+  }
 }
 function providerName(id) {
   const keys = { openrouter: "providerOpenRouter", "openai-compatible": "providerOpenAICompatible", mock: "providerMock", gemini: "providerGemini", dashscope: "providerDashScope", ark: "providerArk" };
@@ -179,9 +227,10 @@ function chooseLane() {
   baseUrlInput.value = lane?.region.baseUrl || "";
   baseUrlInput.readOnly = !lane?.region.requireBaseUrl && !["openai-compatible", "mock"].includes(lane?.provider.provider);
   baseUrlInput.placeholder = lane?.region.baseUrlTemplate || "";
-  apiKeyInput.placeholder = lane?.region.keyFormatHint === "optional" ? t("keyOptional") : t("replacementKey");
+  apiKeyInput.placeholder = apiKeyPlaceholder();
   renderModels(); syncOptionControls(); scheduleEstimate();
 }
+function apiKeyPlaceholder() { return t(selectedLane()?.region.keyFormatHint === "optional" ? "keyOptional" : "replacementKey"); }
 function selectExistingLane(lane) {
   if (busy) return;
   providerInput.value = `${lane.provider}:${lane.region}`;
@@ -529,9 +578,9 @@ function applyTranslations() {
   document.querySelector(".summary-grid").setAttribute("aria-label", t("summaryAria"));
   promptInput.placeholder = t("promptPlaceholder"); outputDirInput.placeholder = defaultOutputDirectory || t("outputDirPlaceholder"); filenameInput.placeholder = t("filenamePlaceholder");
   inputReferenceInput.setAttribute("aria-label", t("inputReferenceLabel"));
-  toggleApiKeyButton.textContent = t(apiKeyInput.type === "password" ? "showApiKey" : "hideApiKey");
+  toggleApiKeyButton.textContent = t(apiKeyInput.type === "password" ? "showApiKey" : "hideApiKey"); apiKeyInput.placeholder = apiKeyPlaceholder();
   setConnectionState(connectionStateKey); renderProxyInfo(); renderProviders(providerInput.value); renderModels(modelInput.value); syncOptionControls();
-  batchEditor?.render(); queueView?.render();
+  batchEditor?.render(); queueView?.render(); renderStatusLines();
 }
 function setLanguage(language) { activeLanguage = normalizeLanguage(language); applyTranslations(); storageSet("videogen.language", activeLanguage); }
 async function refreshCatalog() {
@@ -573,6 +622,7 @@ async function retryCatalog(restored, attempt = 0) {
 }
 async function init() {
   const restored = restoreSettings(); activeLanguage = normalizeLanguage(restored.language || "zh");
+  watchStatusLines();
   let loadError = null;
   if (!isFilePreview) {
     try { applyCatalog(await fetchCatalog()); }
