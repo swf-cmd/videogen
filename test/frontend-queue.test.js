@@ -63,10 +63,12 @@ test("batch form cannot send a key in a native GET fallback or its API payload",
   const field = (value) => ({ value });
   const readForm = vm.runInNewContext(`${read}\nreadForm`, {
     selectedCapabilities: () => ({ audio: false, seed: false }), formLane: () => ({ provider: "openai-compatible", region: "custom", baseUrl: "http://localhost/v1" }), activeLanguage: "en", isCustomModel: () => false,
-    modelInput: field("example"), secondsInput: field("5"), sizeInput: field("720p"), aspectRatioInput: field("16:9"), audioInput: { checked: false }, requestFormatInput: field("json"), promptInput: field("Example"), requestCountForEstimate: () => 1, outputDirInput: field("/tmp/output"), filenameInput: field("test"), budgetInput: { disabled: true }, apiKeyInput: field("secret-must-not-go-in-batches"),
+    modelInput: field("example"), secondsInput: field("5"), sizeInput: field("720p"), aspectRatioInput: field("16:9"), audioInput: { checked: false }, requestFormatInput: field("json"), promptInput: field("Example"), requestCountForEstimate: () => 1, takesInput: field("3"), outputDirInput: field("/tmp/output"), filenameInput: field("test"), budgetInput: { disabled: true }, apiKeyInput: field("secret-must-not-go-in-batches"),
   });
   const payload = readForm();
   assert.equal(payload.prompt, "Example");
+  assert.equal(payload.batchCount, 1, "batchCount counts source prompts; the service multiplies by takes");
+  assert.equal(payload.takes, 3);
   assert.ok(!JSON.stringify(payload).includes("secret-must-not-go-in-batches"));
   assert.equal(Object.hasOwn(payload, "apiKey"), false);
   assert.equal(Object.hasOwn(payload, "key"), false);
@@ -169,7 +171,7 @@ test("HTML confirmations require an explicit click, preserve risk text and defau
   assert.equal(await fourth, false);
   const queue = fs.readFileSync(path.join(publicDir, "queue-view.js"), "utf8");
   assert.doesNotMatch(`${appSource}\n${queue}`, /window\.confirm\s*\(/);
-  assert.equal((`${appSource}\n${queue}`.match(/await confirmAction\(/g) || []).length, 8);
+  assert.equal((`${appSource}\n${queue}`.match(/await confirmAction\(/g) || []).length, 9);
 });
 
 test("budget values survive disabled controls and bind to the fresh estimate before confirmation", async () => {
@@ -177,7 +179,7 @@ test("budget values survive disabled controls and bind to the fresh estimate bef
   const field = (value) => ({ value });
   const payload = vm.runInNewContext(`${read}\nreadForm()`, {
     selectedCapabilities: () => ({ audio: false, seed: false }), formLane: () => ({ provider: "mock", region: "local", baseUrl: "http://localhost/v1" }), activeLanguage: "en", isCustomModel: () => false,
-    modelInput: field("example"), secondsInput: field("5"), sizeInput: field("720p"), aspectRatioInput: field("16:9"), audioInput: { checked: false }, promptInput: field("A fox"), requestCountForEstimate: () => 1, outputDirInput: field("/tmp/output"), filenameInput: field("test"), budgetInput: { disabled: true, value: "12.5" }, lastEstimate: null,
+    modelInput: field("example"), secondsInput: field("5"), sizeInput: field("720p"), aspectRatioInput: field("16:9"), audioInput: { checked: false }, promptInput: field("A fox"), requestCountForEstimate: () => 1, takesInput: field("1"), outputDirInput: field("/tmp/output"), filenameInput: field("test"), budgetInput: { disabled: true, value: "12.5" }, lastEstimate: null,
   });
   assert.equal(payload.budget.amount, 12.5);
   const generate = appSource.slice(appSource.indexOf("async function generateVideo("), appSource.indexOf("function applyTranslations()"));
@@ -185,7 +187,7 @@ test("budget values survive disabled controls and bind to the fresh estimate bef
     const calls = [], messages = [], confirmations = [];
     const context = { document: { activeElement: null }, busy: false, readForm: () => structuredClone(payload), setBusy() {}, clearTimeout() {}, estimateTimer: null, estimateRevision: 0, validateSelection() {}, validateInputReferenceSelection: async () => null, batchEditor: { setEstimates() {} }, updateSummary() {}, lastEstimate: null,
       apiRequest: async (endpoint, value) => { calls.push({ endpoint, value }); return endpoint === "/api/estimate" ? { cost, count: 1, valid: true } : { id: "batch", count: 1 }; },
-      estimateText: () => ({ cost: "cost", eta: "eta" }), t: (key) => key, formatCost: (value) => `${value.amount} ${value.currency}`, formatInteger: String, confirmAction: async (text) => { confirmations.push(text); return true; }, apiKeyInput: { value: "" }, persistSettings() {}, formMessage: (text) => messages.push(text), queueView: { refresh: async () => {} },
+      estimateText: () => ({ cost: "cost", eta: "eta" }), t: (key) => key, formatCost: (value) => `${value.amount} ${value.currency}`, formatInteger: String, confirmAction: async (text) => { confirmations.push(text); return true; }, apiKeyInput: { value: "" }, persistSettings() {}, formMessage: (text) => messages.push(text), queueView: { refresh: async () => {}, showBatch: async () => {} }, maxBatchImageBytes: 120 * 1024 * 1024,
     };
     await vm.runInNewContext(`${generate}\ngenerateVideo`, context)({ preventDefault() {} });
     assert.equal(calls[0].value.summaryOnly, true);
@@ -204,7 +206,7 @@ test("queue updates preserve job controls, keyboard focus, expanded details and 
     insertBefore(element, before) { element.remove(); const index = before ? this.children.indexOf(before) : this.children.length; this.children.splice(index, 0, element); element.parent = this; }
     remove() { if (this.parent) { const index = this.parent.children.indexOf(this); this.parent.children.splice(index, 1); this.parent = null; } }
     querySelector(selector) { return this.children.find((child) => selector.startsWith(".") ? child.className.split(" ").includes(selector.slice(1)) : child.tag === selector) || this.children.map((child) => child.querySelector(selector)).find(Boolean) || null; }
-    setAttribute() {} addEventListener(event, callback) { this.events[event] = callback; } focus() { document.activeElement = this; }
+    setAttribute(name, value) { this.attributes = { ...this.attributes, [name]: String(value) }; } getAttribute(name) { return this.attributes?.[name] ?? null; } addEventListener(event, callback) { this.events[event] = callback; } focus() { document.activeElement = this; }
   }
   const ids = Object.fromEntries(["jobsBody", "jobsPrevious", "jobsNext", "jobsPage", "jobsCount", "batchList", "batchPrevious", "batchNext", "batchPage"].map((id) => [`#${id}`, new Element("div")]));
   document.querySelector = (id) => ids[id]; document.createElement = (tag) => new Element(tag);
@@ -217,8 +219,10 @@ test("queue updates preserve job controls, keyboard focus, expanded details and 
   let finish; const pending = view.run(() => new Promise((resolve) => { finish = resolve; }), row.cancel);
   view.jobs.set("job", { ...view.jobs.get("job"), progress: 50 }); view.renderJobs();
   assert.equal(view.jobRows.get("job"), row); assert.equal(ids["#jobsBody"].children[0], row.element);
-  assert.equal(document.activeElement, row.cancel); assert.equal(details.open, true); assert.equal(row.cancel.disabled, true); assert.equal(row.progress.value, 50);
-  finish(); await pending; assert.equal(row.cancel.disabled, false);
+  // A pending button stays enabled (disabling it would move focus to <body>) but is inert.
+  assert.equal(document.activeElement, row.cancel); assert.equal(details.open, true); assert.equal(row.cancel.disabled, false); assert.equal(row.cancel.getAttribute("aria-disabled"), "true"); assert.equal(row.progress.value, 50);
+  let repeated = false; await view.run(() => { repeated = true; }, row.cancel); assert.equal(repeated, false, "a second activation while pending is ignored");
+  finish(); await pending; assert.equal(row.cancel.disabled, false); assert.equal(row.cancel.getAttribute("aria-disabled"), "false"); assert.equal(document.activeElement, row.cancel);
   view.jobs.set("job", { ...view.jobs.get("job"), error: { code: "invalid_request", category: "invalid_request", message: "Old localized summary", providerCode: "BadSeed", providerMessage: "seed must be non-negative" } });
   view.renderJobs();
   assert.equal(row.error.textContent, "errorInvalidRequest · BadSeed · seed must be non-negative");
@@ -248,7 +252,7 @@ test("rapid pagination clicks cannot reuse a cursor or enable terminal-page butt
   const source = fs.readFileSync(path.join(publicDir, "queue-view.js"), "utf8");
   for (const kind of ["job", "batch"]) {
     const elements = new Map(), requests = [];
-    const element = (id) => { if (!elements.has(id)) elements.set(id, { disabled: false, events: {}, addEventListener(type, callback) { this.events[type] = callback; } }); return elements.get(id); };
+    const element = (id) => { if (!elements.has(id)) elements.set(id, { disabled: false, events: {}, attributes: {}, addEventListener(type, callback) { this.events[type] = callback; }, setAttribute(name, value) { this.attributes[name] = String(value); }, getAttribute(name) { return this.attributes[name] ?? null; } }); return elements.get(id); };
     const QueueView = vm.runInNewContext(`${source}\nQueueView`, { document: { querySelector: element }, URLSearchParams, t: (key) => key, apiRequest: (endpoint) => new Promise((resolve) => requests.push({ endpoint, resolve })) });
     const view = new QueueView(); view.renderJobs = () => view.renderPagination("job"); view.renderBatches = () => view.renderPagination("batch"); view.message = (message) => assert.fail(message);
     const prefix = kind === "job" ? "jobs" : "batch", next = element(`#${prefix}Next`), previous = element(`#${prefix}Previous`);
@@ -258,7 +262,8 @@ test("rapid pagination clicks cannot reuse a cursor or enable terminal-page butt
     const overlappingRefresh = kind === "job" ? view.loadJobs() : view.loadBatches();
     assert.equal(requests.length, 1, "a concurrent background snapshot shares the page request");
     assert.equal(requests.length, 1); assert.equal(view[`${kind}Page`], 1); assert.equal(view[`${kind}Cursors`].length, 2); assert.match(requests[0].endpoint, /cursor=cursor-1/);
-    view.renderPagination(kind); assert.equal(next.disabled, true); assert.equal(previous.disabled, true);
+    // While loading, both buttons keep focus but are inert; the pending guard blocks clicks.
+    view.renderPagination(kind); assert.equal(next.getAttribute("aria-disabled"), "true"); assert.equal(previous.getAttribute("aria-disabled"), "true");
     requests[0].resolve(kind === "job" ? { jobs: [], seq: 1, nextCursor: "cursor-2" } : { batches: [], nextCursor: "cursor-2" }); await first; await overlappingRefresh;
     assert.equal(next.disabled, false); assert.equal(previous.disabled, false);
     const finalPage = next.events.click(); assert.equal(requests.length, 2); assert.match(requests[1].endpoint, /cursor=cursor-2/);
@@ -266,4 +271,62 @@ test("rapid pagination clicks cannot reuse a cursor or enable terminal-page butt
     assert.equal(next.disabled, true, "run finally must preserve a terminal page's disabled Next button");
     await next.events.click(); assert.equal(requests.length, 2); assert.equal(view[`${kind}Page`], 2); assert.equal(next.disabled, true);
   }
+});
+
+test("API failures are localized when the service is unreachable and keep the server's code and status", async () => {
+  const offline = vm.runInNewContext(`${apiSource}\napiRequest`, { isFilePreview: false, activeLanguage: "ja", t: (key) => `ja:${key}`, fetch: async () => { throw new TypeError("Failed to fetch"); } });
+  await assert.rejects(offline("/api/lanes"), (error) => error.message === "ja:serviceUnreachable" && error.network === true);
+  const refused = vm.runInNewContext(`${apiSource}\napiRequest`, { isFilePreview: false, activeLanguage: "en", t: (key) => key, fetch: async () => ({ ok: false, status: 409, json: async () => ({ error: { code: "regenerateExceedsBudget", message: "Localized budget message" } }) }) });
+  await assert.rejects(refused("/api/jobs/x/regenerate", {}), (error) => error.message === "Localized budget message" && error.status === 409 && error.code === "regenerateExceedsBudget" && !error.network);
+});
+
+test("a catalog that is unavailable while the service starts is retried with backoff instead of leaving the preview stub", async () => {
+  const slice = appSource.slice(appSource.indexOf("async function fetchCatalog()"), appSource.indexOf("async function init()"));
+  const run = async (responses) => {
+    const delays = [], messages = [];
+    const context = {
+      apiRequest: async () => { const next = responses.shift(); if (next instanceof Error) throw next; return next; },
+      setTimeout: (callback, delay) => { delays.push(delay); callback(); }, t: (key) => key, busy: false, isFilePreview: false,
+      renderProviders() {}, chooseLane() {}, renderModels() {}, syncOptionControls() {}, applyTranslations() {}, scheduleEstimate() {},
+      secondsInput: { options: [] }, sizeInput: { options: [] }, aspectRatioInput: { options: [] }, selectOutputDirButton: {},
+      formMessage: (text, error = false) => messages.push([text, error]),
+    };
+    await vm.runInNewContext(`${slice}\nretryCatalog`, context)({ provider: "mock:local" });
+    return { delays, messages, context };
+  };
+  const recovered = await run([Object.assign(new Error("starting"), { status: 503 }), Object.assign(new Error("offline"), { network: true }), { providers: [{ provider: "mock" }], platform: "darwin" }]);
+  assert.deepEqual(recovered.delays, [1000, 2000, 4000]);
+  assert.deepEqual(recovered.messages, [["readyLog", false]]);
+  assert.equal(recovered.context.providers[0].provider, "mock"); assert.equal(recovered.context.selectOutputDirButton.hidden, false);
+  const rejected = await run([Object.assign(new Error("Bad catalog"), { status: 400 })]);
+  assert.deepEqual(rejected.messages, [["loadCatalogError", true]], "client errors are reported instead of retried forever");
+  const retry = vm.runInNewContext(`${slice}\n({ catalogRetryDelay, retryableLoadError })`);
+  assert.equal(retry.catalogRetryDelay(10), 15000);
+  assert.equal(retry.retryableLoadError({ status: 404 }), false);
+});
+
+test("takes multiply the displayed job count, are validated, and the confirmation shows rows × takes", async () => {
+  const counts = appSource.slice(appSource.indexOf("function requestCountForEstimate()"), appSource.indexOf("function updatePromptMeta()"));
+  const takesInput = { value: "4" };
+  const helpers = vm.runInNewContext(`${counts}\n({ jobCountForEstimate, selectedTakes })`, { batchEditor: { enabled: true, rows: [{}, {}, {}] }, takesInput });
+  assert.equal(helpers.jobCountForEstimate(), 12);
+  for (const value of ["0", "21", "2.5", "x"]) { takesInput.value = value; assert.equal(helpers.selectedTakes(), 1); }
+  const validate = appSource.slice(appSource.indexOf("function validateSelection("), appSource.indexOf("function persistSettings()"));
+  const validator = vm.runInNewContext(`${validate}\nvalidateSelection`, { normalizedBaseUrl: () => "http://localhost", isCustomModel: () => false, t: (key) => key });
+  for (const takes of [0, 21, 1.5, NaN]) assert.throws(() => validator({ baseUrl: "x", model: "m", prompt: "p", batchCount: 1, takes }), /invalidTakes/);
+  assert.doesNotThrow(() => validator({ baseUrl: "x", model: "m", prompt: "p", batchCount: 1, takes: 20 }));
+
+  const generate = appSource.slice(appSource.indexOf("async function generateVideo("), appSource.indexOf("function applyTranslations()"));
+  const calls = [], confirmations = [], shown = [];
+  const payload = { provider: "mock", model: "m", prompt: "A\n\nB", batchCount: 2, takes: 3, params: {} };
+  const context = { document: { activeElement: null }, busy: false, readForm: () => structuredClone(payload), setBusy() {}, clearTimeout() {}, estimateTimer: null, estimateRevision: 0, validateSelection() {}, validateInputReferenceSelection: async () => null, batchEditor: { setEstimates() {} }, updateSummary() {}, lastEstimate: null,
+    apiRequest: async (endpoint, value) => { calls.push({ endpoint, value }); return endpoint === "/api/estimate" ? { count: 6, takes: 3, valid: true, cost: { amount: 6, currency: "USD" } } : { id: "new-batch", count: 6 }; },
+    estimateText: () => ({ cost: "6 USD", eta: "eta" }), t: (key, values) => values ? `${key}${JSON.stringify(values)}` : key, formatCost: String, formatInteger: String, maxBatchImageBytes: 1,
+    confirmAction: async (text) => { confirmations.push(text); return true; }, apiKeyInput: { value: "" }, persistSettings() {}, formMessage() {},
+    queueView: { refresh: async () => {}, showBatch: async (id) => { shown.push(id); } } };
+  await vm.runInNewContext(`${generate}\ngenerateVideo`, context)({ preventDefault() {} });
+  assert.equal(calls[0].value.takes, 3); assert.equal(calls[1].value.takes, 3);
+  assert.match(confirmations[0], /confirmGenerate\{"count":"6"/);
+  assert.match(confirmations[0], /confirmTakes\{"rows":"2","takes":"3","count":"6"\}/);
+  assert.deepEqual(shown, ["new-batch"], "the new batch is shown, which also clears a stale status filter");
 });

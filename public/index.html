@@ -47,6 +47,7 @@
             <label id="requestFormatField" class="field" hidden><span data-i18n="requestFormat">创建请求格式</span><select id="requestFormat"><option value="json">JSON</option><option value="multipart">multipart/form-data</option></select></label>
             <label class="field span-full prompt-field"><span data-i18n="promptLabel">提示词队列</span><textarea id="prompt" name="prompt" rows="8" required></textarea><small id="promptMetaText" class="field-meta">0 字符</small></label>
             <label id="batchCountField" class="field"><span data-i18n="repeatLabel">重复次数</span><input id="batchCount" name="batchCount" type="number" min="1" step="1" value="1" inputmode="numeric" /><small class="field-meta" data-i18n="repeatNote">只有一条提示词时可重复生成</small></label>
+            <label id="takesField" class="field"><span data-i18n="takesLabel">每条生成版本数</span><input id="takes" name="takes" type="number" min="1" max="20" step="1" value="1" inputmode="numeric" /><small class="field-meta" data-i18n="takesNote">每条提示词或逐条任务都会生成这么多个版本（1–20），画廊按镜头分组，方便挑选最佳版本。</small></label>
             <div class="field span-full reference-field"><span data-i18n="inputReferenceLabel">首帧图片</span><div class="reference-input-row"><input id="inputReference" name="input_reference" type="file" accept="image/jpeg,image/png,image/webp" /><button id="clearInputReference" type="button" class="icon-button reference-clear" disabled data-i18n="inputReferenceClear">移除</button></div><div id="inputReferencePreview" class="reference-preview" hidden><img id="inputReferenceImage" alt="" /><strong id="inputReferenceName">-</strong></div><small id="inputReferenceMeta" class="field-meta"></small></div>
             <section class="batch-import span-full" aria-labelledby="importHeading">
               <h3 id="importHeading" data-i18n="batchImportTitle">逐条任务与批量导入</h3>
@@ -54,6 +55,7 @@
               <label class="field"><span data-i18n="importTemplate">导入提示词模板（可选）</span><textarea id="importTemplate" rows="2" placeholder="A cinematic shot of {{subject}}"></textarea><small class="field-meta" data-i18n="templateNote">CSV 使用列名变量；文件夹支持 {{filename}}、{{stem}}、{{index}}。</small></label>
               <label class="check-field"><input id="csvTemplateMode" type="checkbox" /><span data-i18n="csvTemplateMode">解析 CSV 提示词中的模板变量</span></label>
               <div class="row-frame-grid"><label class="field"><span data-i18n="csvImport">导入 CSV</span><input id="csvImport" type="file" accept=".csv,text/csv" /></label><label class="field"><span data-i18n="folderImport">导入图片文件夹</span><input id="folderImport" type="file" accept="image/jpeg,image/png,image/webp" multiple webkitdirectory /></label></div>
+              <div id="csvTemplateHint" class="notice warning-note csv-template-hint" role="status" hidden><span id="csvTemplateHintText"></span><button id="csvTemplateHintApply" type="button" class="secondary" data-i18n="csvTemplateHintApply">解析变量并重新导入</button></div>
               <p class="field-meta" data-i18n="folderImportNote">先导入 CSV，再选择文件夹，可按 firstFrame / lastFrame 文件名匹配；否则每张图片创建一条任务。</p>
               <button id="downloadCsvExample" type="button" class="text-button" data-i18n="downloadCsvExample">下载 CSV 示例</button>
               <label class="check-field"><input id="rowMode" type="checkbox" /><span data-i18n="rowMode">启用逐条编辑（提交下方列表）</span></label>
@@ -66,9 +68,10 @@
             <div class="actions span-full"><button id="generateButton" type="submit" class="primary-action" data-i18n="generateButton">估算并提交</button></div>
             <p id="formMessage" class="form-message span-full" role="status" aria-live="polite"></p>
           </form>
-          <aside class="panel monitor-panel" aria-label="任务状态">
+          <section class="panel monitor-panel" aria-label="任务状态">
             <div class="section-head compact"><div><p class="section-kicker" data-i18n="queueKicker">本机持久化</p><h2 data-i18n="queueTitle">渲染队列</h2></div><button id="refreshQueueButton" type="button" class="secondary" data-i18n="refreshQueue">刷新</button></div>
             <p class="field-meta" data-i18n="queuePersists">关闭页面不影响队列。服务重启后，请重新输入所需密钥。</p>
+            <label id="notifyField" class="check-field"><input id="notifyToggle" type="checkbox" /><span data-i18n="notifyToggle">批次完成或需要处理时发送浏览器通知</span></label>
             <details id="proxyInfo" class="proxy-info" hidden>
               <summary><span data-i18n="proxyTitle">网络代理</span><span id="proxyStatus"></span></summary>
               <dl><div><dt data-i18n="proxyHttp">HTTP 请求</dt><dd id="proxyHttp"></dd></div><div><dt data-i18n="proxyHttps">HTTPS 请求</dt><dd id="proxyHttps"></dd></div><div><dt data-i18n="proxyBypass">直接连接</dt><dd id="proxyBypass"></dd></div></dl>
@@ -90,13 +93,19 @@
             <section class="batch-section" aria-labelledby="batchesHeading"><div class="section-head compact"><h3 id="batchesHeading" data-i18n="batchesTitle">批次</h3><div class="pager"><button id="batchPrevious" type="button" class="secondary" data-i18n="previousPage">上一页</button><span id="batchPage"></span><button id="batchNext" type="button" class="secondary" data-i18n="nextPage">下一页</button></div></div><div id="batchList" class="batch-list"></div></section>
             <section class="jobs-section" aria-labelledby="jobsHeading"><div class="section-head compact"><h3 id="jobsHeading" data-i18n="jobsTitle">任务</h3><span id="jobsCount" class="field-meta"></span></div>
               <div class="queue-filters"><label><span data-i18n="filterBatch">批次</span><select id="batchFilter"></select></label><label><span data-i18n="filterState">状态</span><select id="stateFilter"></select></label></div>
-              <section class="gallery-section" aria-labelledby="galleryHeading"><div class="section-head compact"><h3 id="galleryHeading" data-i18n="galleryTitle">画廊与挑片</h3><label class="compact-field"><span data-i18n="selectionFilter">挑片状态</span><select id="gallerySelection"><option value="all" data-i18n="allSelections">全部</option><option value="keep" data-i18n="selectionKeep">保留</option><option value="reject" data-i18n="selectionReject">淘汰</option><option value="unreviewed" data-i18n="selectionUnreviewed">未挑选</option></select></label></div><p id="gallerySummary" class="field-meta" aria-live="polite"></p><p class="field-meta" data-i18n="galleryCostNote">成本为已接受或可能已接受的生成请求估算，包含重生成；不是供应商账单。挑片状态不会删除文件。</p><div id="galleryGrid" class="gallery-grid"></div><p class="field-meta" data-i18n="galleryPageNote">画廊显示当前任务页的成片；成本汇总覆盖所选批次的全部任务。</p></section>
-              <div class="table-scroll"><table class="jobs-table"><thead><tr><th data-i18n="jobPrompt">任务 / 提示词</th><th data-i18n="jobProgress">状态 / 进度</th><th data-i18n="jobCost">预估成本</th><th data-i18n="jobResult">输出 / 错误</th><th data-i18n="jobActions">操作</th></tr></thead><tbody id="jobsBody"></tbody></table></div>
+              <section class="gallery-section" aria-labelledby="galleryHeading"><div class="section-head compact"><h3 id="galleryHeading" data-i18n="galleryTitle">画廊与挑片</h3><label class="compact-field"><span data-i18n="selectionFilter">挑片状态</span><select id="gallerySelection"><option value="all" data-i18n="allSelections">全部</option><option value="keep" data-i18n="selectionKeep">保留</option><option value="reject" data-i18n="selectionReject">淘汰</option><option value="unreviewed" data-i18n="selectionUnreviewed">未挑选</option></select></label></div><p id="gallerySummary" class="field-meta" aria-live="polite"></p>
+                <div id="exportControls" class="export-controls"><a id="exportKeptCsv" class="button-link" href="/api/export?selection=keep&amp;format=csv" download data-i18n="exportKeptCsv">导出保留片（CSV）</a><details class="export-more"><summary data-i18n="exportMore">更多导出选项</summary><div class="export-menu"><a id="exportKeptJson" href="/api/export?selection=keep&amp;format=json" download data-i18n="exportKeptJson">保留片（JSON）</a><a id="exportAllCsv" href="/api/export?selection=all&amp;format=csv" download data-i18n="exportAllCsv">全部成片（CSV）</a><a id="exportAllJson" href="/api/export?selection=all&amp;format=json" download data-i18n="exportAllJson">全部成片（JSON）</a></div></details><small class="field-meta" data-i18n="exportNote">按当前批次筛选导出提示词、参数、成本和输出文件的完整路径。</small></div>
+                <p class="field-meta" data-i18n="galleryCostNote">成本为已接受或可能已接受的生成请求估算，包含重生成；不是供应商账单。挑片状态不会删除文件。</p>
+                <p id="galleryShortcuts" class="gallery-shortcuts" data-i18n="galleryShortcuts" hidden>键盘：J/K 或 ←/→ 切换 · 空格 播放/暂停 · 1 保留 · 2 淘汰 · 3 或 U 未挑选 · Enter 展开</p>
+                <div id="galleryGrid" class="gallery-grid" tabindex="-1" aria-describedby="galleryShortcuts"></div>
+                <p id="galleryAnnouncer" class="sr-only" aria-live="polite" aria-atomic="true"></p>
+                <p class="field-meta" data-i18n="galleryPageNote">画廊显示当前任务页的成片；成本汇总覆盖所选批次的全部任务。</p></section>
+              <div class="table-scroll"><table class="jobs-table" role="table" aria-labelledby="jobsHeading"><thead role="rowgroup"><tr role="row"><th role="columnheader" data-i18n="jobPrompt">任务 / 提示词</th><th role="columnheader" data-i18n="jobProgress">状态 / 进度</th><th role="columnheader" data-i18n="jobCost">预估成本</th><th role="columnheader" data-i18n="jobResult">输出 / 错误</th><th role="columnheader" data-i18n="jobActions">操作</th></tr></thead><tbody id="jobsBody" role="rowgroup"></tbody></table></div>
               <div class="pager jobs-pager"><button id="jobsPrevious" type="button" class="secondary" data-i18n="previousPage">上一页</button><span id="jobsPage"></span><button id="jobsNext" type="button" class="secondary" data-i18n="nextPage">下一页</button></div>
             </section>
             <p id="queueMessage" class="form-message" role="status" aria-live="polite"></p>
             <button id="clearHistoryButton" type="button" class="secondary" data-i18n="clearHistory">清除历史和素材</button>
-          </aside>
+          </section>
         </div>
       </section>
     </main>

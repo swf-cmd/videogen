@@ -26,29 +26,38 @@
   function parseCSV(source) {
     let text = String(source).replace(/^\uFEFF/, "");
     const directive = /^sep=([,;])\r?\n/i.exec(text);
-    if (directive) text = text.slice(directive[0].length);
+    // Errors report the 1-based line in the file, which differs from the record
+    // number when quoted prompts span several lines or blank lines are skipped.
+    let line = 1;
+    if (directive) { text = text.slice(directive[0].length); line = 2; }
     const delimiter = directive?.[1] || csvDelimiter(text);
-    const records = []; let record = [], field = "", quoted = false, closed = false;
+    const records = []; let record = [], field = "", quoted = false, closed = false, recordLine = line;
     const endField = () => { record.push(field); field = ""; closed = false; };
-    const endRecord = () => { endField(); if (record.some((value) => value.trim())) records.push(record); record = []; };
+    const endRecord = () => { endField(); if (record.some((value) => value.trim())) { record.line = recordLine; records.push(record); } record = []; };
     for (let i = 0; i < text.length; i += 1) {
       const char = text[i];
       if (quoted) {
         if (char === '"') { if (text[i + 1] === '"') { field += '"'; i += 1; } else { quoted = false; closed = true; } }
-        else field += char;
+        else { field += char; if (char === "\n" || char === "\r" && text[i + 1] !== "\n") line += 1; }
       } else if (char === delimiter) endField();
-      else if (char === '\r' || char === '\n') { if (char === '\r' && text[i + 1] === '\n') i += 1; endRecord(); }
-      else if (char === '"' && !field && !closed) quoted = true;
+      else if (char === '\r' || char === '\n') { if (char === '\r' && text[i + 1] === '\n') i += 1; endRecord(); line += 1; recordLine = line; }
+      // Hand-edited files often put a space after the delimiter: `a, "b, c"`.
+      else if (char === '"' && !closed && /^[ \t]*$/.test(field)) { field = ""; quoted = true; }
       else if (closed && /\s/.test(char)) continue;
-      else { if (closed || char === '"') throw failure("csvMalformed"); field += char; }
+      else { if (closed || char === '"') throw failure("csvMalformed", { line }); field += char; }
     }
-    if (quoted) throw failure("csvMalformed");
+    if (quoted) throw failure("csvMalformed", { line: recordLine });
     if (field || record.length || closed) endRecord();
     if (!records.length) return [];
-    const headers = records.shift().map(canonicalHeader);
-    if (headers.some((value) => !value) || new Set(headers).size !== headers.length) throw failure("csvHeaders");
-    return records.map((values, index) => {
-      if (values.length > headers.length) throw failure("csvColumns", { row: index + 2 });
+    let headers = records.shift().map(canonicalHeader);
+    // Spreadsheet exports can end the header with empty cells ("prompt,filename,").
+    // They are ignored as long as every row leaves those cells empty too.
+    let width = headers.length;
+    while (width > 0 && !headers[width - 1]) width -= 1;
+    headers = headers.slice(0, width);
+    if (!headers.length || headers.some((value) => !value) || new Set(headers).size !== headers.length) throw failure("csvHeaders");
+    return records.map((values) => {
+      if (values.length > headers.length && values.slice(headers.length).some((value) => value.trim())) throw failure("csvColumns", { line: values.line });
       const row = Object.create(null);
       headers.forEach((header, column) => { row[header] = values[column] ?? ""; });
       return row;
@@ -64,11 +73,18 @@
     });
     return { text, missing: [...missing] };
   }
+  // Template variables of one CSV row: every column, plus {{index}} as the
+  // 1-based row number unless the CSV has its own `index` column.
+  function rowVariables(data, rowNumber) {
+    const variables = Object.assign(Object.create(null), data);
+    if (!("index" in variables)) variables.index = rowNumber;
+    return variables;
+  }
   function rowsFromCSV(source, template = "", { templatePrompts = false } = {}) {
-    return parseCSV(source).map((data, index) => {
+    return parseCSV(source).map((data, rowIndex) => {
       const prompt = data.prompt?.trim() || "";
       const templateMode = prompt ? templatePrompts : Boolean(template.trim());
-      const rendered = templateMode ? renderTemplate(prompt || template, { ...data, index: index + 1 }) : { text: prompt, missing: [] };
+      const rendered = templateMode ? renderTemplate(prompt || template, rowVariables(data, rowIndex + 1)) : { text: prompt, missing: [] };
       const row = { prompt: rendered.text, templateMode, params: {}, errors: rendered.missing.map((name) => ({ code: "templateMissing", values: { name } })) };
       for (const key of ["model", "provider", "region", "baseUrl", "filename"]) if (data[key]?.trim()) row[key] = data[key].trim();
       for (const key of ["resolution", "aspectRatio", "requestFormat"]) if (data[key]?.trim()) row.params[key] = data[key].trim();
@@ -86,6 +102,23 @@
       if (!row.prompt.trim()) row.errors.push({ code: "missingPrompt" });
       return row;
     });
+  }
+  // Literal mode (the default) sends {{name}} unchanged. Report prompts whose
+  // variables would expand from this CSV so the UI can offer template mode.
+  function literalTemplateVariables(source) {
+    const rows = parseCSV(source);
+    const available = new Set(rows.length ? [...Object.keys(rows[0]), "index"] : []);
+    available.delete("prompt");
+    const names = new Set(); let count = 0;
+    for (const data of rows) {
+      let found = false;
+      for (const [, name] of String(data.prompt || "").matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)) {
+        if (!available.has(canonicalHeader(name))) continue;
+        names.add(`{{${name}}}`); found = true;
+      }
+      if (found) count += 1;
+    }
+    return { count, names: [...names] };
   }
   function normalizePath(value) { return String(value).normalize("NFC").replace(/\\/g, "/").replace(/^\.\//, ""); }
   function findImageFile(name, files) {
@@ -114,7 +147,7 @@
     const invalid = row.errors?.some((error) => error.code === "csvBoolean" && error.values?.name === "audio");
     return { values: [...(invalid ? ["__invalid__"] : []), "", "true", "false"], selected: invalid ? "__invalid__" : row.params.audio === undefined ? "" : String(row.params.audio) };
   }
-  const api = { decodeCSV, parseCSV, renderTemplate, rowsFromCSV, findImageFile, compareImageFiles, imageVariables, promptErrors, audioChoices };
+  const api = { decodeCSV, parseCSV, renderTemplate, rowsFromCSV, literalTemplateVariables, findImageFile, compareImageFiles, imageVariables, promptErrors, audioChoices };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.BatchImport = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);
