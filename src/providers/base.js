@@ -169,8 +169,15 @@ function createContext({ lane, key = "", catalog, fetchImpl = globalThis.fetch, 
     const credentialHeaders = ["authorization", "proxy-authorization", "x-goog-api-key", "x-api-key", "api-key", "cookie"];
     for (const name of credentialHeaders) headers.delete(name);
     if (needsAuth && key) headers.set(lane.provider === "gemini" ? "x-goog-api-key" : "authorization", lane.provider === "gemini" ? key : `Bearer ${key}`);
-    const timeout = AbortSignal.timeout(timeoutMs);
-    const signal = requestOptions.signal ? AbortSignal.any([timeout, requestOptions.signal]) : timeout;
+    // Downloads bound time-to-headers and then inactivity, never the whole
+    // transfer: a large clip on a slow but healthy link must be able to finish.
+    // Other phases keep a total deadline because their bodies are small JSON.
+    const streaming = phase === "download";
+    const deadline = new AbortController();
+    const expire = () => deadline.abort(Object.assign(new Error(streaming ? "downloadStalled" : "The operation was aborted due to timeout"), { name: "TimeoutError", code: streaming ? "downloadStalled" : undefined }));
+    let timer = setTimeout(expire, timeoutMs);
+    timer.unref?.();
+    const signal = requestOptions.signal ? AbortSignal.any([deadline.signal, requestOptions.signal]) : deadline.signal;
     try {
       let response;
       for (let redirect = 0; redirect < 6; redirect += 1) {
@@ -205,7 +212,25 @@ function createContext({ lane, key = "", catalog, fetchImpl = globalThis.fetch, 
         error.category = classifyError(error, phase);
         throw error;
       }
-      return response;
+      if (!streaming || !response.body || typeof response.body.getReader !== "function") return response;
+      clearTimeout(timer);
+      timer = null;
+      const reader = response.body.getReader();
+      const body = new ReadableStream({
+        async pull(controller) {
+          const idle = setTimeout(expire, timeoutMs);
+          idle.unref?.();
+          try {
+            const part = await reader.read();
+            if (part.done) controller.close();
+            else controller.enqueue(part.value);
+          } catch (error) {
+            controller.error(deadline.signal.aborted && !requestOptions.signal?.aborted ? deadline.signal.reason : error);
+          } finally { clearTimeout(idle); }
+        },
+        cancel(reason) { return reader.cancel(reason); },
+      });
+      return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
     } catch (source) {
       if (source instanceof ProviderError) throw source;
       const code = source?.code || source?.cause?.code;
@@ -214,6 +239,10 @@ function createContext({ lane, key = "", catalog, fetchImpl = globalThis.fetch, 
       error.accepted = ["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "ENETUNREACH", "EHOSTUNREACH", "ENETDOWN", "EHOSTDOWN", "EADDRNOTAVAIL", "UND_ERR_CONNECT_TIMEOUT"].includes(code) ? false : undefined;
       error.category = classifyError(error, phase);
       throw error;
+    } finally {
+      // Non-download responses keep their total deadline while the adapter
+      // reads the JSON body; the timer is unref'd and harmless afterwards.
+      if (timer && (streaming || deadline.signal.aborted)) clearTimeout(timer);
     }
   };
   return ctx;

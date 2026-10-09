@@ -74,10 +74,17 @@ class Gallery {
     const selected = this.selection(source);
     if (confirmation.fingerprint !== this.fingerprint(selected)) throw failure('confirmationExpired');
     for (const asset of source.assets || []) this.app.assets.read(asset);
+    // A take that the batch budget cannot dispatch would be accepted and then
+    // wait forever; refuse it up front instead.
+    const batch = this.app.store.batches.get(source.batchId);
+    if (batch?.state === 'paused' && ['budget', 'budget_unknown'].includes(batch.pauseReason) || !this.app.scheduler.budgetCheck(source.batchId, selected.cost).ok) {
+      throw Object.assign(failure('regenerateExceedsBudget'), { status: 409 });
+    }
     const newId = crypto.randomUUID();
     const filename = `${path.basename(source.targetPath, path.extname(source.targetPath))}-take-${newId.slice(0, 8)}`;
     const job = {
       id: newId, batchId: source.batchId, index: this.app.batch(source.batchId).total,
+      ...(Number.isInteger(source.shot) ? { shot: source.shot } : Number.isInteger(source.index) ? { shot: source.index } : {}),
       parentJobId: id, regenerationToken: confirmationToken, rootJobId: source.rootJobId || id,
       provider: source.provider, region: source.region, baseUrl: source.baseUrl, laneId: source.laneId,
       model: selected.model.id, modelConfig: selected.model, params: selected.params, prompt: source.prompt, assets: source.assets || [],
@@ -88,7 +95,6 @@ class Gallery {
     };
     this.app.store.add(job);
     this.confirmations.delete(confirmationToken);
-    const batch = this.app.store.batches.get(source.batchId);
     this.app.store.updateBatch(batch.id, { total: this.app.batch(batch.id).total, ...(batch.state === 'cancelled' ? { state: 'active' } : {}) });
     this.app.scheduler.kick();
     return job;

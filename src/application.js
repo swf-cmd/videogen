@@ -53,6 +53,7 @@ class Application {
     } catch (error) { this.store.close(); throw error; }
     this.stopping = false;
     this.preparations = new Set();
+    this.pendingAssets = new Set();
     this.gallery = new Gallery(this);
   }
 
@@ -60,12 +61,20 @@ class Application {
     if (this.starting) return this.starting;
     this.starting = (async () => {
       for (const job of this.store.jobs.values()) {
-        if (job.state === "succeeded" && outputFiles.cleanupPublishedPartial) {
-          await outputFiles.cleanupPublishedPartial(job.targetPath, { jobId: job.id, output: job.output });
-        } else if (job.state === "downloading" && outputFiles.recoverOutput) {
-          await outputFiles.recoverOutput(job.targetPath, { jobId: job.id, contentType: job.result?.contentType, onPublished: (saved) => {
-            this.store.update(job.id, { state: "succeeded", output: saved, progress: 100, completedAt: new Date().toISOString() }, { sync: true });
-          } });
+        // One unreadable historical folder (moved drive, permissions) must not
+        // keep every other paid job from resuming. The download path retries
+        // recovery for unfinished jobs; finished ones only lose marker cleanup.
+        try {
+          if (job.state === "succeeded" && outputFiles.cleanupPublishedPartial) {
+            await outputFiles.cleanupPublishedPartial(job.targetPath, { jobId: job.id, output: job.output });
+          } else if (job.state === "downloading" && outputFiles.recoverOutput) {
+            await outputFiles.recoverOutput(job.targetPath, { jobId: job.id, contentType: job.result?.contentType, onPublished: (saved) => {
+              this.store.update(job.id, { state: "succeeded", output: saved, progress: 100, completedAt: new Date().toISOString() }, { sync: true });
+            } });
+          }
+        } catch (error) {
+          if (this.store.failed) throw error;
+          this.scheduler.log("warn", "startup_output_recovery_skipped", { jobId: job.id, code: error?.code || error?.name || "error" });
         }
       }
       if (!this.stopping) this.scheduler.start();
@@ -181,7 +190,52 @@ class Application {
     } catch { return { ...this.catalog, refreshed: false, error: { code: "catalogFallback" } }; }
   }
 
-  clearHistory() { const count = this.store.clearHistory(); this.assets.collect(this.store.jobs.values()); return { count }; }
+  clearHistory() {
+    const count = this.store.clearHistory();
+    // Frames of an import still being persisted are referenced only by
+    // pendingAssets until addManyAsync finishes.
+    this.assets.collect([...this.store.jobs.values(), ...this.pendingAssets]);
+    return { count };
+  }
+
+  // Manifest of finished takes for editors, spreadsheets and handoff. This is
+  // an explicit local download, so output paths are absolute.
+  exportManifest({ batch, batchId, selection = "keep", format = "csv" } = {}) {
+    const id = batchId || batch || null;
+    if (id && !this.store.batches.has(id)) throw Object.assign(new Error("batchNotFound"), { status: 404 });
+    if (!["keep", "reject", "unreviewed", "all"].includes(selection) || !["csv", "json"].includes(format)) throw new Error("invalidParams");
+    const rows = [];
+    for (const job of this.store.jobs.values()) {
+      if (id && job.batchId !== id) continue;
+      if (job.state !== "succeeded" || !job.output?.path) continue;
+      const chosen = job.selection || "unreviewed";
+      if (selection !== "all" && chosen !== selection) continue;
+      rows.push({
+        batch_id: job.batchId, job_id: job.id, shot: Number.isInteger(job.shot) ? job.shot + 1 : job.index + 1, take: job.take || 1,
+        selection: chosen, provider: job.provider, region: job.region, model: job.model, prompt: job.prompt,
+        duration_seconds: job.params?.durationSeconds ?? "", resolution: job.params?.resolution ?? "", aspect_ratio: job.params?.aspectRatio ?? "",
+        audio: job.params?.audio === undefined ? "" : String(job.params.audio), seed: job.params?.seed ?? "",
+        first_frame: job.assets?.some((asset) => asset.role === "first_frame") ? "yes" : "", last_frame: job.assets?.some((asset) => asset.role === "last_frame") ? "yes" : "",
+        estimated_cost: Number.isFinite(job.costEstimate?.amount) ? job.costEstimate.amount : "", currency: job.costEstimate?.currency || "",
+        estimated_charges: job.estimatedCharges ?? "", remote_id: job.remote?.id || "", parent_job_id: job.parentJobId || "",
+        output_path: job.output.path, bytes: job.output.bytes ?? "", sha256: job.output.sha256 || "",
+        created_at: job.createdAt || "", completed_at: job.completedAt || "",
+      });
+    }
+    rows.sort((a, b) => a.batch_id === b.batch_id ? a.shot - b.shot || a.take - b.take : 0);
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    const filename = `videogen-${selection}-${id ? id.slice(0, 8) : "all"}-${stamp}.${format}`;
+    if (format === "json") return { filename, contentType: "application/json; charset=utf-8", body: `${JSON.stringify({ exportedAt: new Date().toISOString(), batchId: id, selection, takes: rows }, null, 2)}\n` };
+    const columns = ["batch_id", "job_id", "shot", "take", "selection", "provider", "region", "model", "prompt", "duration_seconds", "resolution", "aspect_ratio", "audio", "seed", "first_frame", "last_frame", "estimated_cost", "currency", "estimated_charges", "remote_id", "parent_job_id", "output_path", "bytes", "sha256", "created_at", "completed_at"];
+    // Quote every field and neutralize spreadsheet formulas in free text.
+    const cell = (value) => {
+      let text = String(value ?? "");
+      if (/^[=+\-@\t\r]/.test(text) && typeof value === "string") text = `'${text}`;
+      return `"${text.replace(/"/g, '""')}"`;
+    };
+    const lines = [columns.join(","), ...rows.map((row) => columns.map((name) => cell(row[name])).join(","))];
+    return { filename, contentType: "text/csv; charset=utf-8", body: `﻿${lines.join("\r\n")}\r\n` };
+  }
   async close() {
     if (this.stopping) return;
     this.stopping = true;

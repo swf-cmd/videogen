@@ -5,7 +5,7 @@ const { readRecords, snapshotRecords } = require("./records");
 const { EventEmitter } = require("node:events");
 const { dataDirectory } = require("../config");
 const { sanitizeRecord } = require("../queue/keys");
-const { validateJob, assertTransition, recoveryPatch, TERMINAL_STATES } = require("../queue/state");
+const { validateJob, assertTransition, recoveryPatch, TERMINAL_STATES, estimatedCharge } = require("../queue/state");
 const { InstanceLock, pidAlive } = require("./lock");
 
 function storeError(code = "invalidStore") {
@@ -296,13 +296,18 @@ class JobStore extends EventEmitter {
   updateBatch(id, patch, { sync = true } = {}) { return this.append(id, "batch", patch, { sync }); }
   get(id) { return this.jobs.get(id); }
 
-  list({ batch, state, cursor, limit = 50 } = {}) {
+  list({ batch, state, selection, order, cursor, limit = 50 } = {}) {
     const count = Math.max(1, Math.min(500, Number(limit) || 50));
+    if (selection !== undefined && selection !== "" && !["keep", "reject", "unreviewed"].includes(selection)) throw storeError("invalidParams");
+    const descending = order === "desc";
     const rows = [];
-    const after = cursorPosition(cursor, this.jobs);
-    for (const job of this.jobs.values()) {
-      if (after !== null && job.queueOrder <= after) continue;
+    const position = cursorPosition(cursor, this.jobs);
+    // A selection filter means finished takes with a saved video.
+    const values = descending ? [...this.jobs.values()].reverse() : this.jobs.values();
+    for (const job of values) {
+      if (position !== null && (descending ? job.queueOrder >= position : job.queueOrder <= position)) continue;
       if (batch && job.batchId !== batch || state && job.state !== state) continue;
+      if (selection && (job.state !== "succeeded" || !job.output?.path || (job.selection || "unreviewed") !== selection)) continue;
       rows.push(job);
       if (rows.length > count) break;
     }
@@ -311,10 +316,25 @@ class JobStore extends EventEmitter {
     return { jobs: rows, nextCursor: hasMore ? `q1:${rows.at(-1).queueOrder}` : null, seq: this.seq };
   }
 
-  clearHistory() {
+  clearHistory({ chargeOf = estimatedCharge } = {}) {
     let count = 0;
-    for (const job of this.jobs.values()) {
-      if (!TERMINAL_STATES.has(job.state)) continue;
+    const doomed = [...this.jobs.values()].filter((job) => TERMINAL_STATES.has(job.state));
+    const surviving = new Set([...this.jobs.values()].filter((job) => !TERMINAL_STATES.has(job.state)).map((job) => job.batchId));
+    // A batch that keeps unfinished work keeps its budget commitment: record
+    // the estimated charges of removed takes on the batch before deleting them.
+    if (chargeOf) {
+      const cleared = new Map();
+      for (const job of doomed) {
+        if (!surviving.has(job.batchId) || !this.batches.get(job.batchId)?.budget) continue;
+        const { currency, amount } = chargeOf(job) || {};
+        if (!currency || !Number.isFinite(amount) || amount <= 0) continue;
+        if (!cleared.has(job.batchId)) cleared.set(job.batchId, { ...(this.batches.get(job.batchId).clearedCharges || {}) });
+        const totals = cleared.get(job.batchId);
+        totals[currency] = Math.round(((Number(totals[currency]) || 0) + amount) * 1e6) / 1e6;
+      }
+      for (const [batchId, clearedCharges] of cleared) this.updateBatch(batchId, { clearedCharges }, { sync: false });
+    }
+    for (const job of doomed) {
       this.append(job.id, "delete", {});
       count += 1;
     }

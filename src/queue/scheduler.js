@@ -1,8 +1,9 @@
 const { EventEmitter } = require("node:events");
 const { normalizeLane, redact, redactDiagnostics } = require("./keys");
-const { TERMINAL_STATES } = require("./state");
+const { TERMINAL_STATES, estimatedCharge } = require("./state");
 const { writeOutput: defaultWriteOutput } = require("../files/output");
 const { st } = require("../i18n/server-messages");
+const { MAX_RETRY_AFTER_MS } = require("../providers/retry");
 
 function actionError(code) { return Object.assign(new Error(code), { code }); }
 function number(value, fallback) { return Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : fallback; }
@@ -11,7 +12,7 @@ function time(value) { const parsed = Date.parse(value); return Number.isFinite(
 // Only failures known to happen before a connection is established make a
 // create safe to retry. A reset or response timeout can still mean acceptance.
 const LOCAL_OFFLINE_CODES = new Set(["ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "ENETUNREACH", "EHOSTUNREACH", "ENETDOWN", "EHOSTDOWN", "EADDRNOTAVAIL", "UND_ERR_CONNECT_TIMEOUT"]);
-const FILESYSTEM_CODES = new Set(["ENOSPC", "EDQUOT", "EACCES", "EPERM", "EROFS", "EMFILE", "ENFILE", "EIO", "ENAMETOOLONG", "ENOTDIR", "EISDIR", "ENOTSUP", "EOPNOTSUPP", "ENOENT", "EEXIST", "EXDEV", "EBADF"]);
+const FILESYSTEM_CODES = new Set(["EINVAL", "ENOSPC", "EDQUOT", "EACCES", "EPERM", "EROFS", "EMFILE", "ENFILE", "EIO", "ENAMETOOLONG", "ENOTDIR", "EISDIR", "ENOTSUP", "EOPNOTSUPP", "ENOENT", "EEXIST", "EXDEV", "EBADF"]);
 function errorCode(error) { return String(error?.code || error?.cause?.code || ""); }
 function diagnostics(error) {
   const details = {};
@@ -100,10 +101,7 @@ class Scheduler extends EventEmitter {
     return lane;
   }
 
-  cost(job) {
-    const charges = job.estimatedCharges ?? (job.remote?.id || ["submitting", "needs_review"].includes(job.state) ? 1 : 0);
-    return { currency: job.costEstimate?.currency, amount: Number.isFinite(job.costEstimate?.amount) ? job.costEstimate.amount * charges : 0 };
-  }
+  cost(job) { return estimatedCharge(job); }
 
   changeCost(batchId, cost, sign) {
     if (!cost.currency || !cost.amount) return;
@@ -144,7 +142,12 @@ class Scheduler extends EventEmitter {
     }
     if (job.state === "needs_review") lane.review.add(id);
     if (job.state === "downloading") { this.downloads.add(id); lane.downloading.add(id); }
-    if (TERMINAL_STATES.has(job.state)) { this.due.delete(id); this.assetCache.delete(id); }
+    if (TERMINAL_STATES.has(job.state)) {
+      this.due.delete(id);
+      for (const phase of ["create", "poll", "download"]) { this.failures.delete(`${phase}:${id}`); this.failures.delete(`${phase}:${id}:since`); }
+    }
+    // Prepared frame uploads are only reused by another create attempt.
+    if (!["queued", "submitting"].includes(job.state)) this.assetCache.delete(id);
   }
 
   credentialsReady(lane) {
@@ -167,7 +170,7 @@ class Scheduler extends EventEmitter {
       const state = this.laneState(lane);
       const submitting = lane.inFlight.size - lane.running.size - lane.review.size;
       const pending = queued + lane.running.size + submitting + lane.downloading.size;
-      return { ...lane.lane, lane: { ...lane.lane }, state, reason: this.fatalError?.code || (state === "needs_key" ? "needs_key" : state === "active" ? null : lane.reason), concurrency: lane.concurrency, inFlight: lane.inFlight.size + lane.preparing.size, queued, submitting, running: lane.running.size, downloading: lane.downloading.size, pending, waitingForKey: state === "needs_key" ? pending : 0, needsReview: lane.review.size, cooldownUntil: lane.cooldownUntil || null, typicalRenderSec: lane.typicalSeconds, etaSeconds: lane.review.size >= lane.concurrency ? null : Math.ceil((queued + lane.running.size + submitting) / lane.concurrency) * lane.typicalSeconds };
+      return { ...lane.lane, lane: { ...lane.lane }, state, paused: lane.paused, pauseReason: lane.paused ? lane.reason : null, reason: this.fatalError?.code || (state === "needs_key" ? "needs_key" : state === "active" ? null : lane.reason), concurrency: lane.concurrency, inFlight: lane.inFlight.size + lane.preparing.size, queued, submitting, running: lane.running.size, downloading: lane.downloading.size, pending, waitingForKey: state === "needs_key" ? pending : 0, needsReview: lane.review.size, cooldownUntil: lane.cooldownUntil || null, typicalRenderSec: lane.typicalSeconds, etaSeconds: lane.review.size >= lane.concurrency ? null : Math.ceil((queued + lane.running.size + submitting) / lane.concurrency) * lane.typicalSeconds };
     });
   }
 
@@ -197,10 +200,14 @@ class Scheduler extends EventEmitter {
     const lane = this.ensureLane(value);
     const wasRejected = lane.needsKey || lane.reason === "auth";
     lane.needsKey = false;
-    if (lane.reason === "auth") { lane.reason = null; lane.paused = false; }
+    // A key only clears the authentication stop. A manual, quota or
+    // model-access pause stays until the user resumes the lane.
+    if (lane.reason === "auth") lane.reason = lane.paused ? "manual_pause" : null;
     lane.errorCount = 0;
-    if (wasRejected) for (const id of lane.running) {
-      this.update(id, { nextPollAt: null });
+    // Snapshot first: each update re-indexes the job (delete + add), and a Set
+    // iterator would visit a re-added entry again, looping forever.
+    if (wasRejected) for (const id of [...lane.running]) {
+      if (this.store.get(id)?.nextPollAt) this.update(id, { nextPollAt: null });
       this.due.set(id, 0);
     }
     this.kick();
@@ -237,7 +244,7 @@ class Scheduler extends EventEmitter {
     if (!batch?.budget) return true;
     const estimate = job.costEstimate;
     const budget = batch.budget;
-    let spent = this.batchCosts.get(job.batchId)?.get(budget.currency) || 0;
+    let spent = this.committed(job.batchId, budget.currency);
     for (const reservation of this.reservations.values()) if (reservation.batchId === job.batchId && reservation.currency === budget.currency) spent += reservation.amount;
     const unknown = !Number.isFinite(estimate?.amount) || estimate.currency !== budget.currency;
     const additionalAmount = job.createAuthorization?.kind === "idempotent" ? 0 : estimate?.amount;
@@ -246,6 +253,23 @@ class Scheduler extends EventEmitter {
       return false;
     }
     return true;
+  }
+
+  // Estimated charges of the batch's current jobs plus charges of finished
+  // takes removed by "Clear history"; deleting records never refunds a budget.
+  committed(batchId, currency) {
+    const cleared = Number(this.store.batches.get(batchId)?.clearedCharges?.[currency]);
+    return (this.batchCosts.get(batchId)?.get(currency) || 0) + (Number.isFinite(cleared) && cleared > 0 ? cleared : 0);
+  }
+
+  // Remaining budget for one more explicitly confirmed take, or null if none.
+  budgetCheck(batchId, cost) {
+    const batch = this.store.batches.get(batchId);
+    if (!batch?.budget) return { ok: true };
+    if (!Number.isFinite(cost?.amount) || cost.currency !== batch.budget.currency) return { ok: false, reason: "budget_unknown" };
+    let spent = this.committed(batchId, batch.budget.currency);
+    for (const reservation of this.reservations.values()) if (reservation.batchId === batchId && reservation.currency === batch.budget.currency) spent += reservation.amount;
+    return spent + cost.amount > batch.budget.amount + 1e-8 ? { ok: false, reason: "budget", spent, budget: batch.budget } : { ok: true };
   }
 
   nextQueued(lane) {
@@ -264,6 +288,7 @@ class Scheduler extends EventEmitter {
         const due = this.due.get(id) || 0;
         if (due > this.now()) { this.consider(due); continue; }
         const job = this.store.get(id);
+        if (job.cancelRequested) continue;
         if (this.budgetAllows(job)) return job;
         break;
       }
@@ -352,6 +377,7 @@ class Scheduler extends EventEmitter {
     lane.errorCategory = null;
     if (lane.reason === "local_offline" || lane.reason === "circuit_open" && lane.cooldownUntil <= this.now()) { lane.reason = null; lane.cooldownUntil = 0; }
     this.failures.delete(`${phase}:${id}`);
+    this.failures.delete(`${phase}:${id}:since`);
   }
 
   async create(id, lane, signal) {
@@ -480,21 +506,37 @@ class Scheduler extends EventEmitter {
     if (this.stopping && phase !== "create") return;
     const adapter = this.adapters[job.provider];
     const sourceCode = errorCode(error);
+    const status = Number(error.status);
     let category = error.category || adapter.classifyError(error, phase === "prepare" ? "poll" : phase);
-    const localOffline = !Number(error.status) && LOCAL_OFFLINE_CODES.has(sourceCode);
+    const localOffline = !status && LOCAL_OFFLINE_CODES.has(sourceCode);
     if (localOffline) category = "local_offline";
-    if (!Number(error.status) && FILESYSTEM_CODES.has(sourceCode)) category = "output_write_failed";
+    if (!status && FILESYSTEM_CODES.has(sourceCode)) category = "output_write_failed";
     if (phase === "prepare" && ["invalidAsset", "corruptAsset", "ENOENT"].includes(error.code)) category = "invalid_request";
-    if (phase === "download" && time(job.resultExpiresAt) <= this.now() && [403, 404].includes(Number(error.status))) category = "result_expired";
+    // A presigned result URL never received credentials, so its 401/403 says
+    // nothing about the lane key; it usually means the link expired.
+    const unauthenticatedDownload = phase === "download" && job.result?.needsAuth === false;
+    if (unauthenticatedDownload && category === "auth") category = "transient";
+    if (phase === "download" && time(job.resultExpiresAt) <= this.now() && status >= 400 && status < 500 && status !== 429) category = "result_expired";
+    // After an accepted create, a 4xx from polling or downloading must not
+    // discard a paid render: retry with backoff, and give up only when the
+    // remote task or result is persistently gone.
+    const key = `${phase}:${id}`;
+    const count = (this.failures.get(key) || 0) + 1;
+    this.failures.set(key, count);
+    if (["poll", "download"].includes(phase) && ["invalid_request", "moderation"].includes(category)) category = "transient";
+    if (["poll", "download"].includes(phase) && status >= 400 && status < 500 && ![401, 403, 408, 429].includes(status) || unauthenticatedDownload && [401, 403].includes(status)) {
+      const firstAt = this.failures.get(`${key}:since`) ?? this.now();
+      this.failures.set(`${key}:since`, firstAt);
+      if (count >= 6 && this.now() - firstAt >= 15 * 60000) category = phase === "poll" ? "remote_not_found" : "result_expired";
+    }
     const definite = phase === "prepare" || error.accepted === false || localOffline || ["rate_limited", "auth", "quota", "model_unavailable", "invalid_request", "moderation"].includes(category);
     if (phase === "create" && !definite && !adapter.supportsIdempotencyKey) {
       this.log("warn", "create_needs_review", { jobId: id, phase, category, ...diagnostics(error) });
       this.update(id, { state: "needs_review", error: this.error(job, "unknown_outcome", { ...diagnostics(error), phase, definitelyNotAccepted: false, reason: this.stopping ? "shutdown_during_create" : "unknown_create_response" }) }, { sync: true });
       return;
     }
-    const count = (this.failures.get(`${phase}:${id}`) || 0) + 1;
-    this.failures.set(`${phase}:${id}`, count);
-    const delay = Number.isFinite(error.retryAfterMs) && error.retryAfterMs >= 0 ? error.retryAfterMs : Math.min(30000, 1000 * 2 ** Math.min(10, count - 1)) * (1 + this.random() * 0.2);
+    const retryAfter = Number.isFinite(error.retryAfterMs) && error.retryAfterMs >= 0 ? Math.min(MAX_RETRY_AFTER_MS, error.retryAfterMs) : null;
+    const delay = retryAfter ?? Math.min(30000, 1000 * 2 ** Math.min(10, count - 1)) * (1 + this.random() * 0.2);
     const failure = this.error(job, category, { ...diagnostics(error), phase, definitelyNotAccepted: phase === "create" || phase === "prepare" ? definite : false });
     if (count === 1 || (count & (count - 1)) === 0) this.log("warn", "job_retry", { jobId: id, phase, category, attempt: count, ...diagnostics(error) });
     if (phase === "create" && (category === "unknown_outcome" || category === "transient" && !definite) && adapter.supportsIdempotencyKey) {
@@ -502,15 +544,28 @@ class Scheduler extends EventEmitter {
       this.due.set(id, this.now() + delay);
       return;
     }
-    if (["moderation", "invalid_request", "result_expired"].includes(category)) {
+    if (["moderation", "invalid_request", "result_expired", "remote_not_found"].includes(category)) {
       this.update(id, { state: category === "result_expired" ? "result_expired" : "failed", nextPollAt: null, error: failure, ...(phase === "create" && definite ? { estimatedCharges: Math.max(0, (job.estimatedCharges || 1) - 1) } : {}), completedAt: new Date(this.now()).toISOString() }, { sync: true });
       return;
     }
     if (phase === "create") {
-      this.update(id, { state: "queued", error: failure, estimatedCharges: Math.max(0, (job.estimatedCharges || 1) - 1) }, { sync: true });
+      const released = Math.max(0, (job.estimatedCharges || 1) - 1);
+      if (job.cancelRequested) {
+        // The user cancelled while this create was in flight and the provider
+        // definitely rejected it: honor the cancel instead of creating again.
+        this.update(id, { state: "queued", error: failure, estimatedCharges: released });
+        this.update(id, { state: "cancelled", completedAt: new Date(this.now()).toISOString() }, { sync: true });
+        this.applyLaneFailure(lane, category, delay);
+        return;
+      }
+      this.update(id, { state: "queued", error: failure, estimatedCharges: released }, { sync: true });
     } else this.update(id, { error: failure, ...(phase === "poll" ? { nextPollAt: new Date(this.now() + delay).toISOString() } : {}) });
     this.due.set(id, this.now() + delay);
-    if (category === "auth") { lane.needsKey = true; lane.reason = "auth"; }
+    this.applyLaneFailure(lane, category, delay);
+  }
+
+  applyLaneFailure(lane, category, delay) {
+    if (category === "auth") { lane.needsKey = true; if (!lane.paused) lane.reason = "auth"; }
     else if (["quota", "model_unavailable"].includes(category)) { lane.paused = true; lane.reason = category; this.saveSettings(lane); }
     else if (category === "output_write_failed") {
       // The paid result stays downloadable. A full or unwritable local disk is
@@ -528,13 +583,14 @@ class Scheduler extends EventEmitter {
     }
   }
 
-  async cancelJob(id) {
+  async cancelJob(id, { sync = true } = {}) {
     const job = this.store.get(id);
     if (!job) throw actionError("jobNotFound");
     if (TERMINAL_STATES.has(job.state)) return job;
     if (job.state === "needs_review") throw actionError("invalidTransition");
-    if (job.state === "queued") return this.update(id, { state: "cancelled", completedAt: new Date(this.now()).toISOString() }, { sync: true });
-    this.update(id, { cancelRequested: true }, { sync: true });
+    if (job.state === "queued") return this.update(id, { state: "cancelled", completedAt: new Date(this.now()).toISOString() }, { sync });
+    if (job.cancelRequested) return this.cancelling.get(id) || job;
+    this.update(id, { cancelRequested: true }, { sync });
     const adapter = this.adapters[job.provider];
     if (adapter.cancel && job.state === "running") {
       if (this.cancelling.has(id)) return this.cancelling.get(id);
@@ -565,11 +621,19 @@ class Scheduler extends EventEmitter {
     if (action === "retry") {
       if (job.state !== "failed" || !job.error?.definitelyNotAccepted || job.remote?.id) throw actionError("unsafeCreateRetry");
       this.update(id, { state: "queued" }, { sync: true });
+      this.reopenBatch(job.batchId);
       this.due.delete(id);
     } else if (action === "resolve") {
+      // Abandoning a running job only stops local tracking (for example a
+      // mistyped attached ID or a task deleted at the provider). It neither
+      // cancels nor refunds remote work.
+      if (payload.action === "abandon" && job.state === "running") {
+        this.due.delete(id);
+        return this.update(id, { state: "cancelled", nextPollAt: null, abandoned: true, completedAt: new Date(this.now()).toISOString() }, { sync: true });
+      }
       if (job.state !== "needs_review") throw actionError("invalidTransition");
-      if (payload.action === "abandon") return this.update(id, { state: "cancelled", completedAt: new Date(this.now()).toISOString() }, { sync: true });
-      if (payload.action === "resubmit") this.update(id, { state: "queued" }, { sync: true, manualResubmit: true });
+      if (payload.action === "abandon") return this.update(id, { state: "cancelled", abandoned: true, completedAt: new Date(this.now()).toISOString() }, { sync: true });
+      if (payload.action === "resubmit") { this.update(id, { state: "queued" }, { sync: true, manualResubmit: true }); this.reopenBatch(job.batchId); }
       else if (payload.action === "attach_remote_id") {
         if (typeof payload.remoteId !== "string" || !payload.remoteId || payload.remoteId.length > 512 || /[\s\x00-\x1f\x7f]/.test(payload.remoteId)) throw actionError("invalidRemoteId");
         if (redact(payload.remoteId) !== payload.remoteId) throw actionError("invalidRemoteId");
@@ -583,6 +647,12 @@ class Scheduler extends EventEmitter {
     return this.store.get(id);
   }
 
+  // An explicit retry or resubmit inside a cancelled batch would otherwise be
+  // accepted but never dispatched, because cancelled batches are skipped.
+  reopenBatch(batchId) {
+    if (this.store.batches.get(batchId)?.state === "cancelled") this.store.updateBatch(batchId, { state: "active", pauseReason: null });
+  }
+
   async batchAction(id, action) {
     const batch = this.store.batches.get(id);
     if (!batch) throw actionError("batchNotFound");
@@ -591,7 +661,18 @@ class Scheduler extends EventEmitter {
     if (!["pause", "resume", "cancel"].includes(action)) throw actionError("invalidParams");
     this.store.updateBatch(id, { state: action === "pause" ? "paused" : action === "resume" ? "active" : "cancelled", pauseReason: action === "pause" ? "manual_pause" : null });
     if (action === "cancel") {
-      for (const job of this.store.jobs.values()) if (job.batchId === id && job.state !== "needs_review" && !TERMINAL_STATES.has(job.state)) await this.cancelJob(job.id);
+      // One durability barrier for the whole batch instead of one per job.
+      const jobs = [...this.store.jobs.values()].filter((job) => job.batchId === id && job.state !== "needs_review" && !TERMINAL_STATES.has(job.state));
+      const pending = [];
+      for (const [index, job] of jobs.entries()) {
+        if (index && index % 512 === 0) { this.store.flush(); await new Promise((resolve) => setImmediate(resolve)); }
+        const latest = this.store.get(job.id);
+        if (!latest || latest.state === "needs_review" || TERMINAL_STATES.has(latest.state)) continue;
+        const result = this.cancelJob(job.id, { sync: false });
+        if (latest.state !== "queued") pending.push(result);
+      }
+      this.store.flush();
+      await Promise.all(pending);
     }
     this.kick();
     return this.store.batches.get(id);

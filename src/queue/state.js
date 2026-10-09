@@ -63,6 +63,13 @@ function assertTransition(previous, next, { manualResubmit = false, idempotentRe
   }
 }
 
+// Estimated provider charges attributed to a job: every create that may have
+// been accepted counts once. Budgets, gallery spend and history clearing share it.
+function estimatedCharge(job) {
+  const charges = job.estimatedCharges ?? (job.remote?.id || ["submitting", "needs_review"].includes(job.state) ? 1 : 0);
+  return { currency: job.costEstimate?.currency, amount: Number.isFinite(job.costEstimate?.amount) ? job.costEstimate.amount * charges : 0 };
+}
+
 function recoveryPatch(job, { supportsIdempotencyKey = false } = {}) {
   if (job.state !== "submitting") return null;
   if (job.remote?.id) return { state: "running" };
@@ -79,4 +86,4 @@ function recoveryPatch(job, { supportsIdempotencyKey = false } = {}) {
   };
 }
 
-module.exports = { STATES, TERMINAL_STATES, TRANSITIONS, validateJob, assertTransition, recoveryPatch };
+module.exports = { STATES, TERMINAL_STATES, TRANSITIONS, validateJob, assertTransition, recoveryPatch, estimatedCharge };

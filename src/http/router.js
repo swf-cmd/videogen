@@ -98,6 +98,14 @@ async function handleRequest(req, res) {
     if (req.method === "GET" && url.pathname === "/api/lanes") return sendJson(res, 200, { lanes: application.scheduler.laneList() });
     if (req.method === "GET" && url.pathname === "/api/batches") return sendJson(res, 200, application.batches(Object.fromEntries(url.searchParams)));
     if (req.method === "GET" && url.pathname === "/api/gallery/summary") return sendJson(res, 200, application.gallery.summary(Object.fromEntries(url.searchParams)));
+    if (req.method === "GET" && url.pathname === "/api/export") {
+      // A top-level navigation download; refuse cross-site embedding or fetches.
+      if (req.headers["sec-fetch-site"] && !["same-origin", "none"].includes(req.headers["sec-fetch-site"]) || req.headers.origin && !requestOriginAllowed(req)) return sendText(res, 403, "Forbidden");
+      const manifest = application.exportManifest(Object.fromEntries(url.searchParams));
+      res.writeHead(200, { "content-type": manifest.contentType, "cache-control": "no-store", "content-disposition": `attachment; filename="${manifest.filename}"` });
+      res.end(manifest.body);
+      return;
+    }
     const media = /^\/api\/jobs\/([^/]+)\/media$/.exec(url.pathname);
     if (["GET", "HEAD"].includes(req.method) && media) {
       if (req.headers["sec-fetch-site"] && req.headers["sec-fetch-site"] !== "same-origin" || req.headers.origin && !requestOriginAllowed(req)) return sendText(res, 403, "Forbidden");
