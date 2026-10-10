@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+Interface redesign. Features, settings, API calls and stored data are unchanged; every control keeps its ID and behavior.
+
+- The form is now four numbered steps (model and key, shots, format and takes, output and budget). Batch import and output settings fold away until needed; a closed section opens itself when the browser flags one of its fields, and while the task editor is on its section header says that the task list is what will be submitted.
+- A slate at the foot of the form (pinned while the form scrolls on wide screens) always shows what will be submitted: model, duration, size, request count, first frame, estimated price and time, next to the submit button. It no longer hides in a collapsed "Current settings" panel.
+- The render queue is a dark review pane. While there are no batches or jobs yet, it explains the three steps instead of showing empty lists. Lane cards fold their key and concurrency settings (opened automatically when a lane needs a key), batch cards show a state bar, and every lane, batch and job state uses one color scheme.
+- Gallery cards put the video first. Kept takes are circled in yellow, rejected takes are dimmed and struck through, and Keep / Reject / Unreviewed form one segmented control.
+- Bundled Archivo variable font (SIL Open Font License, `public/fonts/`), automatic dark mode, independent scrolling panes on wide screens, and a pane switcher on narrow screens. The connection status shows a colored dot. Motion is limited to a one-time clap when a batch is queued and the first-run countdown, and is off under "reduce motion".
+- New workflow recording, gallery screenshot and social preview for the README.
+
 ## 2.2.1 — 2026-10-10
 
 - Switching the interface language now also re-renders the status lines under the form, the render queue and the review dialog, and the API-key placeholder; they previously stayed in the previous language (for example the "Local service ready" line). Errors returned by the local service are already localized for the language of their request and are kept as they are.

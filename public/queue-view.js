@@ -96,6 +96,9 @@ class QueueView {
     this.laneBaseline = false;
     this.reviewCount = 0;
     this.keyWaiting = new Set();
+    // The first-run guide replaces the empty queue only once a batch snapshot
+    // has confirmed there is nothing at all to show.
+    this.batchesLoaded = typeof isFilePreview !== "undefined" && isFilePreview;
     this.bindControls();
   }
 
@@ -434,6 +437,7 @@ class QueueView {
       if (!batches) return false;
       this.batches = batches;
       this.nextBatchCursor = result.nextCursor;
+      this.batchesLoaded = true;
       this.renderBatches();
       this.checkBatchNotifications();
       this.loadBatchPrompts(batches);
@@ -519,9 +523,13 @@ class QueueView {
         // `paused` is the manual/quota pause; `state` reports needs_key first.
         const toggle = viewButton("", () => this.run(async () => { const current = this.lanes.find((item) => item.id === lane.id); await apiRequest(`/api/lanes/${lane.id}`, { action: QueueView.lanePaused(current) ? "resume" : "pause" }); await this.loadLanes(); }, toggle));
         const use = viewButton("", () => selectExistingLane(lane));
-        const controls = viewElement("div", "inline-actions"); controls.append(concurrencyLabel, configure, toggle, use);
-        element.append(title, endpoint, status, meta, warning, review, transport, keyLabel, keyActions, controls);
-        card = { element, title, endpoint, status, meta, warning, review, transport, keyTitle, keyInput, keyNote, keyStatus, save, remove, concurrencyTitle, concurrency, configure, toggle, use };
+        const controls = viewElement("div", "inline-actions lane-actions"); controls.append(use, toggle);
+        // Key and concurrency settings fold away; a lane that needs a key opens them.
+        const manage = viewElement("details", "lane-manage"), manageTitle = viewElement("summary");
+        const concurrencyRow = viewElement("div", "inline-actions"); concurrencyRow.append(concurrencyLabel, configure);
+        manage.append(manageTitle, keyLabel, keyActions, concurrencyRow);
+        element.append(title, endpoint, status, meta, warning, review, transport, controls, manage);
+        card = { element, title, endpoint, status, meta, warning, review, transport, keyTitle, keyInput, keyNote, keyStatus, save, remove, concurrencyTitle, concurrency, configure, toggle, use, manage, manageTitle };
         this.laneCards.set(lane.id, card); container.append(element);
       }
       const paused = QueueView.lanePaused(lane);
@@ -529,6 +537,9 @@ class QueueView {
       setText(card.endpoint, lane.baseUrl);
       setText(card.status, lane.state === "needs_key" && paused ? `${t("laneNeedsKey")} · ${t("lanePaused")}` : t(queueStateKeys[lane.state] || "unknown"));
       card.element.dataset.state = lane.state;
+      if (lane.state === "needs_key" && card.shownState !== "needs_key") card.manage.open = true;
+      card.shownState = lane.state;
+      setText(card.manageTitle, t("laneManage"));
       setText(card.meta, t("laneCounts", { used: lane.inFlight, limit: lane.concurrency, queued: lane.queued, downloading: lane.downloading || 0 }));
       const notes = [];
       if (lane.state === "needs_key") notes.push(t("needsKeyBanner", { count: lane.waitingForKey ?? lane.pending ?? lane.queued, lane: laneName(lane) }));
@@ -609,15 +620,19 @@ class QueueView {
           if (!await confirmAction(t("cancelBatchConfirm"), { danger: true })) return;
           await apiRequest(`/api/batches/${batch.id}/cancel`, {}); await this.refresh();
         }, cancel));
-        controls.append(toggle, cancel); element.append(title, meta, summary, status, budget, controls);
-        card = { element, title, meta, summary, status, budget, controls, toggle, cancel }; this.batchCards.set(batch.id, card);
+        // A bar of job states per batch; the summary line carries the same counts as text.
+        const meter = viewElement("div", "batch-meter"); meter.setAttribute("aria-hidden", "true");
+        controls.append(toggle, cancel); element.append(title, meta, meter, summary, status, budget, controls);
+        card = { element, title, meta, meter, summary, status, budget, controls, toggle, cancel }; this.batchCards.set(batch.id, card);
       }
       if (container.children[index] !== card.element) container.insertBefore(card.element, container.children[index] || null);
       setText(card.title, this.batchLabel(batch));
       const lane = this.lanes.find((item) => item.id === batch.laneId);
       setText(card.meta, [lane ? laneName(lane) : "", `#${batch.id.slice(0, 8)}`, batch.takes > 1 ? t("batchTakes", { takes: batch.takes }) : ""].filter(Boolean).join(" · "));
       setText(card.summary, `${t("batchTotal", { count: batch.total })} · ${this.batchCounts(batch)}`);
+      this.renderBatchMeter(card, batch);
       const finished = batchIsFinished(batch);
+      card.element.dataset.state = batch.state === "cancelled" ? "cancelled" : finished ? "finished" : batch.state || "";
       setText(card.status, `${t(finished ? "batchFinished" : queueStateKeys[batch.state] || "unknown")}${!finished && batch.pauseReason ? ` · ${t(queueReasonKeys[batch.pauseReason] || "lanePaused")}` : ""}`);
       card.budget.hidden = !batch.budget; setText(card.budget, batch.budget ? `${t("budgetLabel")}: ${formatCost(batch.budget)}` : "");
       const hideControls = batch.state === "cancelled" || finished;
@@ -628,9 +643,33 @@ class QueueView {
       setText(card.toggle, t(batch.state === "paused" ? "resume" : "pause")); setText(card.cancel, t("cancelBatch"));
     });
     this.renderPagination("batch");
+    this.renderFirstRun();
     this.renderFilters();
     // Gallery batch headings use the same labels.
     if (this.galleryHeaders?.size) this.renderGallery();
+  }
+
+  // No batches anywhere (first page, loaded) and no jobs: show the three-step
+  // guide instead of empty lists. Any page, filter or job keeps the queue.
+  firstRun() { return Boolean(this.batchesLoaded) && this.batchPage === 0 && !this.batches.length && !this.jobs.size && !this.batchFilter && !this.stateFilter; }
+  renderFirstRun() {
+    const pane = document.querySelector("#dailies");
+    if (!pane?.classList) return;
+    const firstRun = this.firstRun(), focused = document.activeElement;
+    pane.classList.toggle("is-first-run", firstRun);
+    // Hidden sections must not keep keyboard focus (for example after Clear history).
+    if (firstRun && focused?.closest?.(".batch-section, .jobs-section, .danger-zone")) document.querySelector("#refreshQueueButton").focus();
+  }
+
+  renderBatchMeter(card, batch) {
+    const order = ["succeeded", "downloading", "running", "submitting", "needs_review", "failed", "result_expired", "cancelled", "queued", "preparing"];
+    const counts = Object.entries(batch.counts || {}).filter(([, count]) => count > 0).sort(([a], [b]) => (order.indexOf(a) + 1 || order.length + 1) - (order.indexOf(b) + 1 || order.length + 1));
+    const signature = counts.map(([state, count]) => `${state}:${count}`).join(",");
+    if (card.meterSignature === signature) return;
+    card.meterSignature = signature;
+    card.meter.textContent = "";
+    for (const [state, count] of counts) { const segment = viewElement("span", `meter-seg state-${state}`); segment.setAttribute("style", `flex-grow: ${Number(count)}`); card.meter.append(segment); }
+    card.meter.hidden = !counts.length;
   }
 
   renderFilters() {
@@ -736,6 +775,7 @@ class QueueView {
       for (const card of this.jobRows.values()) if (card.element.contains?.(focused)) { this.rowFocusTarget(card).focus(); break; }
     }
     this.renderPagination("job");
+    this.renderFirstRun();
     setText(document.querySelector("#jobsCount"), t("visibleJobs", { count: this.jobs.size }));
     this.renderGallery();
   }

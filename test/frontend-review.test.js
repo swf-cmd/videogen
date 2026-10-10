@@ -384,3 +384,51 @@ test("browser notifications are opt-in, ask permission only from the toggle, and
   toggle.checked = false; await toggle.dispatch("change");
   assert.equal(app.storage.get("videogen.notifications"), "0");
 });
+
+test("batch cards draw a state meter from their counts, and lanes that need a key open their key settings once", () => {
+  const app = harness();
+  const batch = { id: "b1", createdAt: "2026-10-10T00:00:00Z", total: 4, counts: { queued: 1, succeeded: 2, failed: 1, running: 0 }, state: "active", laneId: "lane" };
+  app.view.batches = [batch]; app.view.renderBatches();
+  const card = app.view.batchCards.get("b1");
+  assert.deepEqual(card.meter.children.map((segment) => segment.className), ["meter-seg state-succeeded", "meter-seg state-failed", "meter-seg state-queued"], "finished work first, empty states skipped");
+  assert.equal(card.meter.children[0].getAttribute("style"), "flex-grow: 2");
+  assert.equal(card.meter.getAttribute("aria-hidden"), "true", "the summary line already reads the counts");
+  const first = card.meter.children[0];
+  app.view.renderBatches();
+  assert.equal(card.meter.children[0], first, "unchanged counts keep the same segments");
+  assert.equal(card.element.dataset.state, "active");
+  app.view.batches = [{ ...batch, counts: { succeeded: 4 } }]; app.view.renderBatches();
+  assert.equal(card.element.dataset.state, "finished");
+  assert.deepEqual(card.meter.children.map((segment) => segment.className), ["meter-seg state-succeeded"]);
+
+  const lane = { id: "lane", provider: "mock", region: "local", baseUrl: "http://127.0.0.1", state: "active", inFlight: 0, concurrency: 1, queued: 0 };
+  app.view.lanes = [lane]; app.view.renderLanes();
+  const laneCard = app.view.laneCards.get("lane");
+  assert.notEqual(laneCard.manage.open, true, "key settings stay folded for a working lane");
+  assert.ok(laneCard.manage.contains(laneCard.keyInput) && laneCard.manage.contains(laneCard.concurrency));
+  app.view.lanes = [{ ...lane, state: "needs_key", waitingForKey: 1 }]; app.view.renderLanes();
+  assert.equal(laneCard.manage.open, true, "a lane that starts needing a key shows its key field");
+  laneCard.manage.open = false; app.view.renderLanes();
+  assert.equal(laneCard.manage.open, false, "closing it again is respected while the state is unchanged");
+});
+
+test("the first-run guide replaces the queue only after a snapshot shows no batches and no jobs on the first page", () => {
+  const app = harness();
+  const pane = app.document.querySelector("#dailies");
+  app.view.renderBatches();
+  assert.equal(pane.classList.contains("is-first-run"), false, "nothing is hidden before the first batch snapshot");
+  app.view.batchesLoaded = true; app.view.renderBatches();
+  assert.equal(pane.classList.contains("is-first-run"), true);
+  app.view.jobs = new Map([["job", { id: "job", state: "queued", prompt: "Scene", model: "m" }]]); app.view.renderJobs();
+  assert.equal(pane.classList.contains("is-first-run"), false, "jobs without a listed batch keep the queue visible");
+  app.view.jobs = new Map(); app.view.batchPage = 1; app.view.renderBatches();
+  assert.equal(pane.classList.contains("is-first-run"), false, "an empty later page keeps the pager reachable");
+  app.view.batchPage = 0; app.view.stateFilter = "failed"; app.view.renderBatches();
+  assert.equal(pane.classList.contains("is-first-run"), false, "an active filter keeps the queue visible");
+  app.view.stateFilter = "";
+  const clear = app.document.querySelector("#clearHistoryButton"), section = app.dom.document.createElement("section");
+  section.className = "danger-zone"; pane.append(section); section.append(clear); clear.focus();
+  app.view.renderBatches();
+  assert.equal(pane.classList.contains("is-first-run"), true);
+  assert.equal(app.document.activeElement, app.document.querySelector("#refreshQueueButton"), "focus leaves a section the guide hides");
+});

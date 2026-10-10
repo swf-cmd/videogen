@@ -90,7 +90,7 @@ function t(key, replacements = {}) {
 }
 function currentLocale() { return t("locale"); }
 function formatInteger(value) { return new Intl.NumberFormat(currentLocale()).format(value); }
-function setConnectionState(key) { connectionStateKey = key; connectionState.textContent = t(key); }
+function setConnectionState(key) { connectionStateKey = key; connectionState.textContent = t(key); connectionState.dataset.state = key; }
 function renderProxyInfo() {
   const panel = document.querySelector("#proxyInfo");
   panel.hidden = isFilePreview || !proxyInfo;
@@ -242,6 +242,7 @@ function selectExistingLane(lane) {
 function updateSelectedKeyStatus() {
   const present = queueView?.keyPresent(formLane()) || false;
   document.querySelector("#selectedKeyStatus").textContent = t(present ? "keyPresent" : "keyAbsent");
+  document.querySelector("#selectedKeyStatus").dataset.present = String(present);
   deleteKeyButton.disabled = !present || busy;
   document.querySelector("#transportWarning").hidden = !insecureCredentialLane(formLane(), present || Boolean(apiKeyInput.value));
 }
@@ -261,6 +262,10 @@ function updatePromptMeta() {
   batchCountField.hidden = count > 1 || Boolean(batchEditor?.enabled);
   batchCountInput.disabled = count > 1 || Boolean(batchEditor?.enabled) || busy;
   promptMetaText.textContent = t("promptCount", { count: formatInteger(count), chars: formatInteger(promptInput.value.trim().length), action: t("willSubmit", { count: formatInteger(jobCountForEstimate()) }) });
+  // The task list can sit in a closed section; its summary says that the list, not the prompt box, is submitted.
+  const rowBadge = document.querySelector("#rowModeBadge");
+  rowBadge.hidden = !batchEditor?.enabled;
+  if (batchEditor?.enabled) rowBadge.textContent = t("rowModeBadge", { count: formatInteger(batchEditor.rows.length) });
 }
 function selectedImageSize(params = {}) {
   return VideoDimensions.pixelSize({ resolution: params.resolution || sizeInput.value, aspectRatio: params.aspectRatio || aspectRatioInput.value });
@@ -564,6 +569,7 @@ async function generateVideo(event) {
     if (apiKeyInput.value) await saveSelectedKey();
     const result = await apiRequest("/api/batches", payload, "POST", Object.keys(files).length ? files : null);
     persistSettings(); formMessage(t("batchEnqueued", { count: result.count }));
+    if (typeof clapSlate === "function") clapSlate();
     // Show the new batch with every status; a kept status filter could hide all of it.
     await Promise.all([queueView.showBatch(result.id), queueView.refresh()]);
   } catch (error) { formMessage(error.message, true); }
@@ -581,6 +587,17 @@ function applyTranslations() {
   toggleApiKeyButton.textContent = t(apiKeyInput.type === "password" ? "showApiKey" : "hideApiKey"); apiKeyInput.placeholder = apiKeyPlaceholder();
   setConnectionState(connectionStateKey); renderProxyInfo(); renderProviders(providerInput.value); renderModels(modelInput.value); syncOptionControls();
   batchEditor?.render(); queueView?.render(); renderStatusLines();
+}
+// The slate claps once when a batch joins the queue (skipped for reduced motion).
+let clapTimer;
+function clapSlate() {
+  try {
+    const slate = document.querySelector(".slate");
+    if (!slate || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    clearTimeout(clapTimer);
+    slate.classList.remove("is-clapping"); void slate.offsetWidth; slate.classList.add("is-clapping");
+    clapTimer = setTimeout(() => slate.classList.remove("is-clapping"), 700);
+  } catch { /* Decoration only. */ }
 }
 function setLanguage(language) { activeLanguage = normalizeLanguage(language); applyTranslations(); storageSet("videogen.language", activeLanguage); }
 async function refreshCatalog() {
@@ -638,7 +655,11 @@ async function init() {
   else formMessage(t(isFilePreview ? "previewReadyLog" : "readyLog"));
   await queueView.run(() => queueView.start());
 }
+// Row statuses and errors are shown in the task list; keep it visible while a list is submitted.
+form.addEventListener("submit", () => { if (batchEditor?.enabled) document.querySelector(".batch-import").open = true; });
 form.addEventListener("submit", generateVideo);
+// Native validation cannot point at a field inside a closed section; open it first.
+form.addEventListener("invalid", (event) => { for (let details = event.target.closest("details"); details; details = details.parentElement?.closest("details")) details.open = true; }, true);
 saveKeyButton.addEventListener("click", async () => { saveKeyButton.disabled = true; try { await saveSelectedKey(); } catch (error) { formMessage(error.message, true); } finally { saveKeyButton.disabled = false; } });
 deleteKeyButton.addEventListener("click", async () => { const existing = queueView.keys.find((item) => sameLane(item.lane, formLane())); if (!existing) return; try { await apiRequest(`/api/keys/${existing.lane.id}`, undefined, "DELETE"); await queueView.loadLanes(); } catch (error) { formMessage(error.message, true); } });
 toggleApiKeyButton.addEventListener("click", () => { apiKeyInput.type = apiKeyInput.type === "password" ? "text" : "password"; toggleApiKeyButton.textContent = t(apiKeyInput.type === "password" ? "showApiKey" : "hideApiKey"); });

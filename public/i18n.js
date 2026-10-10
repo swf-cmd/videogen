@@ -378,7 +378,20 @@ const translations = {
     "stopTracking": "停止跟踪…",
     "stopTrackingConfirm": "停止在本机跟踪这个正在生成的任务？\n这不会取消供应商端的任务，也不会退款；供应商仍可能完成并计费。仅在远端 ID 填错或任务已在供应商处删除时使用。完成的结果仍可在供应商控制台下载。\n提示词：{prompt}",
     "trackingStopped": "已停止跟踪此任务。请在供应商控制台查看结果和费用。",
-    "errorRemoteNotFound": "供应商持续找不到此远端任务（可能 ID 有误或已被删除），已停止跟踪。请在供应商控制台核对。"
+    "errorRemoteNotFound": "供应商持续找不到此远端任务（可能 ID 有误或已被删除），已停止跟踪。请在供应商控制台核对。",
+    "stepModel": "模型与密钥",
+    "stepShots": "描述镜头",
+    "stepSpecs": "画面与版本",
+    "stepOutput": "输出与预算",
+    "stepOutputHint": "保存位置、文件名前缀和预算上限",
+    "batchImportHint": "CSV、图片文件夹，或逐条编辑每个任务",
+    "slateTitle": "本批次",
+    "laneManage": "密钥与并发",
+    "firstRunTitle": "成片会在这里放映",
+    "firstRunStep1": "在「新建批次」中写下镜头，多条提示词之间空一行。",
+    "firstRunStep2": "点「估算并加入队列」，确认价格和耗时后再提交。",
+    "firstRunStep3": "渲染完成后在这里播放每个版本，保留或淘汰，再导出保留片。",
+    "rowModeBadge": "逐条编辑已开启 · 提交列表中的 {count} 条"
   },
   "ja": {
     "audioInvalid": "インポート値が不正です。選択してください",
@@ -758,7 +771,20 @@ const translations = {
     "stopTracking": "追跡を終了…",
     "stopTrackingConfirm": "生成中のこのジョブのローカル追跡を終了しますか？\nプロバイダー側のジョブは取り消されず、返金もされません。プロバイダーが処理を完了して課金する場合があります。リモート ID の入力ミスや、プロバイダー側で削除済みのタスクにのみ使用してください。完成した結果はプロバイダーのコンソールからダウンロードできます。\nプロンプト：{prompt}",
     "trackingStopped": "このジョブの追跡を終了しました。結果と料金はプロバイダーのコンソールで確認してください。",
-    "errorRemoteNotFound": "プロバイダーがこのリモートタスクを見つけられない状態が続いたため（ID の誤りか削除済み）、追跡を停止しました。プロバイダーのコンソールで確認してください。"
+    "errorRemoteNotFound": "プロバイダーがこのリモートタスクを見つけられない状態が続いたため（ID の誤りか削除済み）、追跡を停止しました。プロバイダーのコンソールで確認してください。",
+    "stepModel": "モデルとキー",
+    "stepShots": "ショットを書く",
+    "stepSpecs": "映像とテイク",
+    "stepOutput": "保存先と予算",
+    "stepOutputHint": "保存フォルダー、ファイル名、予算上限",
+    "batchImportHint": "CSV、画像フォルダー、タスクごとの編集",
+    "slateTitle": "このバッチ",
+    "laneManage": "キーと同時実行数",
+    "firstRunTitle": "仕上がったテイクはここで上映されます",
+    "firstRunStep1": "「新しいバッチ」にショットを書きます。複数のプロンプトは空行で区切ります。",
+    "firstRunStep2": "「見積り・キューに追加」で費用と所要時間を確認してから送信します。",
+    "firstRunStep3": "レンダリングが終わったら各テイクを再生し、採用・不採用を決めて書き出します。",
+    "rowModeBadge": "タスク別編集オン · 一覧の {count} 件を送信"
   },
   "en": {
     "audioInvalid": "Invalid imported value — choose an option",
@@ -1138,7 +1164,20 @@ const translations = {
     "stopTracking": "Stop tracking…",
     "stopTrackingConfirm": "Stop tracking this running job on this computer?\nThis does NOT cancel the job or refund anything at the provider; the provider may still finish and bill it. Use it only for a mistyped remote ID or a task deleted at the provider. A finished result can still be downloaded from the provider console.\nPrompt: {prompt}",
     "trackingStopped": "Stopped tracking this job. Check the provider console for its result and charges.",
-    "errorRemoteNotFound": "The provider kept reporting this remote task as missing (wrong ID or deleted), so tracking stopped. Check the provider console."
+    "errorRemoteNotFound": "The provider kept reporting this remote task as missing (wrong ID or deleted), so tracking stopped. Check the provider console.",
+    "stepModel": "Model and key",
+    "stepShots": "Describe the shots",
+    "stepSpecs": "Format and takes",
+    "stepOutput": "Output and budget",
+    "stepOutputHint": "Folder, file names and spending limit",
+    "batchImportHint": "CSV, an image folder, or per-task editing",
+    "slateTitle": "This batch",
+    "laneManage": "Key and concurrency",
+    "firstRunTitle": "Your takes will play here",
+    "firstRunStep1": "Write your shots under New batch. Separate prompts with a blank line.",
+    "firstRunStep2": "Choose Estimate and enqueue to check the cost and time before anything is sent.",
+    "firstRunStep3": "When renders finish, play each take here, keep or reject it, and export the keepers.",
+    "rowModeBadge": "Task editor on · submits the {count} listed tasks"
   },
   "ko": {
     "audioInvalid": "가져온 값이 잘못되었습니다. 선택하세요",
@@ -1518,6 +1557,19 @@ const translations = {
     "stopTracking": "추적 중단…",
     "stopTrackingConfirm": "생성 중인 이 작업의 로컬 추적을 중단할까요?\n공급자 측 작업은 취소되지 않고 환불도 되지 않습니다. 공급자가 작업을 완료하고 요금을 청구할 수 있습니다. 원격 ID를 잘못 입력했거나 공급자에서 삭제된 작업에만 사용하세요. 완성된 결과는 공급자 콘솔에서 다운로드할 수 있습니다.\n프롬프트: {prompt}",
     "trackingStopped": "이 작업의 추적을 중단했습니다. 결과와 요금은 공급자 콘솔에서 확인하세요.",
-    "errorRemoteNotFound": "공급자가 이 원격 작업을 계속 찾지 못해(ID 오류 또는 삭제됨) 추적을 중단했습니다. 공급자 콘솔에서 확인하세요."
+    "errorRemoteNotFound": "공급자가 이 원격 작업을 계속 찾지 못해(ID 오류 또는 삭제됨) 추적을 중단했습니다. 공급자 콘솔에서 확인하세요.",
+    "stepModel": "모델과 키",
+    "stepShots": "샷 설명",
+    "stepSpecs": "영상 및 테이크",
+    "stepOutput": "저장 위치와 예산",
+    "stepOutputHint": "저장 폴더, 파일 이름, 예산 한도",
+    "batchImportHint": "CSV, 이미지 폴더 또는 작업별 편집",
+    "slateTitle": "이번 배치",
+    "laneManage": "키와 동시 실행",
+    "firstRunTitle": "완성된 테이크는 여기에서 재생됩니다",
+    "firstRunStep1": "‘새 배치’에 샷을 작성하세요. 프롬프트는 빈 줄로 구분합니다.",
+    "firstRunStep2": "‘비용 확인 후 대기열 추가’를 눌러 비용과 시간을 확인한 뒤 제출합니다.",
+    "firstRunStep3": "렌더링이 끝나면 여기에서 테이크를 재생하고 보관 또는 제외한 뒤 내보냅니다.",
+    "rowModeBadge": "작업별 편집 켜짐 · 목록의 작업 {count}개 제출"
   }
 };
