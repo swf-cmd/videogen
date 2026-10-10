@@ -20,6 +20,6 @@ videogen 2.x keeps a local queue and supports OpenRouter, Gemini, Alibaba Cloud 
 | Outputs silently replaced | Existing files are preserved; collisions get a different name |
 | Retry every failed request | Ambiguous creates stop at `needs_review`; only you authorize resubmission |
 
-An ambiguous create might already be charged. Check the provider console before choosing **Confirm not created → resubmit**, **Abandon**, or **Attach remote ID**. Abandoning local tracking does not cancel the provider's task or refund a charge. Gemini background mode saves the interaction ID before polling; a connection failure before the ID is received can still require review.
+An ambiguous create might already be charged. Check the provider console before choosing **Link an existing remote job**, **I confirmed no job was created → resubmit**, or **Stop tracking**. Stopping local tracking does not cancel the provider's task or refund a charge. Gemini background mode saves the interaction ID before polling; a connection failure before the ID is received can still require review.
 
 Keys stay in memory and must be entered again after restart. Prompts, reference images, task state and output paths persist locally. Portable bundles use `portable-data/` and `portable-output/`; source startup uses the OS data directory and `~/Downloads/videogen`. Keep the old downloads until you have verified the migration. See [privacy](../PRIVACY.md), [portable setup](PORTABLE.md), and [中文使用说明](../README.zh-CN.md).
