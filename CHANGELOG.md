@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Documentation only: the English, Chinese, Japanese and Korean READMEs open with light and dark stills of the 2.3 interface, describe the four steps, the slate, the render queue and the gallery keys, and add a short FAQ. Japanese, Korean and Chinese READMEs and both Sora migration guides now use the exact labels shown in the app.
+- Provider notes rechecked on 2026-10-11: OpenRouter's live list still matches the bundled snapshot; Alibaba's Wan 3 reference labels the models preview without documenting an approval step; ByteDance's references list `seed` only for older Seedance models, so Seedance 2.5 keeps seed disabled.
+
 ## 2.3.0 — 2026-10-10
 
 Interface redesign. Features, settings, API calls and stored data are unchanged; every control keeps its ID and behavior.
