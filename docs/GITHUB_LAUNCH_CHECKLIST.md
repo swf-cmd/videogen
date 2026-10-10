@@ -12,9 +12,9 @@ Local AI video batch studio: prompts or CSV in, reviewed takes out. Multi-take r
 
 Topics: `ai-video`, `video-generation`, `text-to-video`, `image-to-video`, `batch-processing`, `render-queue`, `local-first`, `openrouter`, `gemini`, `veo`, `kling`, `seedance`, `wan`, `sora`, `csv`, `nodejs`, `windows`, `macos`.
 
-Website: [README](https://github.com/swf-cmd/videogen#readme). The first screen shows a workflow recording made against a local stand-in endpoint with labeled synthetic clips and an example price, plus a gallery screenshot from the same run. These do not demonstrate paid model output quality. See the [promotion kit](PROMOTION_KIT.md).
+Website: [README](https://github.com/swf-cmd/videogen#readme). The first screen shows light and dark interface stills, followed by a workflow recording; both were made against a local stand-in endpoint with labeled synthetic clips and an example price. These do not demonstrate paid model output quality. See the [promotion kit](PROMOTION_KIT.md).
 
-Social preview: upload `.github/social-preview.png` (1280×640) under **Settings → General → Social preview**; the API cannot set it.
+Social preview: upload `.github/social-preview.png` (1280×640) under **Settings → General → Social preview**; the API cannot set it. Re-upload it whenever the file changes — on 2026-10-11 the live preview still showed the 2.2 interface.
 
 ## Historical v2.0.0
 
