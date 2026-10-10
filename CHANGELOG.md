@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.3.0 — 2026-10-10
 
 Interface redesign. Features, settings, API calls and stored data are unchanged; every control keeps its ID and behavior.
 
