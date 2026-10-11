@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- One palette across the interface. The render queue and the slate no longer stay dark inside the light theme: both panes, the slate and dialogs now follow the system light or dark setting together, and the render queue is set apart as a slightly deeper pane instead of a black block. Every neutral comes from one barely warm gray family (the composer's green-gray and the queue's blue-gray no longer meet), marker yellow is the only accent, and kept takes are circled in a deeper amber on light cards. Lane, batch and job states have a light-theme set as well as the dark one. Secondary text, state labels and table headers now reach WCAG AA (4.5:1) on every surface in both themes; an automated check of the rendered page with a demo queue loaded went from 73 (light) and 43 (dark) text elements below AA to none. Styles only: controls, IDs, behavior and stored data are unchanged.
+- The README stills, the workflow recording, the gallery screenshot and the social preview were recaptured with the new palette against the same offline stand-in (synthetic clips, example price).
 - Documentation only: the English, Chinese, Japanese and Korean READMEs open with light and dark stills of the 2.3 interface, describe the four steps, the slate, the render queue and the gallery keys, and add a short FAQ. Japanese, Korean and Chinese READMEs and both Sora migration guides now use the exact labels shown in the app.
 - Provider notes rechecked on 2026-10-11: OpenRouter's live list still matches the bundled snapshot; Alibaba's Wan 3 reference labels the models preview without documenting an approval step; ByteDance's references list `seed` only for older Seedance models, so Seedance 2.5 keeps seed disabled.
 

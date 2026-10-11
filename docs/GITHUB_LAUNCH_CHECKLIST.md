@@ -14,7 +14,7 @@ Topics: `ai-video`, `video-generation`, `text-to-video`, `image-to-video`, `batc
 
 Website: [README](https://github.com/swf-cmd/videogen#readme). The first screen shows light and dark interface stills, followed by a workflow recording; both were made against a local stand-in endpoint with labeled synthetic clips and an example price. These do not demonstrate paid model output quality. See the [promotion kit](PROMOTION_KIT.md).
 
-Social preview: upload `.github/social-preview.png` (1280×640) under **Settings → General → Social preview**; the API cannot set it. Re-upload it whenever the file changes — on 2026-10-11 the live preview still showed the 2.2 interface.
+Social preview: upload `.github/social-preview.png` (1280×640) under **Settings → General → Social preview**; the API cannot set it. Re-upload it whenever the file changes — it was redrawn on 2026-10-11 for the unified light/dark palette, and the live preview at that time still showed the 2.2 interface.
 
 ## Historical v2.0.0
 
