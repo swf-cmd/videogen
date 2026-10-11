@@ -17,7 +17,7 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/media/videogen-interface-dark.webp">
-  <img src="docs/media/videogen-interface-light.webp" alt="videogen 2.3: on the left, three prompts under step 2 Describe the shots and a slate showing demo-video, 4 sec, 720p 16:9, 6 requests, estimated $1.20 and an Estimate and enqueue button; on the right, the dark render queue with a finished batch and the review gallery, where Shot 1 Take 1 is circled as kept and Take 2 is struck through as rejected">
+  <img src="docs/media/videogen-interface-light.webp" alt="videogen 2.3: on the left, three prompts under step 2 Describe the shots and a slate showing demo-video, 4 sec, 720p 16:9, 6 requests, estimated $1.20 and an Estimate and enqueue button; on the right, the render queue with a finished batch and the review gallery, where Shot 1 Take 1 is circled as kept and Take 2 is struck through as rejected">
 </picture>
 
 <sub>Captured offline against a local stand-in endpoint. The clips are synthetic test animations, **not AI output**, and the $0.05/s price is an example catalog entry, not a provider quote. No paid API was called.</sub>
@@ -27,7 +27,7 @@
 > [!NOTE]
 > **OpenAI shut down the Sora 2 API on 2026-09-24** ([deprecations](https://developers.openai.com/api/docs/deprecations)). videogen is the successor of Sora2App: the same local batch workflow, now on OpenRouter, Gemini, Alibaba Cloud Model Studio, Volcengine / BytePlus Ark or your own OpenAI-compatible server. Old Sora jobs cannot be moved automatically; the [migration guide](docs/MIGRATING_FROM_SORA.md) explains what to keep.
 
-**New in 2.3 — slate and screening room.** The form is now four numbered steps, and a slate beside the submit button always shows the model, format, request count, first frame, estimated price and time that will be submitted. The render queue became a dark review pane with a first-run guide, folded lane settings, batch progress bars and circled keepers. Automatic dark mode, a pane switcher for narrow windows and reduced-motion support are included; features, settings and stored data are unchanged. See the [changelog](CHANGELOG.md).
+**New in 2.3 — slate and screening room.** The form is now four numbered steps, and a slate beside the submit button always shows the model, format, request count, first frame, estimated price and time that will be submitted. The render queue became a review pane with a first-run guide, folded lane settings, batch progress bars and circled keepers. Automatic dark mode, a pane switcher for narrow windows and reduced-motion support are included; features, settings and stored data are unchanged. See the [changelog](CHANGELOG.md).
 
 ## Why videogen
 
@@ -42,7 +42,7 @@
 
 [![Workflow recording: the four-step form with CSV and image-folder import, the cost confirmation, the live render queue and keyboard review in the gallery](docs/media/videogen-workflow.gif)](docs/media/videogen-workflow.webm)
 
-<sub>26 seconds, recorded with the same offline stand-in (synthetic clips, example price). [Full-size WebM](docs/media/videogen-workflow.webm).</sub>
+<sub>32 seconds, recorded with the same offline stand-in (synthetic clips, example price). [Full-size WebM](docs/media/videogen-workflow.webm).</sub>
 
 ## Quick start
 

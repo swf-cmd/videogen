@@ -17,7 +17,7 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/media/videogen-interface-dark.webp">
-  <img src="docs/media/videogen-interface-light.webp" alt="videogen 2.3 界面：左侧第 2 步「描述镜头」中有三条提示词，下方场记板显示 demo-video、4 秒、720p 16:9、6 个请求、预估 $1.20 和「估算并加入队列」按钮；右侧深色渲染队列中有一个已完成批次和挑片画廊，镜头 1 的版本 1 被圈出保留，版本 2 被划掉淘汰">
+  <img src="docs/media/videogen-interface-light.webp" alt="videogen 2.3 界面：左侧第 2 步「描述镜头」中有三条提示词，下方场记板显示 demo-video、4 秒、720p 16:9、6 个请求、预估 $1.20 和「估算并加入队列」按钮；右侧渲染队列中有一个已完成批次和挑片画廊，镜头 1 的版本 1 被圈出保留，版本 2 被划掉淘汰">
 </picture>
 
 <sub>截图在本机离线完成，连接的是本地模拟端点。画面中的视频是程序绘制的测试动画，**不是 AI 生成结果**；每秒 $0.05 的价格来自本地示例目录，不是供应商报价。全程没有调用付费接口。</sub>
@@ -27,7 +27,7 @@
 > [!NOTE]
 > **OpenAI 已于 2026-09-24 关停 Sora 2 API**（[弃用公告](https://developers.openai.com/api/docs/deprecations)）。videogen 是 Sora2App 的后继版本：保留同样的本机批量工作流，改为接入 OpenRouter、Gemini、阿里云百炼、火山方舟 / BytePlus ModelArk，或你自己的 OpenAI 兼容服务器。旧的 Sora 任务无法自动迁移，需要保留哪些内容见[迁移说明](docs/MIGRATING_FROM_SORA.zh-CN.md)。
 
-**2.3 新增：场记板与放映室。** 表单改为四个编号步骤，提交按钮旁的场记板始终显示即将提交的模型、规格、请求数、首帧、预估价格和耗时。渲染队列变成深色的审片区：首次使用有引导，车道设置可折叠，批次带进度条，保留片用黄圈标出。同时支持自动深色模式、窄窗口的面板切换和“减少动态效果”。功能、设置和已保存的数据都没有变化。详见[更新日志](CHANGELOG.md)。
+**2.3 新增：场记板与放映室。** 表单改为四个编号步骤，提交按钮旁的场记板始终显示即将提交的模型、规格、请求数、首帧、预估价格和耗时。渲染队列变成审片区：首次使用有引导，车道设置可折叠，批次带进度条，保留片用黄圈标出。同时支持自动深色模式、窄窗口的面板切换和“减少动态效果”。功能、设置和已保存的数据都没有变化。详见[更新日志](CHANGELOG.md)。
 
 ## 为什么用 videogen
 
@@ -42,7 +42,7 @@
 
 [![操作录屏：四步表单与 CSV、图片文件夹导入，确认费用，实时渲染队列，在画廊中用键盘挑片](docs/media/videogen-workflow.gif)](docs/media/videogen-workflow.webm)
 
-<sub>时长 26 秒，同样连接本地模拟端点录制（测试动画，示例价格）。界面语言为英文，可在右上角切换为中文。[原尺寸 WebM](docs/media/videogen-workflow.webm)</sub>
+<sub>时长 32 秒，同样连接本地模拟端点录制（测试动画，示例价格）。界面语言为英文，可在右上角切换为中文。[原尺寸 WebM](docs/media/videogen-workflow.webm)</sub>
 
 ## 快速开始
 
